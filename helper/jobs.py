@@ -25,14 +25,13 @@ from pathlib import Path
 
 import httpx
 
-from helper.asr.worker import DEFAULT_MODEL as ASR_MODEL
 from helper.asr.worker import SAMPLE_RATE
 from helper.cache import CacheKey, TrackCache
+from helper.config import Config, load as load_config
 from helper.gpulease import GpuLease, Preempted
 from helper.script import normalize_cues
 from helper.segment import Cue, build_cues
 from helper.sources.ytdlp import YtDlpError, VideoInfo, audio_pcm, probe, usable_manual_track
-from helper.translate import DEFAULT_MODEL as MT_MODEL
 from helper.translate import Batch, TranslateError, translate_batch, validate
 
 log = logging.getLogger(__name__)
@@ -54,10 +53,10 @@ MAX_VIDEO_SECONDS = 3 * 3600
 # это сотни объектов, и без вытеснения реестр рос бы всю жизнь процесса.
 MAX_RETAINED_JOBS = 12
 
-# Сколько видеопамяти просить под каждую фазу. Цифры замерены: large-v3 в fp16
-# батчами — около 6 ГБ, переводчик qwen3.8:27b — 17.3 ГБ.
-ASR_NEED_MIB = 6144
-MT_NEED_MIB = 17800
+# Сколько видеопамяти просить под каждую фазу, берётся из конфигурации вместе
+# с именем модели: см. helper/config.py. Цифра не может жить отдельно от модели —
+# у turbo расход втрое меньше, чем у large-v3, и постоянная здесь означала бы,
+# что контроль допуска врёт при любой смене модели.
 
 
 class Stage(str, Enum):
@@ -202,18 +201,28 @@ class Job:
 class JobRunner:
     """Выполняет задание, соблюдая дисциплину GPU."""
 
-    def __init__(self, lease: GpuLease, cache: TrackCache) -> None:
+    def __init__(self, lease: GpuLease, cache: TrackCache, config: Config) -> None:
         self._lease = lease
         self._cache = cache
-        self._lease.claim_model(MT_MODEL)
+        self._config = config
+        # Заявка обязана делаться настроенной моделью, а не константой. Сторож
+        # считает своей ровно объявленную: разойдись эти две вещи, и демон увидит
+        # собственного переводчика как чужую работу и вытеснит сам себя.
+        self._lease.claim_model(config.translator.model)
+
+    @property
+    def _mt_model(self) -> str:
+        return self._config.translator.model
 
     def _cache_key(self, job: Job) -> CacheKey:
+        # Обе модели входят в ключ, поэтому смена любой из них обесценивает старые
+        # дорожки автоматически, а не подсовывает перевод от другой модели.
         return CacheKey(
             video_id=job.video_id,
-            source_lang="sr",
+            source_lang=self._config.asr.language,
             target_lang=job.target_lang,
-            asr_model=ASR_MODEL,
-            translator_model=MT_MODEL,
+            asr_model=f"{self._config.asr.model}/{self._config.asr.compute_type}",
+            translator_model=self._mt_model,
         )
 
     async def run(self, job: Job) -> None:
@@ -291,9 +300,9 @@ class JobRunner:
         # Выгрузка обязана идти ДО контроля допуска. Переводчик мог остаться
         # резидентным с прошлого ролика, и тогда свободно 1–3 ГБ: допуск ждал бы
         # памяти, которую сам же и не освобождает, пока не истечёт keep_alive.
-        await asyncio.to_thread(self._lease.unload, MT_MODEL)
+        await asyncio.to_thread(self._lease.unload, self._mt_model)
 
-        async with self._lease.acquire(ASR_NEED_MIB) as held:
+        async with self._lease.acquire(self._config.asr_vram_mib) as held:
             job._set_stage(Stage.ASR, duration=duration)
             segments = await self._run_asr_watched(audio, job, held)
 
@@ -341,14 +350,16 @@ class JobRunner:
             # model= обязателен: если наш переводчик уже резидентен, память под него
             # просить не нужно — иначе допуск требовал бы 17.8 ГБ свободных ровно
             # тогда, когда 17.3 из них занял он сам.
-            async with self._lease.acquire(MT_NEED_MIB, model=MT_MODEL) as held:
+            async with self._lease.acquire(
+                self._config.translator_vram_mib, model=self._mt_model
+            ) as held:
                 await self._translate(job, held)
         except Preempted:
             # Уступая карту, надо её и освободить. keep_alive у нас 60 секунд, то
             # есть без явной выгрузки 17.3 ГБ оставались бы нашими ещё минуту после
             # того, как мы объявили, что уходим, — ровно то поведение враждебного
             # соседа, против которого написан gpulease.
-            await asyncio.to_thread(self._lease.unload, MT_MODEL)
+            await asyncio.to_thread(self._lease.unload, self._mt_model)
             raise
 
         pending = sum(not c.translated for c in job.cues)
@@ -382,7 +393,17 @@ class JobRunner:
     def _run_asr(self, audio, job: Job) -> list[dict]:
         """Распознавание отдельным процессом — выход процесса гарантирует возврат VRAM."""
         prompt = _initial_prompt(job.info)
-        args = [sys.executable, "-m", "helper.asr.worker", "--language", "sr"]
+        args = [
+            sys.executable,
+            "-m",
+            "helper.asr.worker",
+            "--model",
+            self._config.asr.model,
+            "--compute-type",
+            self._config.asr.compute_type,
+            "--language",
+            self._config.asr.language,
+        ]
 
         if prompt:
             args += ["--initial-prompt", prompt]
@@ -442,7 +463,7 @@ class JobRunner:
             )
 
             try:
-                translated = await asyncio.to_thread(translate_batch, batch, MT_MODEL)
+                translated = await asyncio.to_thread(translate_batch, batch, self._mt_model)
             except RETRYABLE as exc:
                 # Ловим широко, а не только TranslateError: обрыв соединения с ollama,
                 # её перезапуск или битый JSON — такие же поводы для лестницы починки.
@@ -491,7 +512,7 @@ class JobRunner:
             batch = Batch(cues=[c.src for c in half], title=job.info.title if job.info else "")
 
             try:
-                out += await asyncio.to_thread(translate_batch, batch, MT_MODEL)
+                out += await asyncio.to_thread(translate_batch, batch, self._mt_model)
             except RETRYABLE:
                 out += await self._translate_halves(half, job, held)
 
@@ -565,10 +586,14 @@ def _proper_nouns(info: VideoInfo) -> list[str]:
 class JobManager:
     """Реестр заданий: одно на ролик, общий пропуск на GPU."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: Config | None = None) -> None:
+        # Конфигурация читается один раз, при старте. Смена модели требует
+        # перезапуска демона: модель резидентна в ollama, и менять её посреди
+        # задания значит переоткрывать всю дисциплину свопа.
+        self.config = config or load_config()
         self.lease = GpuLease()
         self.cache = TrackCache()
-        self.runner = JobRunner(self.lease, self.cache)
+        self.runner = JobRunner(self.lease, self.cache, self.config)
         self._jobs: dict[str, Job] = {}
 
     def get_or_create(self, video_id: str, target_lang: str = "ru") -> Job:

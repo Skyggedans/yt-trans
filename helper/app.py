@@ -20,22 +20,18 @@ import contextlib
 import logging
 import os
 import secrets
-from pathlib import Path
 
-import helper.env  # noqa: F401  — раскладывает кэши и подключает CUDA
+from helper.env import CONFIG_DIR  # импортируется первым: раскладывает кэши и подключает CUDA
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from helper.asr.worker import DEFAULT_MODEL as ASR_MODEL
 from helper.jobs import JobManager, Stage
-from helper.translate import DEFAULT_MODEL as MT_MODEL
 
 log = logging.getLogger(__name__)
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("YT_TRANS_PORT", "8756"))
-CONFIG_DIR = Path(os.environ.get("YT_TRANS_CONFIG", Path.home() / ".config" / "yt-trans"))
 TOKEN_PATH = CONFIG_DIR / "token"
 
 # Пинг раз в 15 секунд: он не даёт service worker'у в Chrome уснуть по таймауту
@@ -117,8 +113,7 @@ async def health() -> dict:
 
     return {
         "ok": True,
-        "asr_model": ASR_MODEL,
-        "translator_model": MT_MODEL,
+        "models": manager.config.describe(),
         "gpu": {
             "free_mib": state.free_mib,
             "busy": state.busy,

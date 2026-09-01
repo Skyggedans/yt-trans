@@ -37,14 +37,19 @@ def transcribe(
     audio: np.ndarray,
     *,
     model_name: str = DEFAULT_MODEL,
+    compute_type: str = "float16",
     language: str = "sr",
     initial_prompt: str | None = None,
     hotwords: str | None = None,
     batch_size: int = 16,
+    # Выключается только для замера расхода памяти: с фильтром тишина отсеивается
+    # до энкодера, и пик получился бы заниженным. В работе всегда включён —
+    # музыкальные заставки и паузы это главный источник галлюцинаций.
+    vad_filter: bool = True,
 ) -> dict:
     from faster_whisper import BatchedInferencePipeline, WhisperModel
 
-    model = WhisperModel(model_name, device="cuda", compute_type="float16")
+    model = WhisperModel(model_name, device="cuda", compute_type=compute_type)
     pipeline = BatchedInferencePipeline(model=model)
 
     segments, info = pipeline.transcribe(
@@ -69,7 +74,7 @@ def transcribe(
         condition_on_previous_text=False,
         hallucination_silence_threshold=2.0,
         word_timestamps=True,
-        vad_filter=True,
+        vad_filter=vad_filter,
         vad_parameters=dict(
             threshold=0.5,
             min_speech_duration_ms=250,
@@ -109,10 +114,16 @@ def transcribe(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--compute-type", default="float16")
     parser.add_argument("--language", default="sr")
     parser.add_argument("--initial-prompt", default=None)
     parser.add_argument("--hotwords", default=None)
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument(
+        "--no-vad",
+        action="store_true",
+        help="только для замера памяти: без VAD тишина доходит до энкодера",
+    )
     parser.add_argument("--pcm", help="файл с f32le вместо stdin (для отладки)")
     args = parser.parse_args()
 
@@ -131,10 +142,12 @@ def main() -> int:
     result = transcribe(
         audio,
         model_name=args.model,
+        compute_type=args.compute_type,
         language=args.language,
         initial_prompt=args.initial_prompt,
         hotwords=args.hotwords,
         batch_size=args.batch_size,
+        vad_filter=not args.no_vad,
     )
 
     json.dump(result, sys.stdout, ensure_ascii=False)

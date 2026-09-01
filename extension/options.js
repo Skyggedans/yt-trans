@@ -110,14 +110,20 @@ async function check() {
   }
 
   const gpu = health.gpu || {};
+  const models = health.models || {};
+  const asr = models.asr || {};
+  const translator = models.translator || {};
 
   show(
     true,
     "Связь есть.\n\n" +
-      `Распознавание: ${health.asr_model}\n` +
-      `Перевод: ${health.translator_model}\n` +
+      `Распознавание: ${asr.model} (${asr.compute_type}, ~${asr.vram_mib} МиБ)\n` +
+      `Перевод: ${translator.model} (~${translator.vram_mib} МиБ)\n` +
+      `Язык источника: ${asr.language}\n` +
       `Свободно на карте: ${gpu.free_mib} МиБ${gpu.busy ? " (занята пользователем)" : ""}\n` +
-      `В кэше дорожек: ${(health.cache || {}).tracks ?? 0}`,
+      `В кэше дорожек: ${(health.cache || {}).tracks ?? 0}\n\n` +
+      "Модели задаются в конфиге демона, не здесь: расход видеопамяти\n" +
+      "неотделим от имени модели, и менять его из браузера нельзя.",
   );
 }
 
