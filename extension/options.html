@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>yt-trans</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font: 14px/1.5 system-ui, sans-serif;
+      max-width: 44rem;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+    h1 { font-size: 1.2rem; }
+    label { display: block; margin: 0.9rem 0 0.2rem; font-weight: 600; }
+    input { width: 100%; padding: 0.4rem; font: inherit; box-sizing: border-box; }
+    .row { display: flex; gap: 0.8rem; }
+    .row > div { flex: 1; }
+    button { margin-top: 1rem; padding: 0.45rem 1rem; font: inherit; cursor: pointer; }
+    #status { margin-top: 1rem; padding: 0.7rem; border-radius: 4px; white-space: pre-wrap; }
+    .ok { background: #e6f5e6; color: #14471a; }
+    .bad { background: #fbe6e6; color: #6b1414; }
+    .hint { color: #666; font-size: 0.9em; margin-top: 0.2rem; }
+    code { background: rgba(128,128,128,0.18); padding: 0.05em 0.3em; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h1>yt-trans — русские субтитры к сербским роликам</h1>
+
+  <label for="token">Токен установки</label>
+  <input id="token" type="text" spellcheck="false" placeholder="вставь содержимое файла с токеном">
+  <div class="hint">
+    Демон создаёт токен при первом запуске. Показать его:
+    <code>cat ~/.config/yt-trans/token</code>
+  </div>
+
+  <div class="row">
+    <div>
+      <label for="host">Адрес демона</label>
+      <input id="host" type="text" spellcheck="false">
+    </div>
+    <div>
+      <label for="port">Порт</label>
+      <input id="port" type="number">
+    </div>
+  </div>
+
+  <button id="check">Сохранить и проверить связь</button>
+
+  <div id="status" hidden></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

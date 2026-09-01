@@ -1,0 +1,29 @@
+# Прямые зависимости. Транзитивные подтянутся сами.
+#
+# yt-dlp именно с extras: без [default] не встанет yt-dlp-ejs, и извлечение
+# на YouTube молча деградирует. Нужен также внешний JS-рантайм (node ≥22).
+yt-dlp[default]>=2026.8.19
+
+# Распознавание. CTranslate2 берёт CUDA-библиотеки из колёс nvidia-*-cu12:
+# системного рантайма на целевой машине может не быть, а подгружает он их
+# через dlopen только на первом реальном проходе энкодера.
+faster-whisper>=1.2.1
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+
+# Демон
+fastapi
+uvicorn[standard]
+websockets
+httpx
+nvidia-ml-py
+
+# Обработка текста
+cyrtranslit>=1.2.0
+pysubs2
+
+# Только для спайков
+jiwer
+sacrebleu
+datasets
+soundfile

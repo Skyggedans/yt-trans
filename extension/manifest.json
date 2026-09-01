@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "yt-trans — русские субтитры",
+  "description": "Русские субтитры к сербским роликам YouTube локальными моделями",
+  "version": "0.1.0",
+  "minimum_chrome_version": "128",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "yt-trans@skyggedans",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
+  },
+
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "action": { "default_title": "yt-trans", "default_popup": "options.html" }
+}
