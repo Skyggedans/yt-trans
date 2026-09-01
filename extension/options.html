@@ -21,6 +21,17 @@
     .ok { background: #e6f5e6; color: #14471a; }
     .bad { background: #fbe6e6; color: #6b1414; }
     .hint { color: #666; font-size: 0.9em; margin-top: 0.2rem; }
+    fieldset {
+      margin: 1.4rem 0 0;
+      padding: 0.4rem 0.9rem 0.9rem;
+      border: 1px solid rgba(128, 128, 128, 0.35);
+      border-radius: 4px;
+    }
+    legend { font-weight: 600; padding: 0 0.3rem; }
+    label.inline { display: flex; align-items: center; gap: 0.5rem; font-weight: 400; }
+    label.inline input { width: auto; }
+    select { padding: 0.35rem; font: inherit; }
+    #positionRow[hidden] { display: none; }
     code { background: rgba(128,128,128,0.18); padding: 0.05em 0.3em; border-radius: 3px; }
   </style>
 </head>
@@ -44,6 +55,28 @@
       <input id="port" type="number">
     </div>
   </div>
+
+  <fieldset>
+    <legend>Оригинал</legend>
+
+    <label class="inline">
+      <input id="showOriginal" type="checkbox">
+      Показывать исходный сербский текст
+    </label>
+
+    <div id="positionRow">
+      <label for="originalPosition">Где показывать</label>
+      <select id="originalPosition">
+        <option value="below">Под переводом</option>
+        <option value="above">Над переводом</option>
+      </select>
+    </div>
+
+    <div class="hint">
+      Реплики, которые не удалось перевести, показываются исходным текстом всегда —
+      он выделен цветом и курсивом. Дублировать его эта настройка не будет.
+    </div>
+  </fieldset>
 
   <button id="check">Сохранить и проверить связь</button>
 

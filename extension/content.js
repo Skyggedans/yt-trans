@@ -17,6 +17,12 @@ const PLAYHEAD_MS = 1000;
 // нечувствительности текст ходил бы ходуном на каждый пиксель её дрожания.
 const LIFT_HYSTERESIS_PX = 4;
 
+const settings = {
+  showOriginal: false,
+  // "above" — оригинал над переводом, "below" — под ним.
+  originalPosition: "below",
+};
+
 const state = {
   videoId: null,
   // Растёт на каждой навигации. Всё, что приходит со старым номером, выбрасывается:
@@ -26,6 +32,8 @@ const state = {
   lastIndex: -1,
   lift: 0,
   port: null,
+  // Ставится циклом отрисовки, пока он жив.
+  repaint: null,
   teardown: [],
 };
 
@@ -110,6 +118,13 @@ function buildOverlay(player) {
       /* Реплика, которую не удалось перевести: на экране исходный сербский.
          Зритель должен видеть, что это не перевод, а запасной вариант. */
       .box.failed .line { color: #ffd9a0; font-style: italic; }
+      /* Оригинал — вспомогательная строка, и читается он краем глаза.
+         Мельче и тусклее, чтобы не спорить за внимание с переводом. */
+      .line.original {
+        font-size: calc(var(--font) * 0.78);
+        color: #d8d8d8;
+        background: rgba(8, 8, 8, 0.62);
+      }
     </style>
     <div class="box" part="box"></div>
   `;
@@ -127,16 +142,27 @@ function paint(box, cue) {
     return;
   }
 
-  box.classList.toggle("failed", Boolean(cue.failed));
-  box.replaceChildren(
-    ...cue.lines.map((text) => {
-      const line = document.createElement("div");
-      line.className = "line";
-      line.textContent = text;
+  const makeLine = (text, className) => {
+    const line = document.createElement("div");
+    line.className = className;
+    line.textContent = text;
 
-      return line;
-    }),
-  );
+    return line;
+  };
+
+  const nodes = cue.lines.map((text) => makeLine(text, "line"));
+
+  // Когда перевод не удался, на экране и так исходный сербский — второй раз
+  // его показывать незачем.
+  if (settings.showOriginal && cue.src && !cue.failed) {
+    const original = makeLine(cue.src, "line original");
+
+    if (settings.originalPosition === "above") nodes.unshift(original);
+    else nodes.push(original);
+  }
+
+  box.classList.toggle("failed", Boolean(cue.failed));
+  box.replaceChildren(...nodes);
 }
 
 /**
@@ -247,8 +273,16 @@ function startRenderLoop(video, host, box) {
 
   render();
 
+  // Перерисовка по требованию: тик по кадрам на паузе не идёт, поэтому смена
+  // настройки иначе вступила бы в силу только после возобновления.
+  state.repaint = () => {
+    state.lastIndex = -1;
+    render();
+  };
+
   state.teardown.push(() => {
     running = false;
+    state.repaint = null;
 
     if (handle && "cancelVideoFrameCallback" in video) video.cancelVideoFrameCallback(handle);
     else if (handle) cancelAnimationFrame(handle);
@@ -384,7 +418,30 @@ function connect() {
   });
 }
 
-function main() {
+async function loadSettings() {
+  const stored = await api.storage.local.get(settings);
+
+  Object.assign(settings, stored);
+}
+
+function watchSettings() {
+  api.storage.onChanged.addListener((changes) => {
+    let touched = false;
+
+    for (const key of Object.keys(settings)) {
+      if (changes[key]) {
+        settings[key] = changes[key].newValue;
+        touched = true;
+      }
+    }
+
+    if (touched && state.repaint) state.repaint();
+  });
+}
+
+async function main() {
+  await loadSettings();
+  watchSettings();
   connect();
   onNavigate();
 

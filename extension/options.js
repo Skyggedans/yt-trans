@@ -9,13 +9,24 @@
 
 const api = globalThis.browser ?? globalThis.chrome;
 
-const DEFAULTS = { host: "127.0.0.1", port: 8756, token: "", targetLang: "ru" };
+const DEFAULTS = {
+  host: "127.0.0.1",
+  port: 8756,
+  token: "",
+  targetLang: "ru",
+  showOriginal: false,
+  originalPosition: "below",
+};
 
 const fields = {
   token: document.querySelector("#token"),
   host: document.querySelector("#host"),
   port: document.querySelector("#port"),
 };
+
+const showOriginal = document.querySelector("#showOriginal");
+const originalPosition = document.querySelector("#originalPosition");
+const positionRow = document.querySelector("#positionRow");
 
 const status = document.querySelector("#status");
 
@@ -110,13 +121,40 @@ async function check() {
   );
 }
 
+function syncPositionRow() {
+  // Выбор места бессмыслен, пока сам оригинал выключен.
+  positionRow.hidden = !showOriginal.checked;
+}
+
+/**
+ * Настройки показа сохраняются сразу, а не по кнопке.
+ *
+ * Кнопка проверяет связь с демоном — к тому, как рисуется текст, она отношения
+ * не имеет. Content script слушает изменения хранилища и перерисовывает текущую
+ * реплику на месте, так что действие видно на открытом ролике мгновенно.
+ */
+async function saveDisplay() {
+  syncPositionRow();
+
+  await api.storage.local.set({
+    showOriginal: showOriginal.checked,
+    originalPosition: originalPosition.value,
+  });
+}
+
 async function load() {
   const stored = await api.storage.local.get(DEFAULTS);
 
   fields.token.value = stored.token || "";
   fields.host.value = stored.host || DEFAULTS.host;
   fields.port.value = stored.port || DEFAULTS.port;
+  showOriginal.checked = Boolean(stored.showOriginal);
+  originalPosition.value = stored.originalPosition || DEFAULTS.originalPosition;
+
+  syncPositionRow();
 }
 
 document.querySelector("#check").addEventListener("click", check);
+showOriginal.addEventListener("change", saveDisplay);
+originalPosition.addEventListener("change", saveDisplay);
 load();
