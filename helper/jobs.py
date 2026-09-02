@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import subprocess
@@ -52,6 +53,10 @@ MAX_VIDEO_SECONDS = 3 * 3600
 # Сколько завершённых заданий держать в памяти. Реплики двадцатиминутного ролика —
 # это сотни объектов, и без вытеснения реестр рос бы всю жизнь процесса.
 MAX_RETAINED_JOBS = 12
+
+# Длина журнала событий. Реплики дублируются в job.cues, поэтому отставшему
+# клиенту дешевле отдать снимок, чем хранить всю историю ради него одного.
+MAX_EVENT_LOG = 2000
 
 # Сколько видеопамяти просить под каждую фазу, берётся из конфигурации вместе
 # с именем модели: см. helper/config.py. Цифра не может жить отдельно от модели —
@@ -110,6 +115,17 @@ class Job:
         self.playhead = 0.0
         self.created_at = time.time()
 
+        # Журнал событий с курсором. Нужен для длинных опросов: клиент говорит,
+        # что видел до позиции N, и получает всё, что появилось после. Очередей
+        # на подписчика для этого мало — они одноразовые, а опрос переподключается
+        # после каждого ответа и должен продолжать ровно с того места.
+        self.events: list[dict] = []
+        # Сколько событий уже выброшено из начала журнала. Курсор у клиента
+        # абсолютный, а обрезка сдвигает индексы списка — без этого счётчика
+        # после переполнения журнала курсор указывал бы не туда.
+        self._dropped = 0
+        self._wakeup = asyncio.Event()
+
         self._subscribers: set[asyncio.Queue] = set()
         self._task: asyncio.Task | None = None
         # Ручка на процесс распознавания. Без неё его нечем убить: subprocess.run
@@ -139,8 +155,42 @@ class Job:
         self._subscribers.discard(queue)
 
     def _emit(self, event: dict) -> None:
+        self.events.append(event)
+
+        # Журнал ограничен: реплики всё равно целиком лежат в job.cues, поэтому
+        # отставший клиент получит их снимком, а не будет держать нас за хвост.
+        if len(self.events) > MAX_EVENT_LOG:
+            excess = len(self.events) - MAX_EVENT_LOG
+            del self.events[:excess]
+            self._dropped += excess
+
+        self._wakeup.set()
+        self._wakeup.clear()
+
         for queue in list(self._subscribers):
             queue.put_nowait(event)
+
+    async def poll(self, cursor: int, timeout: float) -> dict:
+        """События после позиции cursor. Ждёт до timeout, если новых пока нет.
+
+        Отрицательный или слишком старый курсор означает, что клиент отстал или
+        подключился впервые: отдаём снимок и текущую позицию, чтобы он начал
+        с согласованного состояния, а не с середины.
+        """
+        end = self._dropped + len(self.events)
+
+        if cursor < self._dropped:
+            return {"cursor": end, "snapshot": self.snapshot(), "events": []}
+
+        if cursor >= end:
+            # Ждём появления новых. Таймаут возвращает пустой ответ — это норма,
+            # клиент тут же спросит снова, и соединение не висит дольше лимита.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._wakeup.wait(), timeout)
+
+            end = self._dropped + len(self.events)
+
+        return {"cursor": end, "events": self.events[cursor - self._dropped :]}
 
     def snapshot(self) -> dict:
         return {
@@ -599,10 +649,19 @@ class JobManager:
     def get_or_create(self, video_id: str, target_lang: str = "ru") -> Job:
         job = self._jobs.get(video_id)
 
-        if job is None or job.stage is Stage.ERROR:
+        if job is None:
             job = Job(video_id, target_lang)
             self._jobs[video_id] = job
             job.start(self.runner)
+        elif job.stage is Stage.ERROR:
+            # Отказ прилипает намеренно. Раньше здесь задание пересоздавалось,
+            # и вместе с опросом, который зовёт get_or_create на каждом запросе,
+            # это давало шторм: отказ → пересоздание → отказ, восемь раз за
+            # тридцать секунд, с обращением к YouTube на каждом витке. Причины
+            # отказов обычно неустранимы сами по себе (ролик слишком длинный,
+            # эфир, возрастное ограничение), так что повторять их бессмысленно.
+            # Осознанный повтор — через drop, он в API есть.
+            pass
         elif job.stage is Stage.PAUSED:
             # Карту забирал пользователь. Реплики никуда не делись — продолжаем
             # то же задание, а не начинаем заново с распознавания.

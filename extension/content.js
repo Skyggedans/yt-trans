@@ -34,6 +34,15 @@ const state = {
   port: null,
   // Ставится циклом отрисовки, пока он жив.
   repaint: null,
+  // Кнопка запуска и признак того, что зритель уже согласился на перевод
+  // этого ролика. Без согласия демон не трогается вовсе: каждое задание
+  // качает аудио и занимает карту, поэтому запускать его на всём подряд,
+  // что открыто в браузере, нельзя.
+  chip: null,
+  active: false,
+  // Сколько реплик всего. Приходит один раз вместе со стадией перевода
+  // и нужен, чтобы показывать прогресс по мере поступления реплик.
+  total: 0,
   teardown: [],
 };
 
@@ -125,13 +134,97 @@ function buildOverlay(player) {
         color: #d8d8d8;
         background: rgba(8, 8, 8, 0.62);
       }
+      /* Единственный элемент, принимающий мышь: всё остальное в оверлее
+         сквозное, чтобы клики доходили до плеера. */
+      .chip {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        pointer-events: auto;
+        font: 500 13px/1 system-ui, sans-serif;
+        color: #fff;
+        background: rgba(8, 8, 8, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        border-radius: 14px;
+        padding: 7px 13px;
+        cursor: pointer;
+        user-select: none;
+        transition: opacity 150ms;
+      }
+      .chip:hover { background: rgba(30, 30, 30, 0.9); }
+      .chip[data-mode="busy"] { cursor: default; opacity: 0.85; }
+      .chip[data-mode="error"] { border-color: rgba(255, 140, 140, 0.6); color: #ffc9c9; }
+      .chip[hidden] { display: none; }
     </style>
+    <div class="chip" hidden></div>
     <div class="box" part="box"></div>
   `;
 
   player.appendChild(host);
 
-  return { host, box: shadow.querySelector(".box") };
+  return {
+    host,
+    box: shadow.querySelector(".box"),
+    chip: shadow.querySelector(".chip"),
+  };
+}
+
+const CHIP_LABELS = {
+  queued: "в очереди…",
+  probing: "читаю ролик…",
+  fetching: "качаю звук…",
+  asr: "распознаю речь…",
+  translating: "перевожу…",
+  paused: "пауза: карта занята",
+};
+
+function setChip(text, mode = "idle") {
+  const chip = state.chip;
+
+  if (!chip) return;
+
+  chip.hidden = false;
+  chip.textContent = text;
+  chip.dataset.mode = mode;
+}
+
+/** Отразить на кнопке то, что сообщает демон. */
+function updateChip(message) {
+  if (!state.chip || !state.active) return;
+
+  if (message.type === "helper" && message.ok === false) {
+    setChip(message.reason || "нет связи с демоном", "error");
+
+    return;
+  }
+
+  const stage = message.stage;
+
+  if (message.type === "state" || message.type === "snapshot") {
+    if (stage === "error") {
+      setChip(message.message || message.error || "не получилось", "error");
+
+      return;
+    }
+
+    if (stage === "done") {
+      // Работа закончена, реплики уже на экране — кнопке там больше не место.
+      state.chip.hidden = true;
+
+      return;
+    }
+
+    if (CHIP_LABELS[stage]) {
+      if (message.total) state.total = message.total;
+
+      const progress =
+        stage === "translating" && state.total
+          ? ` ${state.cues.length}/${state.total}`
+          : "";
+
+      setChip(CHIP_LABELS[stage] + progress, "busy");
+    }
+  }
 }
 
 function paint(box, cue) {
@@ -216,6 +309,11 @@ function teardown() {
   state.cues = [];
   state.lastIndex = -1;
   state.lift = 0;
+  // Согласие относится к конкретному ролику и на следующий не переносится:
+  // иначе автоплей запускал бы обработку всего подряд без спроса.
+  state.chip = null;
+  state.active = false;
+  state.total = 0;
 }
 
 function hideNativeCaptions() {
@@ -328,7 +426,9 @@ function startLiftTracking(player, host, box) {
 
 function startPlayheadReports(video, videoId) {
   const timer = setInterval(() => {
-    if (state.port && state.videoId === videoId) {
+    // Только после согласия: без задания позиция просмотра никому не нужна,
+    // а запрос к демону вернул бы 404 на каждой секунде.
+    if (state.active && state.port && state.videoId === videoId) {
       state.port.postMessage({ op: "playhead", videoId, t: video.currentTime });
     }
   }, PLAYHEAD_MS);
@@ -345,6 +445,13 @@ function mergeCues(incoming) {
 
   state.cues = [...byIndex.values()].sort((a, b) => a.start - b.start);
   state.lastIndex = -1;
+
+  // Прогресс приходит именно репликами: событие о начале перевода демон шлёт
+  // один раз и числа готовых в нём нет. Без этой строки счётчик на кнопке
+  // застывал бы на нуле до самого конца работы.
+  if (state.active && state.total) {
+    setChip(`перевожу… ${state.cues.length}/${state.total}`, "busy");
+  }
 }
 
 async function activate(videoId) {
@@ -353,14 +460,27 @@ async function activate(videoId) {
 
   if (!player || !video) return false;
 
-  const { host, box } = buildOverlay(player);
+  const { host, box, chip } = buildOverlay(player);
 
+  state.chip = chip;
   hideNativeCaptions();
   startRenderLoop(video, host, box);
   startLiftTracking(player, host, box);
   startPlayheadReports(video, videoId);
 
-  state.port.postMessage({ op: "watch", videoId });
+  // Задание НЕ запускается само. Каждое качает аудио и занимает видеокарту,
+  // а во вкладках может быть открыто что угодно — в том числе ролики на других
+  // языках, для которых распознавание, жёстко настроенное на сербский, выдало бы
+  // правдоподобную бессмыслицу.
+  chip.addEventListener("click", () => {
+    if (state.active) return;
+
+    state.active = true;
+    setChip("запускаю…", "busy");
+    state.port.postMessage({ op: "watch", videoId });
+  });
+
+  setChip("Перевести на русский");
 
   return true;
 }
@@ -402,6 +522,8 @@ function connect() {
     if (message.type === "cues" || message.type === "snapshot") {
       mergeCues(message.cues || []);
     }
+
+    updateChip(message);
   });
 
   state.port.onDisconnect.addListener(() => {
@@ -413,7 +535,11 @@ function connect() {
 
       connect();
 
-      if (state.videoId) state.port.postMessage({ op: "watch", videoId: state.videoId });
+      // Только если согласие уже дано. Иначе разрыв соединения запускал бы
+      // обработку сам по себе, в обход кнопки.
+      if (state.videoId && state.active) {
+        state.port.postMessage({ op: "watch", videoId: state.videoId });
+      }
     }, 1000);
   });
 }

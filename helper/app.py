@@ -38,6 +38,10 @@ TOKEN_PATH = CONFIG_DIR / "token"
 # простоя и заодно быстро вскрывает разрыв соединения.
 HEARTBEAT = 15.0
 
+# Потолок ожидания в длинном опросе. Меньше тридцати секунд намеренно:
+# в Chrome MV3 service worker убивают, если ответ fetch идёт дольше.
+POLL_TIMEOUT = 25.0
+
 ALLOWED_ORIGIN_SCHEMES = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
 
 
@@ -146,6 +150,37 @@ async def job_snapshot(video_id: str) -> dict:
         raise HTTPException(status_code=404, detail="задание не найдено")
 
     return job.snapshot()
+
+
+@app.get("/v1/jobs/{video_id}/events", dependencies=[Depends(auth)])
+async def job_events(video_id: str, cursor: int = 0, target: str = "ru") -> dict:
+    """Длинный опрос: события после cursor, ожидание до POLL_TIMEOUT секунд.
+
+    Обычный HTTP вместо WebSocket. Firefox повышает ws:// до wss:// при обращении
+    из контекста расширения — исключение для локального адреса, работающее для
+    http://, на WebSocket не распространяется, и соединение молча не поднимается.
+    Замерено ловушкой: 13 попыток TLS против 10 успешных обычных запросов.
+
+    Ожидание ограничено 25 секундами намеренно: в Chrome MV3 service worker
+    умирает, если ответ идёт дольше 30, а короткие повторяющиеся запросы,
+    наоборот, сбрасывают его таймер простоя.
+    """
+    job = manager.get_or_create(video_id, target)
+
+    return await job.poll(cursor, POLL_TIMEOUT)
+
+
+@app.post("/v1/jobs/{video_id}/playhead", dependencies=[Depends(auth)])
+async def set_playhead(video_id: str, payload: dict) -> dict:
+    """Куда смотрит зритель — двигает приоритет очереди перевода."""
+    job = manager.get(video_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="задание не найдено")
+
+    job.playhead = float((payload or {}).get("t", 0.0))
+
+    return {"ok": True}
 
 
 @app.post("/v1/jobs/{video_id}/drop", dependencies=[Depends(auth)])
