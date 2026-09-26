@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "yt-trans — русские субтитры",
-  "description": "Русские субтитры к сербским роликам YouTube локальными моделями",
+  "name": "yt-trans — субтитры",
+  "description": "Субтитры к роликам YouTube локальными моделями: перевод и вторая строка для изучения языка",
   "version": "0.1.0",
   "minimum_chrome_version": "128",
 

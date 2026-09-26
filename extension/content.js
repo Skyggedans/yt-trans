@@ -1,5 +1,5 @@
 /**
- * Оверлей с русскими субтитрами поверх плеера YouTube.
+ * Оверлей с субтитрами поверх плеера YouTube.
  *
  * Крепится к #movie_player, а не к контейнеру видео. Это тот самый элемент,
  * который YouTube передаёт в requestFullscreen() и переносит в miniplayer,
@@ -39,7 +39,20 @@ const state = {
   // качает аудио и занимает карту, поэтому запускать его на всём подряд,
   // что открыто в браузере, нельзя.
   chip: null,
+  // Последняя надпись на кнопке, не считая ошибок.
+  lastLabel: null,
+  // Оверлей подключён и принимает реплики. Это НЕ согласие: восстановление
+  // после перезагрузки страницы тоже его включает.
   active: false,
+  // Зритель нажал кнопку на ЭТОЙ странице. Только этот флаг даёт право
+  // просить работу: качать аудио и занимать карту. Разведены они потому, что
+  // раньше был один, и восстановление им же подписывало зрителя за него —
+  // переподключение порта слало {op:"watch"} на вкладке, где никто не нажимал.
+  consented: false,
+  // Длительность ролика по данным плеера. Уходит в запрос восстановления:
+  // по ней демон отсекает кэш от перезалитого под тем же идентификатором ролика,
+  // не спрашивая метаданные у YouTube на каждой загрузке страницы.
+  duration: 0,
   // Сколько реплик всего. Приходит один раз вместе со стадией перевода
   // и нужен, чтобы показывать прогресс по мере поступления реплик.
   total: 0,
@@ -124,7 +137,7 @@ function buildOverlay(player) {
         white-space: pre-wrap;
         text-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
       }
-      /* Реплика, которую не удалось перевести: на экране исходный сербский.
+      /* Реплика, которую не удалось перевести: на экране текст распознавания.
          Зритель должен видеть, что это не перевод, а запасной вариант. */
       .box.failed .line { color: #ffd9a0; font-style: italic; }
       /* Оригинал — вспомогательная строка, и читается он краем глаза.
@@ -183,6 +196,11 @@ function setChip(text, mode = "idle") {
 
   if (!chip) return;
 
+  // Последнюю НЕошибочную надпись запоминаем: к ней надо вернуться, когда связь
+  // восстановится. Сообщение об обрыве иначе переживало бы сам обрыв — работа
+  // давно идёт дальше, а на кнопке всё ещё написано, что демона нет.
+  if (mode !== "error") state.lastLabel = { text, mode };
+
   chip.hidden = false;
   chip.textContent = text;
   chip.dataset.mode = mode;
@@ -192,8 +210,15 @@ function setChip(text, mode = "idle") {
 function updateChip(message) {
   if (!state.chip || !state.active) return;
 
-  if (message.type === "helper" && message.ok === false) {
-    setChip(message.reason || "нет связи с демоном", "error");
+  if (message.type === "helper") {
+    if (message.ok === false) {
+      setChip(message.reason || "нет связи с демоном", "error");
+    } else if (state.chip.dataset.mode === "error" && state.lastLabel) {
+      // Связь вернулась: показываем то, чем демон был занят до обрыва. Новых
+      // событий он мог и не прислать — перевод батча идёт десятками секунд,
+      // и всё это время сказать ему нечего.
+      setChip(state.lastLabel.text, state.lastLabel.mode);
+    }
 
     return;
   }
@@ -222,7 +247,11 @@ function updateChip(message) {
           ? ` ${state.cues.length}/${state.total}`
           : "";
 
-      setChip(CHIP_LABELS[stage] + progress, "busy");
+      // Демон уточняет источник, когда качает не звук, а готовые субтитры автора.
+      // Без этого кнопка врала бы «качаю звук» на пути, где звук вообще не нужен.
+      const label = message.source ? `качаю ${message.source}…` : CHIP_LABELS[stage];
+
+      setChip(label + progress, "busy");
     }
   }
 }
@@ -245,10 +274,18 @@ function paint(box, cue) {
 
   const nodes = cue.lines.map((text) => makeLine(text, "line"));
 
-  // Когда перевод не удался, на экране и так исходный сербский — второй раз
+  // Вторая строка приходит готовой от демона: черногорский перевод в учебном
+  // режиме, текст распознавания без него. Подставлять здесь cue.src нельзя —
+  // оверлей не знает, включён ли режим, и на русском ролике такая подстановка
+  // молча выдавала русский вместо черногорского: выглядело это не как пропуск
+  // строки, а как сломавшийся перевод.
+  //
+  // Когда перевод не удался, на экране и так исходный текст: второй раз
   // его показывать незачем.
-  if (settings.showOriginal && cue.src && !cue.failed) {
-    const original = makeLine(cue.src, "line original");
+  const second = cue.study;
+
+  if (settings.showOriginal && second && !cue.failed) {
+    const original = makeLine(second, "line original");
 
     if (settings.originalPosition === "above") nodes.unshift(original);
     else nodes.push(original);
@@ -313,6 +350,11 @@ function teardown() {
   // иначе автоплей запускал бы обработку всего подряд без спроса.
   state.chip = null;
   state.active = false;
+  // Согласие относится к КОНКРЕТНОМУ ролику. Не сбрасывай его здесь — и переход
+  // на следующий унёс бы разрешение с собой: переподключение порта отправило бы
+  // watch по новому ролику, которого зритель не разрешал.
+  state.consented = false;
+  state.duration = 0;
   state.total = 0;
 }
 
@@ -468,19 +510,31 @@ async function activate(videoId) {
   startLiftTracking(player, host, box);
   startPlayheadReports(video, videoId);
 
-  // Задание НЕ запускается само. Каждое качает аудио и занимает видеокарту,
-  // а во вкладках может быть открыто что угодно — в том числе ролики на других
-  // языках, для которых распознавание, жёстко настроенное на сербский, выдало бы
-  // правдоподобную бессмыслицу.
+  // Задание НЕ запускается само. Каждое качает аудио и занимает видеокарту
+  // на минуты, а во вкладках может быть открыто что угодно.
+  //
+  // Подпись не называет языки намеренно. Она рисуется до первого разговора
+  // с демоном, а что зритель увидит на экране, решают два флага сразу:
+  // study_language в конфиге демона и showOriginal здесь, в браузере.
+  // Любое обещание про языки было бы враньём в свежей установке.
   chip.addEventListener("click", () => {
     if (state.active) return;
 
     state.active = true;
+    state.consented = true;
     setChip("запускаю…", "busy");
     state.port.postMessage({ op: "watch", videoId });
   });
 
-  setChip("Перевести на русский");
+  setChip("Сделать субтитры");
+
+  // Спрашиваем демон, не сделано ли уже. Это чистое чтение: если по ролику идёт
+  // перевод — подхватим его прогресс, если он готов — поднимем из кэша, а если
+  // ничего нет, кнопка так и останется ждать нажатия. Без этого F5 посреди
+  // перевода выглядел как потеря всей работы: оверлей заново просил согласия,
+  // хотя демон в это время продолжал переводить.
+  state.duration = video.duration;
+  state.port.postMessage({ op: "restore", videoId, duration: state.duration });
 
   return true;
 }
@@ -519,6 +573,21 @@ function connect() {
   state.port.onMessage.addListener((message) => {
     if (message.videoId && message.videoId !== state.videoId) return;
 
+    // Демон нашёл готовое или идущее задание по этому ролику. Согласие на него
+    // зритель дал раньше — до перезагрузки страницы, — и переспрашивать незачем:
+    // ни сети, ни карты восстановление не тратит.
+    if (message.type === "restored") state.active = true;
+
+    // Задание на демоне исчезло — перезапуск, вытеснение из реестра. Пересоздавать
+    // его молча нельзя: согласия на работу с этой страницы не давали. Возвращаем
+    // кнопку, чтобы решал зритель.
+    if (message.type === "gone" && !state.consented) {
+      state.active = false;
+      setChip("Сделать субтитры");
+
+      return;
+    }
+
     if (message.type === "cues" || message.type === "snapshot") {
       mergeCues(message.cues || []);
     }
@@ -537,8 +606,16 @@ function connect() {
 
       // Только если согласие уже дано. Иначе разрыв соединения запускал бы
       // обработку сам по себе, в обход кнопки.
-      if (state.videoId && state.active) {
+      if (state.videoId && state.consented) {
         state.port.postMessage({ op: "watch", videoId: state.videoId });
+      } else if (state.videoId) {
+        // Восстановленная вкладка переспрашивает тем же безопасным путём.
+        // Слать сюда watch нельзя: он создаёт задание, а нажатия не было.
+        state.port.postMessage({
+          op: "restore",
+          videoId: state.videoId,
+          duration: state.duration,
+        });
       }
     }, 1000);
   });

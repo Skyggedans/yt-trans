@@ -32,8 +32,22 @@ from helper.config import Config, load as load_config
 from helper.gpulease import GpuLease, Preempted
 from helper.script import normalize_cues
 from helper.segment import Cue, build_cues
-from helper.sources.ytdlp import YtDlpError, VideoInfo, audio_pcm, probe, usable_manual_track
-from helper.translate import Batch, TranslateError, translate_batch, validate
+from helper.sources.ytdlp import (
+    YtDlpError,
+    VideoInfo,
+    audio_pcm,
+    fetch_manual_track,
+    probe,
+    usable_manual_track,
+)
+from helper.translate import (
+    Batch,
+    TranslateError,
+    translate_batch,
+    translate_dual,
+    validate,
+    validate_dual,
+)
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +96,9 @@ class JobCue:
     end: float
     src: str
     lines: list[str] = field(default_factory=list)
+    # Вторая строка для изучения языка: черногорский перевод той же реплики.
+    # Пусто, если режим выключен.
+    study: str = ""
     # Перевод не удался ни батчем, ни половинами, ни поштучно: на экран уходит
     # исходный сербский. Расширение показывает такие реплики иначе, чтобы зритель
     # видел, что это не перевод.
@@ -98,6 +115,7 @@ class JobCue:
             "end": self.end,
             "src": self.src,
             "lines": self.lines,
+            "study": self.study,
             "failed": self.failed,
         }
 
@@ -105,14 +123,23 @@ class JobCue:
 class Job:
     """Одно задание на один ролик."""
 
-    def __init__(self, video_id: str, target_lang: str = "ru") -> None:
+    def __init__(
+        self, video_id: str, target_lang: str = "ru", use_author_track: bool = True
+    ) -> None:
         self.video_id = video_id
         self.target_lang = target_lang
+        # Брать ли готовую дорожку автора вместо распознавания. Выключается
+        # из настроек расширения: дорожка бывает не транскриптом, а вольным
+        # пересказом или переводом, и тогда своё распознавание точнее.
+        self.use_author_track = use_author_track
         self.stage = Stage.QUEUED
         self.error: str | None = None
         self.cues: list[JobCue] = []
         self.info: VideoInfo | None = None
         self.playhead = 0.0
+        # Откуда взяты реплики: 'asr' или 'manual:<язык>'. Входит в ключ кэша —
+        # дорожка автора и результат распознавания это разные дорожки.
+        self.source = "asr"
         self.created_at = time.time()
 
         # Журнал событий с курсором. Нужен для длинных опросов: клиент говорит,
@@ -176,10 +203,16 @@ class Job:
         Отрицательный или слишком старый курсор означает, что клиент отстал или
         подключился впервые: отдаём снимок и текущую позицию, чтобы он начал
         с согласованного состояния, а не с середины.
+
+        Курсор ЗА концом журнала означает обратное — он из другого задания на тот
+        же ролик, пересозданного под сменившийся переключатель дорожки. Это тоже
+        рассинхронизация, и лечится тем же снимком: без него клиент молча ждал бы,
+        пока журнал дорастёт до его позиции, потерял бы все события до неё и
+        подмешал бы новые реплики к показанным старым.
         """
         end = self._dropped + len(self.events)
 
-        if cursor < self._dropped:
+        if cursor < self._dropped or cursor > end:
             return {"cursor": end, "snapshot": self.snapshot(), "events": []}
 
         if cursor >= end:
@@ -273,6 +306,8 @@ class JobRunner:
             target_lang=job.target_lang,
             asr_model=f"{self._config.asr.model}/{self._config.asr.compute_type}",
             translator_model=self._mt_model,
+            study_lang=self._config.translator.study_language,
+            track_fingerprint=job.source,
         )
 
     async def run(self, job: Job) -> None:
@@ -317,27 +352,49 @@ class JobRunner:
                 f"({job.info.duration / 3600:.1f} ч): аудио не поместится в память"
             )
 
-        key = self._cache_key(job)
-        cached = await asyncio.to_thread(self._cache.get, key, job.info.duration)
+        # Авторская дорожка, если она есть, снимает распознавание целиком: и
+        # минуты работы карты, и её ошибки. Реплики размечены человеком, тайминги
+        # его же — пересобирать их незачем, в отличие от тридцатисекундных окон Whisper.
+        #
+        # Источник определяется ДО обращения к кэшу, потому что входит в ключ.
+        # Считай мы ключ раньше, дорожка автора не попадала бы в кэш никогда —
+        # клали бы под один ключ, спрашивали под другой, — а с выключенным
+        # переключателем демон отдавал бы прежний результат распознавания,
+        # и переключатель выглядел бы не работающим вовсе.
+        track = usable_manual_track(job.info) if job.use_author_track else None
 
-        if cached:
-            job.cues = [
-                JobCue(
-                    index=i,
-                    start=c["start"],
-                    end=c["end"],
-                    src=c["src"],
-                    lines=c["lines"],
-                    # Флаг обязан пережить круг через кэш: без него реплика
-                    # с непереведённым сербским вернулась бы как полноценный перевод.
-                    failed=c.get("failed", False),
-                )
-                for i, c in enumerate(cached["cues"])
-            ]
-            job._emit({"type": "cues", "cues": [c.payload() for c in job.cues]})
-            job._set_stage(Stage.DONE, cached=True, total=len(job.cues))
+        if track:
+            job.source = f"manual:{track.lang}"
 
+        if await self._serve_cached(job):
             return
+
+        if track:
+            job._set_stage(Stage.FETCHING, source=f"дорожку автора ({track.lang})")
+
+            try:
+                segments = await asyncio.to_thread(
+                    fetch_manual_track, job.video_id, track.lang
+                )
+            except YtDlpError as exc:
+                # Дорожка есть в метаданных, но не скачалась — это не повод
+                # проваливать задание: звук на месте, распознаем сами. Источник
+                # возвращаем обратно, иначе распознанное легло бы в кэш под ключом
+                # дорожки, а кэш распознавания для этого ролика остался бы нетронут
+                # и карта молола бы одно и то же на каждом просмотре.
+                log.info("дорожка %s недоступна (%s), иду через распознавание", track.lang, exc)
+                job.source = "asr"
+
+                if await self._serve_cached(job):
+                    return
+            else:
+                job.cues = self._to_job_cues_from_track(
+                    normalize_cues(segments, track.lang)
+                )
+                job._emit({"type": "segmented", "total": len(job.cues)})
+                await self._finish_translation(job)
+
+                return
 
         job._set_stage(Stage.FETCHING)
         audio = await asyncio.to_thread(audio_pcm, job.video_id)
@@ -354,12 +411,18 @@ class JobRunner:
 
         async with self._lease.acquire(self._config.asr_vram_mib) as held:
             job._set_stage(Stage.ASR, duration=duration)
-            segments = await self._run_asr_watched(audio, job, held)
+            result = await self._run_asr_watched(audio, job, held)
+            segments = result["cues"]
+            spoken = result.get("language") or "sr"
+
+            if result.get("detected") and result.get("detected") != spoken:
+                log.info("язык речи: %s (определитель дал %s, уверенность %.2f)",
+                         spoken, result["detected"], result.get("confidence") or 0.0)
 
             # Присваиваем реплики ДО проверки вытеснения. Транскрипт уже получен,
             # и выбрасывать его только потому, что карту забрали секундой позже,
             # значит потерять минуты работы GPU: возобновление начнётся с перевода.
-            job.cues = self._to_job_cues(build_cues(normalize_cues(segments)))
+            job.cues = self._to_job_cues(build_cues(normalize_cues(segments, spoken)))
             job._emit({"type": "segmented", "total": len(job.cues)})
             held.check()
 
@@ -440,7 +503,7 @@ class JobRunner:
         )
         job._set_stage(Stage.DONE, total=len(job.cues))
 
-    def _run_asr(self, audio, job: Job) -> list[dict]:
+    def _run_asr(self, audio, job: Job) -> dict:
         """Распознавание отдельным процессом — выход процесса гарантирует возврат VRAM."""
         prompt = _initial_prompt(job.info)
         args = [
@@ -452,7 +515,7 @@ class JobRunner:
             "--compute-type",
             self._config.asr.compute_type,
             "--language",
-            self._config.asr.language,
+            self._source_language(job),
         ]
 
         if prompt:
@@ -485,7 +548,79 @@ class JobRunner:
         if "error" in result:
             raise RuntimeError(result["error"])
 
-        return result["cues"]
+        return result
+
+    def _source_language(self, job: Job) -> str:
+        """Язык речи: сначала бесплатно из метаданных, и только потом моделью.
+
+        yt-dlp выводит язык аудио из оригинальной ASR-дорожки YouTube, поэтому
+        для английских и русских роликов поле заполнено, а для сербских пусто —
+        автосубтитров для BCMS не существует. Замерено: en и ru отдаются верно,
+        сербский корпус из 60 роликов дал None во всех шестидесяти.
+
+        Настройка со значением языка перекрывает всё: она означает «я знаю, что
+        тут, не гадай». Значение "auto" оставляет решение метаданным и модели.
+        """
+        configured = self._config.asr.language
+
+        if configured and configured != "auto":
+            return configured
+
+        declared = (job.info.audio_language or "").split("-")[0].lower() if job.info else ""
+
+        if declared:
+            log.info("язык %s взят из метаданных, распознаватель определять не будет", declared)
+
+            return declared
+
+        # Метаданных нет — пусть решает Whisper по окнам, разложенным по ролику.
+        return "auto"
+
+    async def _serve_cached(self, job: Job) -> bool:
+        """Отдать готовые реплики из кэша. True — задание закончено, идти дальше не нужно.
+
+        Ключ зависит от job.source, поэтому звать это можно только после того,
+        как источник реплик выбран.
+        """
+        cached = await asyncio.to_thread(
+            self._cache.get, self._cache_key(job), job.info.duration
+        )
+
+        if not cached:
+            return False
+
+        job.cues = [
+            JobCue(
+                index=i,
+                start=c["start"],
+                end=c["end"],
+                src=c["src"],
+                lines=c["lines"],
+                study=c.get("study", ""),
+                # Флаг обязан пережить круг через кэш: без него реплика
+                # с непереведённым сербским вернулась бы как полноценный перевод.
+                failed=c.get("failed", False),
+            )
+            for i, c in enumerate(cached["cues"])
+        ]
+        job._emit({"type": "cues", "cues": [c.payload() for c in job.cues]})
+        job._set_stage(Stage.DONE, cached=True, total=len(job.cues))
+
+        return True
+
+    def _to_job_cues_from_track(self, segments: list[dict]) -> list[JobCue]:
+        """Реплики из авторской дорожки: тайминги берём как есть.
+
+        Пересегментация здесь была бы вредна. Она нужна выходу Whisper, где
+        реплика — это тридцатисекундное окно на триста знаков; у автора же
+        границы расставлены под чтение, и переставлять их значит портить
+        то, ради чего этот путь и существует.
+        """
+        return [
+            JobCue(index=i, start=c["start"], end=c["end"], src=c["text"])
+            for i, c in enumerate(segments)
+            if c["text"].strip()
+        ]
 
     def _to_job_cues(self, cues: list[Cue]) -> list[JobCue]:
         return [
@@ -513,21 +648,28 @@ class JobRunner:
             )
 
             try:
-                translated = await asyncio.to_thread(translate_batch, batch, self._mt_model)
+                pairs = await self._translate_once(batch, batch_cues)
             except RETRYABLE as exc:
                 # Ловим широко, а не только TranslateError: обрыв соединения с ollama,
                 # её перезапуск или битый JSON — такие же поводы для лестницы починки.
                 # Пропущенные мимо, они роняли всё задание вместе с готовым транскриптом,
                 # на который уже потрачены минуты работы карты.
+                #
+                # Дробление идёт тем же путём, что и батч: если учебный режим включён,
+                # половины и поштучные попытки тоже просят обе строки. Раньше здесь
+                # был одноязычный откат — «учебная строка в такой ситуации роскошь», —
+                # и он тихо оставлял её пустой. На русском ролике это выглядело так,
+                # будто вместо черногорского пошёл русский: оверлей подставлял вместо
+                # пустой строки текст распознавания, а он у такого ролика русский.
                 log.warning("батч не перевёлся (%s), пробую половинами", exc)
-                translated = await self._translate_halves(batch_cues, job, held)
+                pairs = await self._translate_halves(batch_cues, job, held)
 
-            for problem_index, reason in validate(batch.cues, translated):
-                log.info("реплика %d: %s", batch_cues[problem_index].index, reason)
-
-            for cue, text in zip(batch_cues, translated):
+            for cue, (study_line, text) in zip(batch_cues, pairs):
                 if text.strip():
                     cue.lines = text.split("\n")[:2]
+
+                if study_line.strip():
+                    cue.study = study_line.strip()
 
             # Гарантия сходимости цикла: всё, что не пережило ни батч, ни половины,
             # ни поштучную попытку, помечается исходным текстом и флагом. Без этого
@@ -542,7 +684,37 @@ class JobRunner:
 
             job._emit({"type": "cues", "cues": [c.payload() for c in batch_cues]})
 
-    async def _translate_halves(self, cues: list[JobCue], job: Job, held) -> list[str]:
+    async def _translate_once(
+        self, batch: Batch, cues: list[JobCue] | None = None
+    ) -> list[tuple[str, str]]:
+        """Один заход в модель. Пара строк, если учебный режим включён.
+
+        Единая форма ответа на обоих режимах избавляет лестницу починки от
+        необходимости знать, какой из них сейчас: она просто передаёт пары дальше.
+        """
+        if self._config.translator.study_language:
+            pairs = await asyncio.to_thread(translate_dual, batch, self._mt_model)
+
+            for reason in validate_dual(pairs, batch.cues):
+                log.info("батч: %s", reason)
+
+            return pairs
+
+        lines = await asyncio.to_thread(translate_batch, batch, self._mt_model)
+
+        for index, reason in validate(batch.cues, lines):
+            number = cues[index].index if cues else index
+            log.info("реплика %d: %s", number, reason)
+
+        # Учебный режим выключен: второй строкой идёт текст распознавания, как и
+        # раньше. Подставляет его демон, а не оверлей — только здесь известно,
+        # включён ли режим, и пустая учебная строка означает именно неудачу,
+        # а не «показать оригинал».
+        return [(src, ru) for src, ru in zip(batch.cues, lines)]
+
+    async def _translate_halves(
+        self, cues: list[JobCue], job: Job, held
+    ) -> list[tuple[str, str]]:
         """Батч не прошёл целиком — делим пополам. Обычно виноват один длинный кусок.
 
         Проверка вытеснения обязательна на каждом уровне рекурсии: на батче в сорок
@@ -553,16 +725,16 @@ class JobRunner:
         held.check()
 
         if len(cues) == 1:
-            return [""]
+            return [("", "")]
 
         middle = len(cues) // 2
-        out: list[str] = []
+        out: list[tuple[str, str]] = []
 
         for half in (cues[:middle], cues[middle:]):
             batch = Batch(cues=[c.src for c in half], title=job.info.title if job.info else "")
 
             try:
-                out += await asyncio.to_thread(translate_batch, batch, self._mt_model)
+                out += await self._translate_once(batch, half)
             except RETRYABLE:
                 out += await self._translate_halves(half, job, held)
 
@@ -646,11 +818,37 @@ class JobManager:
         self.runner = JobRunner(self.lease, self.cache, self.config)
         self._jobs: dict[str, Job] = {}
 
-    def get_or_create(self, video_id: str, target_lang: str = "ru") -> Job:
+    def attach(self, video_id: str) -> Job | None:
+        """Существующее задание. В отличие от get_or_create, НИЧЕГО не создаёт.
+
+        Нужно опросу после восстановления. Обычный опрос идёт через get_or_create,
+        потому что подписка на ролик и есть согласие на работу. Но вкладка, которую
+        всего лишь перезагрузили, согласия не давала: она подхватила уже сделанное.
+        Если задание к этому моменту исчезло — демон перезапустили, реестр вытеснил
+        его, — создавать новое нельзя, иначе перезагрузка страницы сама запускала бы
+        скачивание и карту.
+        """
+        return self._jobs.get(video_id)
+
+    def get_or_create(
+        self, video_id: str, target_lang: str = "ru", use_author_track: bool = True
+    ) -> Job:
         job = self._jobs.get(video_id)
 
+        if job is not None and job.use_author_track != use_author_track:
+            # Переключатель сменили: готовое задание отвечает уже не на тот
+            # вопрос. Пересоздаём, иначе настройка выглядела бы сломанной —
+            # перезагрузка страницы возвращала бы прежний результат. Шторма,
+            # как с прилипшим отказом, тут не будет: значение приходит из
+            # настроек и между опросами не меняется, так что расхождение
+            # случается ровно один раз на переключение.
+            log.info("дорожка автора %s — начинаю %s заново",
+                     "включена" if use_author_track else "выключена", video_id)
+            self.drop(video_id)
+            job = None
+
         if job is None:
-            job = Job(video_id, target_lang)
+            job = Job(video_id, target_lang, use_author_track)
             self._jobs[video_id] = job
             job.start(self.runner)
         elif job.stage is Stage.ERROR:
@@ -670,6 +868,123 @@ class JobManager:
         self._evict()
 
         return job
+
+    def _key_for(self, video_id: str, target_lang: str, fingerprint: str) -> CacheKey:
+        return CacheKey(
+            video_id=video_id,
+            source_lang=self.config.asr.language,
+            target_lang=target_lang,
+            asr_model=f"{self.config.asr.model}/{self.config.asr.compute_type}",
+            translator_model=self.config.translator.model,
+            study_lang=self.config.translator.study_language,
+            track_fingerprint=fingerprint,
+        )
+
+    def restore(
+        self,
+        video_id: str,
+        target_lang: str = "ru",
+        use_author_track: bool = True,
+        duration: float | None = None,
+    ) -> Job | None:
+        """Что уже есть по этому ролику. Работы НЕ начинает — ни сети, ни карты.
+
+        Нужно для перезагрузки страницы. Согласие зрителя спрашивают один раз
+        за ролик, и переспрашивать его на F5 незачем: показать уже сделанное —
+        не то же самое, что начать качать аудио и занимать карту. Поэтому здесь
+        строго чтение: идущее задание отдаётся как есть, готовое поднимается
+        из кэша, а если нет ни того ни другого — возвращается None, и оверлей
+        честно показывает кнопку запуска.
+        """
+        job = self._jobs.get(video_id)
+
+        if job is not None:
+            # Задание с ДРУГИМ переключателем отдавать нельзя. Оно отвечает не на тот
+            # вопрос, и следующий же опрос /events пересоздал бы его через
+            # get_or_create — то есть перезагрузка страницы запустила бы полный
+            # конвейер со скачиванием и картой, без единого нажатия.
+            if job.use_author_track != use_author_track:
+                return None
+
+            # Приостановленное и провалившееся не восстанавливаем. Возобновление
+            # паузы — это захват карты, а прилипший отказ, поднятый в оверлей,
+            # закрывает зрителю кнопку: она прячется под сообщением об ошибке,
+            # и повторить попытку становится нечем.
+            if job.stage in (Stage.PAUSED, Stage.ERROR):
+                return None
+
+            return job
+
+        payload = self._cached_variant(video_id, target_lang, use_author_track, duration)
+
+        # Пустая дорожка — это не «всё готово», а испорченная запись. Отдай мы её,
+        # оверлей включился бы, спрятал кнопку по стадии done и не показал ничего,
+        # причём нажать было бы уже нечего.
+        if payload is None or not payload.get("cues"):
+            return None
+
+        job = Job(video_id, target_lang, use_author_track)
+        job.source = payload.get("track_fingerprint", "asr")
+        job.cues = [
+            JobCue(
+                index=i,
+                start=c["start"],
+                end=c["end"],
+                src=c["src"],
+                lines=c["lines"],
+                study=c.get("study", ""),
+                failed=c.get("failed", False),
+            )
+            for i, c in enumerate(payload["cues"])
+        ]
+        job._emit({"type": "cues", "cues": [c.payload() for c in job.cues]})
+        job._set_stage(Stage.DONE, cached=True, total=len(job.cues))
+
+        self._jobs[video_id] = job
+        self._evict()
+
+        log.info("восстановил %s из кэша (%s, %d реплик)", video_id, job.source, len(job.cues))
+
+        return job
+
+    def _cached_variant(
+        self,
+        video_id: str,
+        target_lang: str,
+        use_author_track: bool,
+        duration: float | None = None,
+    ) -> dict | None:
+        """Сохранённая дорожка, отвечающая текущим настройкам.
+
+        Отпечаток источника берём из самого файла, а ключ по нему пересчитываем:
+        совпадение ключа и означает, что дорожка сделана теми же моделями и тем же
+        промптом, что стоят сейчас. Иначе восстановление подсовывало бы результат
+        от другой модели, обходя ровно ту проверку, ради которой ключ и заведён.
+        """
+        found: dict[str, dict] = {}
+
+        for stored in self.cache.variants(video_id):
+            fingerprint = stored.get("track_fingerprint", "asr")
+            # Длительность приходит от самого плеера: страница её знает точно,
+            # и запрашивать метаданные у YouTube на каждой загрузке не нужно.
+            # Без этой сверки перезалитый под тем же идентификатором ролик
+            # молча получал бы съехавшие тайминги.
+            hit = self.cache.get(
+                self._key_for(video_id, target_lang, fingerprint), duration
+            )
+
+            if hit is not None:
+                found[fingerprint] = hit
+
+        if use_author_track:
+            # Дорожка автора приоритетнее — при включённом переключателе конвейер
+            # выбрал бы её же. Её отсутствие означает, что у ролика её просто нет,
+            # и распознавание для этой настройки такой же законный результат.
+            manual = next((v for k, v in found.items() if k.startswith("manual:")), None)
+
+            return manual or found.get("asr")
+
+        return found.get("asr")
 
     def _evict(self) -> None:
         """Выбросить самые старые завершённые задания.

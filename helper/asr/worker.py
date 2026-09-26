@@ -33,6 +33,95 @@ SAMPLE_RATE = 16000
 DEFAULT_MODEL = "large-v3"
 
 
+# Окна для определения языка: сколько и в каком диапазоне длительности их брать.
+# С начала брать нельзя — там заставка, музыка или реклама спонсора, и язык
+# определился бы по ним. Замерено на этом корпусе: у KCR-dkZIhxY первая реплика
+# начинается на 21-й секунде, то есть первое тридцатисекундное окно на две трети
+# состоит из заставки.
+PROBE_WINDOWS = 8
+PROBE_SPAN = (0.10, 0.90)
+WINDOW_SECONDS = 30
+
+# Языки, между которыми Whisper не различает: bs/hr/sr — это три метки одного языка,
+# попавшие в обучение из VoxLingua107 по недосмотру, и выбор между ними произволен.
+# Любую из них трактуем как сербский, потому что дальше по конвейеру ждут его.
+BCMS = frozenset({"sr", "hr", "bs", "sh", "me", "cnr"})
+
+
+def _detect(model, audio: np.ndarray) -> tuple[str, float]:
+    """Определить язык речи по отрывку из середины записи.
+
+    Модель принимается уже загруженной: определение и распознавание идут одной
+    и той же, и грузить её дважды значит платить лишние секунды и лишнюю память.
+
+    Определяем по куску, а не по всей записи — на часовом ролике это разница
+    между долями секунды и минутами. Отрывок берётся с 40% длительности:
+    начало занято заставкой, музыкой или рекламой спонсора, и язык определился
+    бы по ним, а не по речи.
+    """
+    window = WINDOW_SECONDS * SAMPLE_RATE
+
+    if audio.size <= window:
+        language, probability, _ = model.detect_language(audio, vad_filter=True)
+
+        return language, probability
+
+    # Окна раскладываем сами, по всей длине. Штатный language_detection_segments
+    # для этого не годится: он означает «первые N×30 секунд подряд от начала»,
+    # а не «N проб по ролику», и вдобавок порог 0.5 обрывает перебор на первом же
+    # окне — то есть увеличение числа сегментов обычно не меняет вообще ничего.
+    low, high = PROBE_SPAN
+    span = audio.size * (high - low) - window
+    offsets = [
+        int(audio.size * low + span * i / max(PROBE_WINDOWS - 1, 1))
+        for i in range(PROBE_WINDOWS)
+    ]
+
+    totals: dict[str, float] = {}
+
+    for offset in offsets:
+        chunk = audio[offset : offset + window]
+
+        if chunk.size < SAMPLE_RATE:
+            continue
+
+        try:
+            _, _, probs = model.detect_language(chunk, vad_filter=True)
+        except Exception:
+            # Окно могло целиком оказаться тишиной — VAD вернёт пусто.
+            continue
+
+        # Складываем распределения, а не голоса top-1. Жёсткое голосование
+        # разорвало бы сербский на три метки bs/hr/sr, и ролик с раскладом
+        # 4×hr / 3×sr / 3×bs проиграл бы языку, набравшему меньше суммарно.
+        for code, value in probs:
+            totals[code] = totals.get(code, 0.0) + value
+
+    if not totals:
+        return "", 0.0
+
+    merged = _merge_bcms(totals)
+    best = max(merged, key=merged.get)
+
+    return best, merged[best] / max(sum(merged.values()), 1e-9)
+
+
+def _merge_bcms(totals: dict[str, float]) -> dict[str, float]:
+    """Сложить массу bs/hr/sr в одну метку.
+
+    Это три ярлыка одного языка, попавшие в обучение Whisper из VoxLingua107
+    по недосмотру: выбор между ними произволен, а разнесённые по трём меткам
+    они проигрывают любому конкуренту, набравшему меньше суммарно.
+    """
+    merged: dict[str, float] = {}
+
+    for code, value in totals.items():
+        key = "sr" if code in BCMS else code
+        merged[key] = merged.get(key, 0.0) + value
+
+    return merged
+
+
 def transcribe(
     audio: np.ndarray,
     *,
@@ -50,6 +139,16 @@ def transcribe(
     from faster_whisper import BatchedInferencePipeline, WhisperModel
 
     model = WhisperModel(model_name, device="cuda", compute_type=compute_type)
+    detected, confidence = "", 0.0
+
+    if language == "auto":
+        detected, confidence = _detect(model, audio)
+
+        # bs/hr/sr — три метки одного языка, и выбор между ними произволен.
+        # Приводим к sr: дальше по конвейеру ждут именно его, а разница
+        # в тексте сводится к диалектным предпочтениям, а не к языку.
+        language = "sr" if detected in BCMS else detected
+
     pipeline = BatchedInferencePipeline(model=model)
 
     segments, info = pipeline.transcribe(
@@ -104,7 +203,12 @@ def transcribe(
     ]
 
     return {
-        "language": info.language,
+        "language": language,
+        # Что показал определитель до приведения bs/hr/sr к одному языку, и
+        # насколько уверенно. Нужно выше по конвейеру: по низкой уверенности
+        # видно, что ролик, возможно, вообще не про речь.
+        "detected": detected or info.language,
+        "confidence": confidence,
         "duration": info.duration,
         "model": model_name,
         "cues": [c for c in cues if c["text"]],

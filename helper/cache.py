@@ -36,6 +36,9 @@ class CacheKey:
     target_lang: str
     asr_model: str
     translator_model: str
+    # Учебный язык второй строки. В ключе обязателен: без него переключение
+    # режима отдавало бы старую дорожку, где второй строки просто нет.
+    study_lang: str = ""
     # Отпечаток исходной дорожки: для пути ASR это модель и её параметры, для ручной
     # дорожки — её язык и происхождение. Меняется он — меняется и ключ.
     track_fingerprint: str = "asr"
@@ -49,6 +52,7 @@ class CacheKey:
                 self.target_lang,
                 self.asr_model,
                 self.translator_model,
+                self.study_lang,
                 str(PROMPT_VERSION),
                 str(SCHEMA_VERSION),
             ]
@@ -79,6 +83,30 @@ class TrackCache:
         digest = key.digest()
 
         return self._root / key.video_id[:2] / key.video_id / f"{digest}.json"
+
+    def variants(self, video_id: str) -> list[dict]:
+        """Все сохранённые дорожки этого ролика, с их отпечатками.
+
+        Нужно для восстановления после перезагрузки страницы. Ключ кэша посчитать
+        заранее нельзя: в него входит отпечаток источника, а он зависит от того,
+        есть ли у ролика дорожка автора, — узнать это можно только запросом
+        к YouTube. Поэтому идём с другой стороны: берём то, что лежит, и смотрим
+        на записанный в самом файле отпечаток. Дальше вызывающий пересчитает
+        по нему ключ и сверит с текущей настройкой.
+        """
+        found = []
+
+        for (path,) in self._db.execute(
+            "SELECT path FROM tracks WHERE video_id = ?", (video_id,)
+        ):
+            try:
+                found.append(json.loads(Path(path).read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                # Файл мог исчезнуть мимо индекса. Это не повод падать:
+                # восстановление — удобство, а не обязанность.
+                continue
+
+        return found
 
     def get(self, key: CacheKey, length_seconds: float | None = None) -> dict | None:
         """Готовая дорожка, если она есть и всё ещё относится к этому ролику."""
@@ -121,6 +149,10 @@ class TrackCache:
             "target_lang": key.target_lang,
             "asr_model": key.asr_model,
             "translator_model": key.translator_model,
+            # В хэш ключа входит, а в файл не писался — и при разборе глазами
+            # выглядел как None у всех дорожек сразу, мешая понять, почему ключ
+            # не сходится. На сверку не влияет: она идёт по хэшу, а не по этим полям.
+            "study_lang": key.study_lang,
             "track_fingerprint": key.track_fingerprint,
             "prompt_version": PROMPT_VERSION,
             "schema_version": SCHEMA_VERSION,

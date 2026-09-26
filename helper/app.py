@@ -153,7 +153,13 @@ async def job_snapshot(video_id: str) -> dict:
 
 
 @app.get("/v1/jobs/{video_id}/events", dependencies=[Depends(auth)])
-async def job_events(video_id: str, cursor: int = 0, target: str = "ru") -> dict:
+async def job_events(
+    video_id: str,
+    cursor: int = 0,
+    target: str = "ru",
+    authorTrack: bool = True,
+    create: bool = True,
+) -> dict:
     """Длинный опрос: события после cursor, ожидание до POLL_TIMEOUT секунд.
 
     Обычный HTTP вместо WebSocket. Firefox повышает ws:// до wss:// при обращении
@@ -165,9 +171,50 @@ async def job_events(video_id: str, cursor: int = 0, target: str = "ru") -> dict
     умирает, если ответ идёт дольше 30, а короткие повторяющиеся запросы,
     наоборот, сбрасывают его таймер простоя.
     """
-    job = manager.get_or_create(video_id, target)
+    # create=false — для вкладки, которая ничего не запускала, а подхватила уже
+    # сделанное после перезагрузки страницы. Подписка на ролик обычно И ЕСТЬ
+    # согласие на работу, поэтому обычный опрос задание создаёт. Но восстановленная
+    # вкладка согласия не давала: исчезни задание из реестра, и создание нового
+    # означало бы, что F5 сам начал качать аудио и занимать карту.
+    job = manager.get_or_create(video_id, target, authorTrack) if create else manager.attach(video_id)
+
+    if job is None:
+        return {"gone": True, "cursor": cursor, "events": []}
 
     return await job.poll(cursor, POLL_TIMEOUT)
+
+
+@app.get("/v1/jobs/{video_id}/restore", dependencies=[Depends(auth)])
+async def restore_job(
+    video_id: str,
+    target: str = "ru",
+    authorTrack: bool = True,
+    duration: float | None = None,
+) -> dict:
+    """Что уже готово по ролику. Ничего не запускает.
+
+    Отличается от /events именно этим: тот создаёт задание, а этот только смотрит.
+    Нужен для перезагрузки страницы — согласие зрителя спрашивают один раз за ролик,
+    и показать уже сделанное не значит начать качать аудио и занимать карту.
+
+    Чтение идёт прямо в цикле событий, без отдельного потока: файлы дорожек это
+    сотни килобайт, разбор укладывается в единицы миллисекунд, а сборка задания
+    трогает asyncio.Event, который из чужого потока трогать нельзя.
+    """
+    job = manager.restore(video_id, target, authorTrack, duration)
+
+    if job is None:
+        return {"found": False}
+
+    return {
+        "found": True,
+        # Стадия нужна расширению, чтобы решить, поднимать ли опрос вообще.
+        # По готовому заданию ждать больше нечего, а лишний опрос — это лишние
+        # обращения к создающему эндпоинту на каждой открытой вкладке.
+        "stage": job.stage.value,
+        "cursor": job._dropped + len(job.events),
+        "snapshot": job.snapshot(),
+    }
 
 
 @app.post("/v1/jobs/{video_id}/playhead", dependencies=[Depends(auth)])
@@ -289,6 +336,12 @@ def main() -> None:
     import uvicorn
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+    # Сторож карты опрашивает ollama раз в секунду, и httpx пишет каждый опрос
+    # строкой INFO — 86 тысяч строк в сутки, в которых тонет всё остальное.
+    # Диагностика зависшего перевода начиналась с того, что этот шум надо было
+    # сначала отфильтровать, чтобы увидеть единственную важную строку.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     log.info("токен установки лежит в %s", TOKEN_PATH)
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
 

@@ -132,6 +132,45 @@ def cue_schema(count: int) -> dict:
     }
 
 
+def dual_cue_schema(count: int) -> dict:
+    """Схема на два языка сразу: {c1: {crnogorski, ruski}, …}.
+
+    Вложенные объекты собираются руками, а не через Pydantic. Это не вкусовщина,
+    а свойство безопасности: model_json_schema() всегда выносит вложенные модели
+    в $ref/$defs, а на них конвертер схемы в грамматику у llama.cpp разворачивает
+    всё inline, упирается в бюджет правил и **отказывает молча** — возвращает 200
+    и генерирует без ограничений вообще. Гарантия числа реплик при этом исчезает
+    без единой ошибки в логе.
+
+    Имена внутренних ключей выбраны не для красоты. Под ограниченным декодированием
+    грамматика выписывает их сама, модель не может ни пропустить их, ни перефразировать,
+    и каждый оказывается в контексте прямо перед своим полем — то есть работает
+    как неснимаемая пометка языка на каждой реплике.
+
+    Порядок ключей сохраняется до самой грамматики, поэтому черногорский идёт
+    первым намеренно: так он переводится с оригинала. Стой он вторым, между
+    источником и ним оказался бы русский текст, и получилась бы калька с русского —
+    ровно то, чего мы избегаем.
+    """
+    cue = {
+        "type": "object",
+        "properties": {
+            "crnogorski": {"type": "string"},
+            "ruski": {"type": "string"},
+        },
+        "required": ["crnogorski", "ruski"],
+        "additionalProperties": False,
+    }
+    keys = [f"c{i}" for i in range(1, count + 1)]
+
+    return {
+        "type": "object",
+        "properties": {k: cue for k in keys},
+        "required": keys,
+        "additionalProperties": False,
+    }
+
+
 def build_user_message(batch: Batch) -> str:
     parts: list[str] = []
 
@@ -168,7 +207,13 @@ def chat(
     num_ctx: int = 8192,
     num_predict: int = 4000,
     keep_alive: str = "60s",
-    timeout: float = 600.0,
+    # Десять минут были не запасом, а ловушкой. Замерено: батч из сорока реплик
+    # с обеими строками занимает 24-43 секунды, так что до таймаута дело доходит
+    # только когда что-то пошло не так, — и тогда конвейер стоял ДЕСЯТЬ МИНУТ,
+    # молча, не прислав ни одного события. Зритель видел замерший счётчик и решал,
+    # что связь оборвалась. Четыре минуты — всё ещё шестикратный запас к худшему
+    # замеру, но срыв теперь уходит в дробление батча за разумное время.
+    timeout: float = 240.0,
 ) -> dict:
     """Один вызов /api/chat.
 
@@ -208,6 +253,188 @@ def chat(
         raise TranslateError("ollama вернула пустой content")
 
     return payload
+
+
+def translate_dual(batch: Batch, model: str = DEFAULT_MODEL, **kwargs) -> list[tuple[str, str]]:
+    """Перевести батч сразу на черногорский и русский за один проход.
+
+    Один проход, а не два: вдвое дешевле по времени, и русская строка получается
+    глоссой именно к этой черногорской, а не независимым переводом. Для учебного
+    режима это и нужно — зритель сопоставляет строки слово к слову.
+
+    Глоссарий ложных друзей sr→ru сюда не попадает намеренно: его ключи екавские
+    (svet, nedelja, devojka), и в промпте с черногорской целью они тянут модель
+    обратно к екавице. Вместо него идут иекавские подсказки.
+    """
+    if not batch.cues:
+        return []
+
+    import json
+
+    from helper.montenegrin import IJEKAVIAN_HINTS, SYSTEM_PROMPT as ME_PROMPT
+
+    kwargs.setdefault("num_predict", estimate_num_predict(batch.cues) * 2)
+
+    hints = "\n".join(f"{bad} -> {good}" for bad, good in IJEKAVIAN_HINTS.items())
+    parts = [f"IJEKAVSKI OBLICI (obavezno):\n{hints}"]
+
+    if batch.title:
+        parts.append(f"NASLOV VIDEA: {batch.title}")
+
+    if batch.previous:
+        # В контекст уходит только черногорская сторона. Екавские примеры
+        # в контексте разворачивают модель обратно к екавице — замерено:
+        # у qwen срываются все десять реплик из десяти.
+        lines = "\n".join(f"{src} -> {dst}" for src, dst in batch.previous)
+        parts.append(f"PRETHODNI TITLOVI (samo kontekst, ne prevoditi):\n{lines}")
+
+    cues = "\n".join(f"c{i}: {text}" for i, text in enumerate(batch.cues, 1))
+    parts.append(f"TITLOVI ZA PRIJEVOD:\n{cues}")
+
+    payload = chat(
+        [
+            {"role": "system", "content": ME_PROMPT},
+            {"role": "user", "content": "\n\n".join(parts)},
+        ],
+        schema=dual_cue_schema(len(batch.cues)),
+        model=model,
+        **kwargs,
+    )
+
+    data = json.loads(payload["message"]["content"])
+    _check_keys(data, len(batch.cues))
+
+    return [
+        (data[f"c{i}"].get("crnogorski", ""), data[f"c{i}"].get("ruski", ""))
+        for i in range(1, len(batch.cues) + 1)
+    ]
+
+
+# Окно поиска: на сколько реплик вперёд и назад мог уехать текст. Замерено —
+# на живом материале дрейф доходил до пяти позиций, но за четыре берём с запасом:
+# шире окно, больше шансов на случайное совпадение у коротких реплик.
+DRIFT_WINDOW = 4
+
+# Реплики короче трёх знаменательных слов не оцениваем: «Da.», «Evo sad.»,
+# «Izazovan za istraživanje.» совпадают с чем угодно, и голосовать им нельзя.
+MIN_STEMS = 3
+
+# Насколько увереннее чужая позиция должна быть своей, чтобы считать это дрейфом.
+DRIFT_MARGIN = 0.34
+
+# Доля съехавших реплик, после которой батч бракуется. Замерено на 160 настоящих
+# репликах: у qwen3.8:27b — 0 из 122 оценённых на четырёх батчах, у translategemma:12b
+# на тех же батчах 11%, 32%, 50% и 81%. Между нулём и одиннадцатью процентами
+# места хватает, и порог тут — не подгонка под один прогон, а разделение двух
+# качественно разных поведений: модель либо держит соответствие один к одному,
+# либо не держит вовсе.
+DRIFT_RATIO = 0.10
+
+
+def _stems(text: str) -> set[str]:
+    """Знаменательные слова, огрублённые до основы.
+
+    Четыре знака, потому что сербский флективен: pogledom и pogleda это одно
+    слово, и различать их здесь значит не находить очевидных соответствий.
+    """
+    return {w[:4] for w in re.findall(r"\w+", text.lower()) if len(w) >= 4}
+
+
+def _coverage(source: str, output: str) -> float:
+    """Какая доля слов исходной реплики нашлась в этом выводе."""
+    stems = _stems(source)
+
+    return len(stems & _stems(output)) / len(stems) if stems else 0.0
+
+
+def alignment_shifted(sources: list[str], outputs: list[str]) -> bool:
+    """Разъехался ли вывод с источником: реплики слиты, сдвинуты или потеряны.
+
+    Грамматика гарантирует, что ключей вернётся ровно N. Она НЕ гарантирует,
+    что ключ cN относится к исходной реплике N: модель может слить две соседние
+    в одну и сдвинуть весь хвост, оставив последние огрызками. Субтитр при этом
+    показывает текст соседней реплики и выглядит совершенно правдоподобно.
+
+    Ищем по содержанию, а не по длинам. Прежняя версия сравнивала корреляцию
+    длин при прямом сопоставлении и при сдвиге ровно на одну позицию — и на
+    настоящем материале не срабатывала НИ РАЗУ, включая батчи, где съехало
+    четыре пятых реплик. Две причины. Сдвиг там не на одну позицию, а
+    накопительный: слияния идут одно за другим, и хвост уезжает всё дальше.
+    И длина — слишком слабый признак: у соседних реплик она похожа, так что
+    корреляция почти не различает верное сопоставление и смещённое.
+
+    Содержание таким недостатком не страдает: сербский источник и черногорский
+    вывод — это почти один и тот же текст, поэтому слова исходной реплики видно
+    в её переводе прямо. Спрашиваем не «похожи ли длины», а «где оказались
+    слова этой реплики»; если у большинства они лежат не на своём месте,
+    соответствие один к одному сломано.
+    """
+    if len(sources) != len(outputs) or len(sources) < 6:
+        return False
+
+    scored = drifted = 0
+
+    for i, source in enumerate(sources):
+        if len(_stems(source)) < MIN_STEMS:
+            continue
+
+        scored += 1
+        here = _coverage(source, outputs[i])
+        best, best_at = here, i
+
+        for j in range(max(0, i - DRIFT_WINDOW), min(len(outputs), i + DRIFT_WINDOW + 1)):
+            if j == i:
+                continue
+
+            elsewhere = _coverage(source, outputs[j])
+
+            if elsewhere > best:
+                best, best_at = elsewhere, j
+
+        if best_at != i and best > here + DRIFT_MARGIN:
+            drifted += 1
+
+    return scored >= 6 and drifted / scored > DRIFT_RATIO
+
+
+def validate_dual(pairs: list[tuple[str, str]], sources: list[str] | None = None) -> list[str]:
+    """Проверить оба поля разными мерками. Возвращает список замечаний к батчу.
+
+    Мерки обязаны быть разными. Детектор протечки сербского в русский для поля
+    `ruski` подходит идеально — он ровно для этого и написан. На черногорское
+    поле его наводить нельзя: он ругается на диакритику č ć ž š đ, которая там
+    обязательна, и на латинские слова со строчной буквы, то есть на каждое
+    черногорское слово. Направленный не туда, он пометил бы как брак сто
+    процентов правильного вывода и загнал бы лестницу починки в пустой цикл.
+    """
+    from helper.montenegrin import check as check_montenegrin
+
+    problems: list[str] = []
+
+    # Черногорский проверяется по батчу целиком: в короткой реплике может
+    # не оказаться ни одного слова с ятем, и судить по ней бессмысленно.
+    montenegrin = check_montenegrin(" ".join(me for me, _ in pairs))
+
+    if montenegrin:
+        problems.append(f"черногорский: {montenegrin}")
+
+    leaked = sum(1 for _, ru in pairs if ru.strip() and looks_untranslated(ru))
+
+    if leaked:
+        problems.append(f"в поле ruski не русский текст: {leaked} из {len(pairs)}")
+
+    empty = sum(1 for me, ru in pairs if not me.strip() or not ru.strip())
+
+    if empty:
+        problems.append(f"пустых полей: {empty}")
+
+    if sources and alignment_shifted(sources, [me for me, _ in pairs]):
+        problems.append(
+            "вывод съехал относительно источника: реплики слиты, "
+            "и субтитр покажет текст соседней"
+        )
+
+    return problems
 
 
 def looks_untranslated(text: str) -> bool:
@@ -296,9 +523,31 @@ def translate_batch(batch: Batch, model: str = DEFAULT_MODEL, **kwargs) -> list[
     )
 
     data = json.loads(payload["message"]["content"])
-    result = [data.get(f"c{i}", "") for i in range(1, len(batch.cues) + 1)]
+    _check_keys(data, len(batch.cues))
 
-    if len(result) != len(batch.cues):
-        raise TranslateError(f"ожидалось {len(batch.cues)} реплик, пришло {len(result)}")
+    return [data[f"c{i}"] for i in range(1, len(batch.cues) + 1)]
 
-    return result
+
+def _check_keys(data: dict, count: int) -> None:
+    """Убедиться, что модель вернула ровно ожидаемые ключи.
+
+    Проверять надо разобранный ответ, а не собранный из него список: список
+    строится по диапазону 1..N и всегда получается нужной длины, поэтому такая
+    проверка не сработала бы никогда.
+
+    А проверять необходимо, потому что грамматика может и не примениться:
+    при сбое разбора схемы llama.cpp пишет ошибку в свой лог, возвращает 200
+    и генерирует без ограничений. Отказ помечен как «не планируется к исправлению»,
+    так что единственная защита — сверить ключи на нашей стороне.
+    """
+    if not isinstance(data, dict):
+        raise TranslateError(f"ожидался объект, пришло {type(data).__name__}")
+
+    expected = {f"c{i}" for i in range(1, count + 1)}
+    missing = expected - data.keys()
+
+    if missing:
+        raise TranslateError(
+            f"грамматика не применилась: нет ключей {sorted(missing)[:5]} "
+            f"из {count} ожидаемых"
+        )

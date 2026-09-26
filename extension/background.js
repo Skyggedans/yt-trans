@@ -16,7 +16,14 @@
 
 const api = globalThis.browser ?? globalThis.chrome;
 
-const DEFAULTS = { host: "127.0.0.1", port: 8756, token: "", targetLang: "ru" };
+const DEFAULTS = {
+  host: "127.0.0.1",
+  port: 8756,
+  token: "",
+  targetLang: "ru",
+  // Готовая дорожка автора вместо распознавания, если она у ролика есть.
+  useAuthorTrack: true,
+};
 
 // Пауза после сбоя. Демон может быть не запущен — долбиться в него чаще незачем.
 const RETRY_MS = 3000;
@@ -61,9 +68,14 @@ function deliver(videoId, message) {
 }
 
 async function pollLoop(videoId) {
-  let cursor = 0;
+  // Был ли сбой на прошлом витке. Нужен, чтобы сообщить о ВОССТАНОВЛЕНИИ связи:
+  // без этого сообщения надпись об обрыве оставалась на кнопке навсегда — опрос
+  // через три секунды успешно возобновлялся, но успех никому не сообщался,
+  // и зритель видел «нет связи с демоном» при совершенно живом демоне.
+  let broken = false;
 
   while (polls.has(videoId)) {
+    const poll = polls.get(videoId);
     const config = await settings();
 
     if (!config.token) {
@@ -77,7 +89,9 @@ async function pollLoop(videoId) {
 
     const url =
       `${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}/events` +
-      `?cursor=${cursor}&target=${encodeURIComponent(config.targetLang)}`;
+      `?cursor=${poll.cursor}&target=${encodeURIComponent(config.targetLang)}` +
+      `&authorTrack=${config.useAuthorTrack === false ? "false" : "true"}` +
+      `&create=${poll.create ? "true" : "false"}`;
 
     try {
       const response = await fetch(url, {
@@ -92,13 +106,28 @@ async function pollLoop(videoId) {
           ok: false,
           reason: response.status === 401 ? "неверный токен" : `демон ответил ${response.status}`,
         });
+        broken = true;
         await sleep(RETRY_MS);
         continue;
       }
 
       const data = await response.json();
 
-      cursor = data.cursor ?? cursor;
+      if (broken) {
+        broken = false;
+        deliver(videoId, { type: "helper", ok: true });
+      }
+
+      // Задания на демоне больше нет: его перезапустили или реестр вытеснил
+      // готовое. Создавать новое мы не вправе — согласия на это не давали.
+      if (data.gone) {
+        deliver(videoId, { type: "gone" });
+        stopPolling(videoId);
+
+        return;
+      }
+
+      poll.cursor = data.cursor ?? poll.cursor;
 
       if (data.snapshot) deliver(videoId, data.snapshot);
 
@@ -107,6 +136,7 @@ async function pollLoop(videoId) {
       // Отмена — это наш собственный unwatch, а не сбой.
       if (error.name === "AbortError") return;
 
+      broken = true;
       deliver(videoId, { type: "helper", ok: false, reason: "нет связи с демоном" });
       await sleep(RETRY_MS);
     }
@@ -117,10 +147,83 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function startPolling(videoId) {
-  if (polls.has(videoId)) return;
+/**
+ * Спросить демон, есть ли уже что-то по этому ролику, и подхватить.
+ *
+ * Зовётся при каждой загрузке страницы, поэтому обязана быть дешёвой и молчаливой:
+ * запрос локальный, работы не запускает, а если демона нет или ролик незнаком —
+ * просто ничего не делает, и зритель видит обычную кнопку запуска.
+ */
+async function restore(tabId, videoId, duration) {
+  const config = await settings();
 
-  polls.set(videoId, { controller: null });
+  if (!config.token) return;
+
+  const url =
+    `${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}/restore` +
+    `?target=${encodeURIComponent(config.targetLang)}` +
+    `&authorTrack=${config.useAuthorTrack === false ? "false" : "true"}` +
+    // Ноль — это «плеер ещё не прочитал метаданные», а не длительность. Уйди он
+    // в запрос как настоящий, сверка с кэшем провалилась бы, и восстановление
+    // молча не сработало бы именно на быстрой перезагрузке.
+    (Number.isFinite(duration) && duration > 0 ? `&duration=${duration}` : "");
+
+  let data;
+
+  try {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${config.token}` },
+      cache: "no-store",
+    });
+
+    if (!response.ok) return;
+
+    data = await response.json();
+  } catch {
+    return;
+  }
+
+  if (!data.found) return;
+
+  // Между просьбой и ответом зритель мог уйти на другой ролик: запрос идёт через
+  // два await. Без этой проверки опрос поднимался бы по покинутому ролику и жил
+  // вечно — останавливать его было бы уже некому.
+  if (watching.get(tabId) !== videoId) return;
+
+  // Порядок важен: сперва отметка о восстановлении, она включает оверлей,
+  // и только потом снимок. Иначе реплики придут в неактивный оверлей
+  // и будут отброшены.
+  deliver(videoId, { type: "restored" });
+
+  if (data.snapshot) deliver(videoId, data.snapshot);
+
+  // По готовому заданию ждать нечего — опрос не поднимаем вовсе. Раньше он шёл
+  // и здесь, вечно дёргая создающий эндпоинт на каждой открытой вкладке.
+  if (data.stage === "done") return;
+
+  startPolling(videoId, { create: false, cursor: data.cursor ?? 0 });
+}
+
+/**
+ * Поднять опрос событий.
+ *
+ * create различает две подписки. Обычная — следствие нажатия кнопки, и она вправе
+ * создать задание: подписка на ролик и ЕСТЬ согласие на работу. Восстановленная
+ * согласия не несёт: вкладку всего лишь перезагрузили, и если задания на демоне
+ * уже нет, создавать его нельзя — иначе F5 сам начинал бы качать аудио и занимать
+ * карту. Права только повышаются: нажатие на кнопку поверх восстановления делает
+ * подписку полноценной.
+ */
+function startPolling(videoId, { create = true, cursor = 0 } = {}) {
+  const existing = polls.get(videoId);
+
+  if (existing) {
+    if (create) existing.create = true;
+
+    return;
+  }
+
+  polls.set(videoId, { controller: null, create, cursor });
   pollLoop(videoId);
 }
 
@@ -171,6 +274,18 @@ api.runtime.onConnect.addListener((port) => {
 
       watching.set(tabId, message.videoId);
       startPolling(message.videoId);
+    } else if (message.op === "restore") {
+      // Ролик вкладки отмечаем синхронно, до запроса: он нужен и для доставки
+      // сообщений, и как признак того, что вкладка всё ещё здесь, когда ответ
+      // вернётся. Работы это не начинает — её начинает только startPolling.
+      const previous = watching.get(tabId);
+
+      if (previous && previous !== message.videoId && viewers(previous).length <= 1) {
+        stopPolling(previous);
+      }
+
+      watching.set(tabId, message.videoId);
+      restore(tabId, message.videoId, message.duration);
     } else if (message.op === "playhead") {
       sendPlayhead(message.videoId, message.t);
     } else if (message.op === "unwatch") {

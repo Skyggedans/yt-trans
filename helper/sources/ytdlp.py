@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 from dataclasses import dataclass
 
 import numpy as np
@@ -173,6 +174,98 @@ def usable_manual_track(info: VideoInfo) -> CaptionTrack | None:
             return track
 
     return None
+
+
+# Условности вещательных субтитров, которые YouTube пропускает в дорожки:
+# >> смена говорящего, >>> смена темы, [Music] и подобные пометки. В переводчик
+# они попадать не должны — модель начнёт их переводить.
+SPEAKER_MARKER = re.compile(r"(^|\s)>{2,}\s*")
+SOUND_MARKER = re.compile(r"\[[^\]]{1,30}\]")
+
+
+def fetch_manual_track(video_id: str, lang: str, timeout: float = 120.0) -> list[dict]:
+    """Скачать авторскую дорожку субтитров и разобрать в реплики.
+
+    Качаем через сам yt-dlp, а не прямым запросом по baseUrl: у ссылки со страницы
+    стоит POT-гейт, и запрос возвращает HTTP 200 с ПУСТЫМ телом — не 403, не 401.
+    Проверка `response.ok` на таком ответе проходит, и наружу уходят пустые субтитры.
+    yt-dlp разбирается с клиентами и токенами сам, а мы его и так вызываем ради аудио.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _run(
+            _ytdlp_cmd(
+                "--skip-download",
+                "--write-subs",
+                "--sub-langs",
+                lang,
+                "--sub-format",
+                "json3",
+                "--extractor-args",
+                "youtube:skip=translated_subs",
+                "-o",
+                f"{tmp}/track.%(ext)s",
+                f"https://www.youtube.com/watch?v={_check_id(video_id)}",
+            ),
+            timeout=timeout,
+        )
+
+        files = list(Path(tmp).glob("*.json3")) or list(Path(tmp).glob("*.json"))
+
+        if not files:
+            raise YtDlpError(f"дорожка {lang} не скачалась для {video_id}")
+
+        raw = files[0].read_text(encoding="utf-8")
+
+    # Пустое тело — подпись POT-гейта. Проверять обязательно: без этого дальше
+    # по конвейеру уходит дорожка из нуля реплик, и выглядит это как «у ролика
+    # просто нет субтитров», а не как отказ.
+    if not raw.strip():
+        raise YtDlpError(f"дорожка {lang} пришла пустой (POT-гейт?)")
+
+    cues = _parse_json3(raw)
+
+    if not cues:
+        raise YtDlpError(f"в дорожке {lang} не нашлось ни одной реплики")
+
+    return cues
+
+
+def _parse_json3(raw: str) -> list[dict]:
+    """Разобрать json3 в реплики вида {start, end, text}."""
+    events = json.loads(raw).get("events") or []
+    cues: list[dict] = []
+
+    for event in events:
+        segments = event.get("segs") or []
+        text = "".join(seg.get("utf8", "") for seg in segments)
+        text = SOUND_MARKER.sub(" ", SPEAKER_MARKER.sub(" ", text))
+        text = " ".join(text.split())
+
+        if not text:
+            continue
+
+        start = (event.get("tStartMs") or 0) / 1000
+        cues.append(
+            {
+                "start": start,
+                "end": start + (event.get("dDurationMs") or 0) / 1000,
+                "text": text,
+                # Пословных таймингов на этом пути не бывает: замерено, что
+                # tOffsetMs в выдаче отсутствует. Границы реплик авторские,
+                # и пересобирать их не нужно.
+                "words": [],
+            }
+        )
+
+    # Реплики автосубтитров перекрываются по устройству — окно распознавания
+    # скользит. У авторских так бывает реже, но проверять дешевле, чем потом
+    # рисовать две реплики одновременно.
+    for previous, current in zip(cues, cues[1:]):
+        previous["end"] = min(previous["end"], current["start"])
+
+    return [c for c in cues if c["end"] > c["start"]]
 
 
 def audio_pcm(video_id: str, timeout: float = 900.0) -> np.ndarray:

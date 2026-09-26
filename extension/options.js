@@ -17,6 +17,7 @@ const DEFAULTS = {
   targetLang: "ru",
   showOriginal: false,
   originalPosition: "below",
+  useAuthorTrack: true,
 };
 
 const fields = {
@@ -25,6 +26,7 @@ const fields = {
   port: document.querySelector("#port"),
 };
 
+const useAuthorTrack = document.querySelector("#useAuthorTrack");
 const showOriginal = document.querySelector("#showOriginal");
 const originalPosition = document.querySelector("#originalPosition");
 const positionRow = document.querySelector("#positionRow");
@@ -121,6 +123,7 @@ async function check() {
       `Распознавание: ${asr.model} (${asr.compute_type}, ~${asr.vram_mib} МиБ)\n` +
       `Перевод: ${translator.model} (~${translator.vram_mib} МиБ)\n` +
       `Язык источника: ${asr.language}\n` +
+      `Вторая строка: ${translator.study_language || "выключена"}\n` +
       `Свободно на карте: ${gpu.free_mib} МиБ${gpu.busy ? " (занята пользователем)" : ""}\n` +
       `В кэше дорожек: ${(health.cache || {}).tracks ?? 0}\n\n` +
       "Модели задаются в конфиге демона, не здесь: расход видеопамяти\n" +
@@ -149,12 +152,23 @@ async function saveDisplay() {
   });
 }
 
+/**
+ * Источник реплик. В отличие от настроек показа, это меняет работу демона,
+ * поэтому задание для открытого ролика начинается заново — иначе переключатель
+ * выглядел бы сломанным: готовый результат никуда бы не делся. Оба варианта
+ * лежат в кэше под разными ключами, так что возврат к прежнему мгновенный.
+ */
+async function saveSource() {
+  await api.storage.local.set({ useAuthorTrack: useAuthorTrack.checked });
+}
+
 async function load() {
   const stored = await api.storage.local.get(DEFAULTS);
 
   fields.token.value = stored.token || "";
   fields.host.value = stored.host || DEFAULTS.host;
   fields.port.value = stored.port || DEFAULTS.port;
+  useAuthorTrack.checked = stored.useAuthorTrack !== false;
   showOriginal.checked = Boolean(stored.showOriginal);
   originalPosition.value = stored.originalPosition || DEFAULTS.originalPosition;
 
@@ -162,6 +176,7 @@ async function load() {
 }
 
 document.querySelector("#check").addEventListener("click", check);
+useAuthorTrack.addEventListener("change", saveSource);
 showOriginal.addEventListener("change", saveDisplay);
 originalPosition.addEventListener("change", saveDisplay);
 load();
