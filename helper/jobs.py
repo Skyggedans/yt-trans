@@ -17,18 +17,22 @@ import asyncio
 import contextlib
 import json
 import logging
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
 import httpx
+import numpy as np
 
 from helper.asr.worker import SAMPLE_RATE
 from helper.cache import CacheKey, TrackCache
 from helper.config import Config, load as load_config
+from helper.env import YTDLP_CACHE
 from helper.gpulease import GpuLease, Preempted
 from helper.script import normalize_cues
 from helper.segment import Cue, build_cues
@@ -72,6 +76,39 @@ MAX_RETAINED_JOBS = 12
 # клиенту дешевле отдать снимок, чем хранить всю историю ради него одного.
 MAX_EVENT_LOG = 2000
 
+# Повторы метаданных и звука внутри одного задания — только для временных сбоев
+# (YtDlpError.transient). Паузы растут: первый повтор ловит разовый 403 от
+# googlevideo, второй — моргнувшую сеть, которой нужно время подняться.
+FETCH_ATTEMPTS = 3
+FETCH_BACKOFF = (5.0, 20.0)
+
+# Сколько секунд после начала загрузки звука ещё можно начать новую попытку.
+# Звук качается под пропуском на карту, а пропуск один на весь демон: пока
+# идут повторы, чужие фазы на карте ждут. Обычная загрузка укладывается
+# в секунды, и разовый 403 бюджет пропускает с запасом, а затяжной обрыв
+# сети пусть лучше провалит задание — повторяемо, — чем держит всех.
+FETCH_RETRY_BUDGET = 90.0
+
+# Через сколько секунд после отказа опрос может начать задание заново. Только
+# для повторяемых отказов — см. JobManager.get_or_create.
+RETRY_COOLDOWN = 60.0
+
+# Звук задания, которое карту отдало уже после загрузки. На диске и рядом с кэшем,
+# а не в /tmp: в Fedora /tmp — это tmpfs, то есть та же память, а держать в ней
+# десятки и сотни мегабайт на приостановленный ролик и нужно было избежать.
+PAUSED_AUDIO_DIR = YTDLP_CACHE.parent / "paused-audio"
+
+# Сколько хранить отложенный звук паузы, к которой никто не обращается.
+# Открытая вкладка опрашивает демон каждые двадцать пять секунд и каждый раз
+# продлевает срок; полчаса тишины значат, что вкладку закрыли или ушли на другой
+# ролик. Задание при этом остаётся — пропадает только звук, и если к нему всё же
+# вернутся, возобновление скачает его заново.
+PAUSED_AUDIO_TTL = 30 * 60.0
+
+# Потолок на распознавание одного ролика. С запасом: самый длинный допустимый
+# ролик (MAX_VIDEO_SECONDS) large-v3 на карте проходит за минуты.
+ASR_TIMEOUT = 3600.0
+
 # Сколько видеопамяти просить под каждую фазу, берётся из конфигурации вместе
 # с именем модели: см. helper/config.py. Цифра не может жить отдельно от модели —
 # у turbo расход втрое меньше, чем у large-v3, и постоянная здесь означала бы,
@@ -87,6 +124,15 @@ class Stage(str, Enum):
     DONE = "done"
     ERROR = "error"
     PAUSED = "paused"
+
+
+class PermanentJobError(RuntimeError):
+    """Отказ, который не пройдёт сам: эфир, слишком длинный ролик.
+
+    Наследник RuntimeError, чтобы любой обработчик, ловящий RuntimeError, ловил
+    и его. Отдельный тип нужен ровно для одного — задание с таким отказом
+    не пересоздаётся опросом, сколько бы времени ни прошло.
+    """
 
 
 @dataclass
@@ -133,13 +179,25 @@ class Job:
         # пересказом или переводом, и тогда своё распознавание точнее.
         self.use_author_track = use_author_track
         self.stage = Stage.QUEUED
+        # Чего задание ждёт в очереди: "gpu" — видеокарту под распознавание.
+        self.waiting: str | None = None
         self.error: str | None = None
+        # Может ли отказ пройти сам: сеть, 403, ограничение частоты — да; эфир,
+        # удалённый ролик — нет. От этого зависит, предложит ли расширение
+        # повтор и пересоздаст ли задание опрос. Время отказа монотонное:
+        # остывание не должно зависеть от перевода системных часов.
+        self.retryable = False
+        self.failed_at: float | None = None
         self.cues: list[JobCue] = []
         self.info: VideoInfo | None = None
         self.playhead = 0.0
         # Откуда взяты реплики: 'asr' или 'manual:<язык>'. Входит в ключ кэша —
         # дорожка автора и результат распознавания это разные дорожки.
         self.source = "asr"
+        # Дорожка автора есть в метаданных, но не скачалась. Запоминаем, чтобы
+        # возобновление после паузы не обращалось за ней к YouTube снова: пока
+        # карта занята, пауза повторяется каждые две минуты.
+        self.track_failed = False
         self.created_at = time.time()
 
         # Журнал событий с курсором. Нужен для длинных опросов: клиент говорит,
@@ -159,6 +217,22 @@ class Job:
         # внутри asyncio.to_thread не прерывается отменой задачи, поэтому Whisper
         # пережил бы и отмену, и вытеснение, продолжая держать ~6 ГБ уже без сторожа.
         self._asr_proc: subprocess.Popen | None = None
+        # Просьба убить распознавание, которая переживает гонку с его запуском.
+        # Вытеснение может прийти, пока воркер ещё только создаётся и ручки нет:
+        # одна ручка тогда не убила бы ничего, и Whisper отработал бы до конца на
+        # отданной карте. Флаг ставится до чтения ручки, а воркер читает его после
+        # того, как ручку выставил, — так хотя бы одна сторона видит другую.
+        # Он же отличает наше убийство от чужого: см. JobRunner._run_asr.
+        self._asr_kill = False
+        # Звук, отложенный на диск, когда карту отобрали после загрузки: см.
+        # stash_audio. Файл свой у каждого задания — пересозданное задание
+        # по тому же ролику чужой звук не подхватит.
+        self._audio_path: Path | None = None
+        # Задание сброшено: откладывать звук больше незачем. См. cancel.
+        self._audio_dead = False
+        # Когда к заданию последний раз обращались — опрос или возобновление.
+        # Отложенный звук брошенной паузы по нему убирает _evict.
+        self.touched_at = time.monotonic()
 
     # ── подписка на события ──────────────────────────────────────────────
 
@@ -231,6 +305,10 @@ class Job:
             "videoId": self.video_id,
             "stage": self.stage.value,
             "error": self.error,
+            "retryable": self.retryable,
+            # Снимок получает и тот, кто подключился посреди ожидания карты:
+            # без поля он видел бы обычную очередь, а не ожидание видеокарты.
+            "waiting": self.waiting,
             "title": self.info.title if self.info else "",
             "total": len(self.cues),
             "translated": sum(c.translated for c in self.cues),
@@ -239,7 +317,15 @@ class Job:
 
     def _set_stage(self, stage: Stage, **extra) -> None:
         self.stage = stage
+        # Любая следующая стадия ожидание снимает, поэтому берётся из каждой.
+        self.waiting = extra.get("waiting")
         self._emit({"type": "state", "stage": stage.value, **extra})
+
+    def _fail(self, message: str, retryable: bool) -> None:
+        self.error = message
+        self.retryable = retryable
+        self.failed_at = time.monotonic()
+        self._set_stage(Stage.ERROR, message=message, retryable=retryable)
 
     # ── жизненный цикл ───────────────────────────────────────────────────
 
@@ -265,12 +351,79 @@ class Job:
         сразу после отмены задачи, поэтому память надо освободить до этого,
         а не через непредсказуемое время планировщика потоков.
         """
+        self._asr_kill = True
         proc = self._asr_proc
 
         if proc and proc.poll() is None:
             proc.kill()
 
+    # ── отложенный звук ──────────────────────────────────────────────────
+
+    def stash_audio(self, audio) -> None:
+        """Отложить скачанный звук до возобновления.
+
+        Нужно, когда карту отбирают уже после загрузки — посреди распознавания
+        или между ним и загрузкой. Иначе возобновление качало бы ролик заново.
+        Пишется один раз: повторное вытеснение того же задания файл уже застаёт.
+        """
+        if self._audio_dead:
+            return
+
+        if self._audio_path is not None and self._audio_path.exists():
+            return
+
+        PAUSED_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        handle, name = tempfile.mkstemp(
+            dir=PAUSED_AUDIO_DIR, prefix=f"{self.video_id}-", suffix=".f32"
+        )
+        self._audio_path = Path(name)
+
+        try:
+            with open(handle, "wb") as out:
+                audio.tofile(out)
+        except BaseException:
+            # Недописанный файл — это обрезанный звук. Прочитанный при
+            # возобновлении, он распознался бы и ушёл в кэш как целый ролик.
+            self.discard_audio()
+            raise
+
+        # Задание сбросили, пока файл писался: сброс ручки ещё не видел,
+        # и файл остался бы ничьим до перезапуска демона.
+        if self._audio_dead:
+            self.discard_audio()
+
+    def take_audio(self):
+        """Отложенный звук, если он есть. Файл остаётся до конца распознавания.
+
+        Не прочитался — не беда: None, и возобновление скачает звук заново,
+        как если бы файла не было вовсе.
+        """
+        self.touched_at = time.monotonic()
+
+        if self._audio_path is None or not self._audio_path.exists():
+            return None
+
+        try:
+            return np.fromfile(self._audio_path, dtype="<f4")
+        except OSError as exc:
+            log.warning("отложенный звук %s не прочитан: %s", self.video_id, exc)
+            self.discard_audio()
+
+            return None
+
+    def discard_audio(self) -> None:
+        path, self._audio_path = self._audio_path, None
+
+        if path is not None:
+            path.unlink(missing_ok=True)
+
     def cancel(self) -> None:
+        # Приостановленное задание своей задачи не имеет — она уже завершилась
+        # паузой, — и убрать его звук, кроме как здесь, некому. Флаг ставится
+        # до сброса ручки, а запись читает его после того, как ручку выставила:
+        # так файл, дописанный уже после сброса, тоже не останется ничьим.
+        self._audio_dead = True
+        self.discard_audio()
         self.kill_asr()
 
         if self._task:
@@ -323,14 +476,31 @@ class JobRunner:
             job._set_stage(Stage.PAUSED, message=str(exc),
                            translated=sum(c.translated for c in job.cues))
             log.info("задание %s приостановлено: %s", job.video_id, exc)
-        except (YtDlpError, TranslateError, RuntimeError) as exc:
-            job.error = str(exc)
-            job._set_stage(Stage.ERROR, message=str(exc))
+        except YtDlpError as exc:
+            job._fail(str(exc), retryable=not exc.permanent)
+            log.warning("задание %s провалено: %s", job.video_id, exc)
+
+            if exc.diagnostics:
+                log.warning("задание %s, вывод yt-dlp:\n%s", job.video_id, exc.diagnostics)
+        except PermanentJobError as exc:
+            job._fail(str(exc), retryable=False)
+            log.warning("задание %s провалено: %s", job.video_id, exc)
+        except (TranslateError, RuntimeError) as exc:
+            # Переводчик, распознавание, воркер — всё это машина, а не ролик:
+            # ollama перезапустили, память кончилась, процесс упал. Следующая
+            # попытка вполне может пройти, поэтому отказ повторяемый. Из ролика
+            # сюда попадает только эфир, запись которого ещё собирается, — и он
+            # тоже проходит сам.
+            job._fail(str(exc), retryable=True)
             log.warning("задание %s провалено: %s", job.video_id, exc)
         except Exception as exc:  # noqa: BLE001 — падение одного задания не роняет демон
-            job.error = repr(exc)
-            job._set_stage(Stage.ERROR, message=repr(exc))
+            job._fail(repr(exc), retryable=True)
             log.exception("задание %s упало", job.video_id)
+        finally:
+            # Отложенный звук нужен только паузе. Готовое, упавшее и отменённое
+            # задание к нему больше не вернётся, а файл — это десятки мегабайт.
+            if job.stage is not Stage.PAUSED:
+                job.discard_audio()
 
     async def _pipeline(self, job: Job) -> None:
         # Возобновление после вытеснения: реплики уже распознаны и сегментированы,
@@ -340,17 +510,29 @@ class JobRunner:
 
             return
 
-        job._set_stage(Stage.PROBING)
-        job.info = await asyncio.to_thread(probe, job.video_id)
+        # Метаданные уже есть, если задание возобновляется после паузы: пока карта
+        # занята, пауза повторяется каждые две минуты, и спрашивать YouTube о том же
+        # ролике на каждом витке незачем. Проверки ниже они тогда тоже уже прошли —
+        # иначе задание упало бы, а не встало на паузу.
+        if job.info is None:
+            job._set_stage(Stage.PROBING)
+            job.info = await self._with_retries(job, Stage.PROBING, probe)
 
-        if job.info.is_live:
-            raise RuntimeError("прямые эфиры не поддерживаются")
+            # Проверка раньше is_live, который включает и этот случай. Эфир уже
+            # закончился, YouTube собирает из него запись, и через минуты или часы
+            # это обычный ролик. Отказ поэтому не окончательный: остывание в
+            # get_or_create и кнопка повтора подхватят ролик, когда запись будет готова.
+            if job.info.live_status == "post_live":
+                raise RuntimeError("эфир закончился, запись ещё обрабатывается")
 
-        if job.info.duration and job.info.duration > MAX_VIDEO_SECONDS:
-            raise RuntimeError(
-                f"ролик длиннее {MAX_VIDEO_SECONDS // 3600} ч "
-                f"({job.info.duration / 3600:.1f} ч): аудио не поместится в память"
-            )
+            if job.info.is_live:
+                raise PermanentJobError("прямые эфиры не поддерживаются")
+
+            if job.info.duration and job.info.duration > MAX_VIDEO_SECONDS:
+                raise PermanentJobError(
+                    f"ролик длиннее {MAX_VIDEO_SECONDS // 3600} ч "
+                    f"({job.info.duration / 3600:.1f} ч): аудио не поместится в память"
+                )
 
         # Авторская дорожка, если она есть, снимает распознавание целиком: и
         # минуты работы карты, и её ошибки. Реплики размечены человеком, тайминги
@@ -361,7 +543,11 @@ class JobRunner:
         # клали бы под один ключ, спрашивали под другой, — а с выключенным
         # переключателем демон отдавал бы прежний результат распознавания,
         # и переключатель выглядел бы не работающим вовсе.
-        track = usable_manual_track(job.info) if job.use_author_track else None
+        track = (
+            usable_manual_track(job.info)
+            if job.use_author_track and not job.track_failed
+            else None
+        )
 
         if track:
             job.source = f"manual:{track.lang}"
@@ -370,11 +556,18 @@ class JobRunner:
             return
 
         if track:
-            job._set_stage(Stage.FETCHING, source=f"дорожку автора ({track.lang})")
+            source = f"дорожку автора ({track.lang})"
+            job._set_stage(Stage.FETCHING, source=source)
 
             try:
-                segments = await asyncio.to_thread(
-                    fetch_manual_track, job.video_id, track.lang
+                # С повторами, как метаданные и звук: отказ запоминается на всё
+                # задание (track_failed), и разовый 403 иначе навсегда променял бы
+                # дорожку автора на распознавание.
+                segments = await self._with_retries(
+                    job,
+                    Stage.FETCHING,
+                    lambda video_id: fetch_manual_track(video_id, track.lang),
+                    source=source,
                 )
             except YtDlpError as exc:
                 # Дорожка есть в метаданных, но не скачалась — это не повод
@@ -384,6 +577,7 @@ class JobRunner:
                 # и карта молола бы одно и то же на каждом просмотре.
                 log.info("дорожка %s недоступна (%s), иду через распознавание", track.lang, exc)
                 job.source = "asr"
+                job.track_failed = True
 
                 if await self._serve_cached(job):
                     return
@@ -396,10 +590,6 @@ class JobRunner:
 
                 return
 
-        job._set_stage(Stage.FETCHING)
-        audio = await asyncio.to_thread(audio_pcm, job.video_id)
-        duration = audio.size / SAMPLE_RATE
-
         # Фазы берут пропуск по очереди, а не одним куском: им нужно разное
         # количество памяти (6 ГБ Whisper против 17.8 ГБ переводчика), и общий
         # захват под меньшую из потребностей означал бы, что допуск ни разу
@@ -409,9 +599,64 @@ class JobRunner:
         # памяти, которую сам же и не освобождает, пока не истечёт keep_alive.
         await asyncio.to_thread(self._lease.unload, self._mt_model)
 
+        # Ждём мы карту, а не сеть, и зритель должен видеть именно это.
+        job._set_stage(Stage.QUEUED, waiting="gpu")
+
+        # Звук качается уже под пропуском, а не до него. Не дождавшись карты,
+        # задание встаёт на паузу, и возобновление начинает всё заново —
+        # скачанный до допуска звук пропадал бы на каждом витке. Так и было:
+        # пока карту держал пользователь, один ролик скачался 43 раза подряд
+        # за полтора часа, по разу на две минуты ожидания, и на сорок четвёртый
+        # googlevideo ответил 403. Скачивать заранее и держать звук до допуска
+        # тоже не выход: приостановленное задание может ждать сколько угодно,
+        # а это десятки и сотни мегабайт на ролик. Откладывается на диск только
+        # звук, уже скачанный под пропуском, — когда карту отобрали после
+        # загрузки; см. Job.stash_audio.
+        #
+        # Цена нового порядка: пропуск один на весь демон, и пока идёт загрузка,
+        # чужие фазы на карте ждут. Обычно это секунды. Повторы после 403 и обрыва
+        # сети добавляют до двадцати пяти секунд пауз, поэтому они ограничены
+        # FETCH_RETRY_BUDGET и прерываются вытеснением; мёртвое соединение
+        # обрывает таймаут сокета в audio_pcm. Сама попытка, если yt-dlp тянет
+        # медленно, но тянет, ограничена только его общим таймаутом. И ещё одна
+        # загрузка, если карту отберут посреди неудавшейся попытки: скачанного
+        # звука тогда нет, и откладывать нечего.
         async with self._lease.acquire(self._config.asr_vram_mib) as held:
-            job._set_stage(Stage.ASR, duration=duration)
-            result = await self._run_asr_watched(audio, job, held)
+            audio = await asyncio.to_thread(job.take_audio)
+
+            if audio is None:
+                job._set_stage(Stage.FETCHING)
+                audio = await self._with_retries(job, Stage.FETCHING, audio_pcm, held=held)
+
+            duration = audio.size / SAMPLE_RATE
+
+            try:
+                # Пользователь мог занять карту, пока шла загрузка. Проверяем до
+                # запуска воркера: иначе он успел бы начать грузить в память
+                # Whisper только для того, чтобы его тут же убили.
+                held.check()
+
+                job._set_stage(Stage.ASR, duration=duration)
+                result = await self._run_asr_watched(audio, job, held)
+            except Preempted:
+                # Звук уже скачан, и возобновление должно начаться с него, а не
+                # с новой загрузки. На диск, а не в памяти задания: сколько ждать
+                # карту, заранее неизвестно.
+                #
+                # Отложить — только выгода, не обязанность. Полный диск не должен
+                # превращать паузу в отказ: не вышло — задание всё равно встаёт
+                # на паузу, а возобновление просто скачает звук заново.
+                try:
+                    await asyncio.to_thread(job.stash_audio, audio)
+                except OSError as exc:
+                    log.warning("звук %s не отложен: %s", job.video_id, exc)
+                    job.discard_audio()
+
+                raise
+
+            # Распознано — отложенный звук больше не нужен. Вытеснение ниже
+            # уводит в паузу уже с репликами, и возобновление начнётся с перевода.
+            job.discard_audio()
             segments = result["cues"]
             spoken = result.get("language") or "sr"
 
@@ -428,6 +673,79 @@ class JobRunner:
 
         await self._finish_translation(job)
 
+    async def _with_retries(self, job: Job, stage: Stage, fetch, *, held=None, **extra):
+        """Метаданные или звук, с повтором временных сбоев на месте.
+
+        Повторять надо здесь, внутри задания. Отказ задания прилипает, и без
+        этого разовый 403 от googlevideo — а он случается примерно на каждой
+        пятидесятой загрузке — стоил бы зрителю провала, хотя следующая же
+        ссылка скачивается. Каждая попытка — новый вызов yt-dlp, то есть
+        и новое извлечение со свежей ссылкой.
+
+        Паузы — asyncio.sleep в цикле событий, а не сон в рабочем потоке. Сам
+        вызов yt-dlp отменой не прерывается, но между попытками drop и отмена
+        должны снимать задание сразу, а не после двадцати секунд ожидания.
+
+        Неудачную попытку, за которой идёт повтор, пишем в журнал здесь, вместе
+        с выводом yt-dlp. Последнюю пишет run, когда проваливает задание.
+
+        held — пропуск на карту, если загрузка идёт под ним. Тогда повторы
+        сверяются с вытеснением: карту отобрали — задание уходит в паузу сразу,
+        а не качает снова то, что всё равно будет выброшено. И новая попытка
+        начинается только в пределах FETCH_RETRY_BUDGET: пропуск один на весь
+        демон, и затянувшаяся загрузка держала бы чужие фазы на карте.
+
+        extra уходит в событие о повторе вместе со стадией — например, источник,
+        чтобы кнопка не превращала «качаю дорожку автора» в «качаю звук».
+        """
+        started = time.monotonic()
+
+        for attempt in range(1, FETCH_ATTEMPTS + 1):
+            try:
+                return await asyncio.to_thread(fetch, job.video_id)
+            except YtDlpError as exc:
+                if held is not None:
+                    held.check()
+
+                if (
+                    not exc.transient
+                    or attempt == FETCH_ATTEMPTS
+                    or (held is not None and time.monotonic() - started > FETCH_RETRY_BUDGET)
+                ):
+                    raise
+
+                delay = FETCH_BACKOFF[min(attempt, len(FETCH_BACKOFF)) - 1]
+                log.warning(
+                    "%s %s: попытка %d из %d не удалась, повтор через %.0f с: %s%s",
+                    stage.value, job.video_id, attempt, FETCH_ATTEMPTS, delay, exc,
+                    f"\n{exc.diagnostics}" if exc.diagnostics else "",
+                )
+
+                # Та же стадия со счётчиком повтора, и сразу, до паузы: иначе
+                # зритель двадцать секунд смотрел бы на «качаю звук…», не зная,
+                # что первая попытка уже не удалась.
+                job._set_stage(stage, retry=attempt, **extra)
+                await self._backoff(delay, held)
+
+    @staticmethod
+    async def _backoff(delay: float, held) -> None:
+        """Пауза между попытками, которую прерывает вытеснение."""
+        if held is None:
+            await asyncio.sleep(delay)
+
+            return
+
+        sleeper = asyncio.ensure_future(asyncio.sleep(delay))
+        preempted = asyncio.ensure_future(held.wait_preempted())
+
+        try:
+            await asyncio.wait({sleeper, preempted}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleeper.cancel()
+            preempted.cancel()
+
+        held.check()
+
     async def _run_asr_watched(self, audio, job: Job, held):
         """Распознавание, которое действительно прерывается.
 
@@ -436,6 +754,7 @@ class JobRunner:
         флага вытеснения и по срабатыванию убиваем воркер; тот завершается
         по сигналу, и `_run_asr` поднимает Preempted.
         """
+        job._asr_kill = False
         work = asyncio.create_task(asyncio.to_thread(self._run_asr, audio, job))
         preempt = asyncio.create_task(held.wait_preempted())
 
@@ -459,21 +778,26 @@ class JobRunner:
         """Перевести недостающие реплики и, если всё готово, закэшировать дорожку."""
         job._set_stage(Stage.TRANSLATING, total=len(job.cues))
 
-        try:
-            # model= обязателен: если наш переводчик уже резидентен, память под него
-            # просить не нужно — иначе допуск требовал бы 17.8 ГБ свободных ровно
-            # тогда, когда 17.3 из них занял он сам.
-            async with self._lease.acquire(
-                self._config.translator_vram_mib, model=self._mt_model
-            ) as held:
-                await self._translate(job, held)
-        except Preempted:
-            # Уступая карту, надо её и освободить. keep_alive у нас 60 секунд, то
-            # есть без явной выгрузки 17.3 ГБ оставались бы нашими ещё минуту после
-            # того, как мы объявили, что уходим, — ровно то поведение враждебного
-            # соседа, против которого написан gpulease.
-            await asyncio.to_thread(self._lease.unload, self._mt_model)
-            raise
+        # Переводить нечего — например, в ролике не распознано ни слова. Пропуск
+        # под переводчик тогда не нужен, а взятый, он мог бы увести задание
+        # в паузу без единой реплики, и возобновление начиналось бы с загрузки
+        # звука и распознавания заново — на каждом витке, пока карта занята.
+        if any(not c.translated for c in job.cues):
+            try:
+                # model= обязателен: если наш переводчик уже резидентен, память под него
+                # просить не нужно — иначе допуск требовал бы 17.8 ГБ свободных ровно
+                # тогда, когда 17.3 из них занял он сам.
+                async with self._lease.acquire(
+                    self._config.translator_vram_mib, model=self._mt_model
+                ) as held:
+                    await self._translate(job, held)
+            except Preempted:
+                # Уступая карту, надо её и освободить. keep_alive у нас 60 секунд, то
+                # есть без явной выгрузки 17.3 ГБ оставались бы нашими ещё минуту после
+                # того, как мы объявили, что уходим, — ровно то поведение враждебного
+                # соседа, против которого написан gpulease.
+                await asyncio.to_thread(self._lease.unload, self._mt_model)
+                raise
 
         pending = sum(not c.translated for c in job.cues)
         failed = sum(c.failed for c in job.cues)
@@ -530,16 +854,36 @@ class JobRunner:
         )
         job._asr_proc = proc
 
+        # Убить велели, пока процесс создавался, — ручки тогда ещё не было.
+        if job._asr_kill:
+            proc.kill()
+
         try:
-            out, err = proc.communicate(input=audio.tobytes(), timeout=3600)
+            out, err = proc.communicate(input=audio.tobytes(), timeout=ASR_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # communicate по таймауту процесс не убивает. Без этого Whisper
+            # продолжал бы держать ~6 ГБ, когда пропуск на карту уже отпущен,
+            # и следующее задание получило бы допуск на память, которой нет.
+            proc.kill()
+            proc.communicate()
+
+            raise RuntimeError(f"распознавание не уложилось в {ASR_TIMEOUT:.0f} с") from None
         finally:
             job._asr_proc = None
 
         if proc.returncode != 0:
             # Убитый по вытеснению или отмене процесс — не ошибка распознавания:
             # его прервали намеренно, и задание должно уйти в паузу, а не в отказ.
-            if proc.returncode < 0:
+            if proc.returncode < 0 and job._asr_kill:
                 raise Preempted(f"распознавание прервано сигналом {-proc.returncode}")
+
+            # Сигнал пришёл не от нас: память кончилась, и процесс убило ядро,
+            # или воркер упал сам. Это отказ, а не пауза. Пауза возобновляется
+            # на каждом опросе, а реплик ещё нет, так что каждое возобновление
+            # заново качало бы звук и снова падало бы тем же сигналом. Отказ
+            # повторяемый и пересоздаётся не чаще раза в минуту.
+            if proc.returncode < 0:
+                raise RuntimeError(f"распознавание убито сигналом {-proc.returncode}")
 
             raise RuntimeError(f"ASR не справился: {err.decode(errors='replace')[-500:]}")
 
@@ -818,6 +1162,11 @@ class JobManager:
         self.runner = JobRunner(self.lease, self.cache, self.config)
         self._jobs: dict[str, Job] = {}
 
+        # Реестр живёт в памяти, и после перезапуска отложенный звук не нужен
+        # никому. А без чистки копился бы: приостановленное задание, чью вкладку
+        # закрыли, не возобновится и само его не уберёт.
+        shutil.rmtree(PAUSED_AUDIO_DIR, ignore_errors=True)
+
     def attach(self, video_id: str) -> Job | None:
         """Существующее задание. В отличие от get_or_create, НИЧЕГО не создаёт.
 
@@ -828,12 +1177,18 @@ class JobManager:
         его, — создавать новое нельзя, иначе перезагрузка страницы сама запускала бы
         скачивание и карту.
         """
-        return self._jobs.get(video_id)
+        job = self._jobs.get(video_id)
+
+        if job is not None:
+            job.touched_at = time.monotonic()
+
+        return job
 
     def get_or_create(
         self, video_id: str, target_lang: str = "ru", use_author_track: bool = True
     ) -> Job:
         job = self._jobs.get(video_id)
+        replaced: Job | None = None
 
         if job is not None and job.use_author_track != use_author_track:
             # Переключатель сменили: готовое задание отвечает уже не на тот
@@ -845,25 +1200,55 @@ class JobManager:
             log.info("дорожка автора %s — начинаю %s заново",
                      "включена" if use_author_track else "выключена", video_id)
             self.drop(video_id)
-            job = None
+            replaced, job = job, None
+        elif (
+            job is not None
+            and job.stage is Stage.ERROR
+            and job.retryable
+            and job.failed_at is not None
+            and time.monotonic() - job.failed_at >= RETRY_COOLDOWN
+        ):
+            # Отказ прилипает, но повторяемый отказ — не навсегда. Пересоздавать
+            # задание на каждом запросе нельзя: опрос зовёт get_or_create
+            # постоянно, и это давало шторм — отказ → пересоздание → отказ,
+            # восемь раз за тридцать секунд, с обращением к YouTube на каждом
+            # витке. Но и держать отказ вечно нельзя: сбой сети или 403 от
+            # googlevideo проходит сам, а зритель, нажавший запуск после F5,
+            # получал бы всё тот же старый отказ без единой новой попытки.
+            #
+            # Остывание разводит эти два случая: от опроса — не чаще попытки
+            # в минуту на ролик, и это уже не шторм, а зрителю — настоящая
+            # новая попытка. Окончательные отказы (эфир, длина, удалённый или
+            # закрытый ролик) не пересоздаются вовсе: их повтор ничего не даст.
+            # Немедленный повтор по кнопке идёт через drop, он в API есть.
+            log.info("повторяю %s: отказ повторяемый и остыл (%s)", video_id, job.error)
+            self.drop(video_id)
+            replaced, job = job, None
 
         if job is None:
             job = Job(video_id, target_lang, use_author_track)
             self._jobs[video_id] = job
+
+            # Подписчики заменённого задания переходят к новому. Сокет подписывается
+            # на ролик один раз, на первом watch, и его очередь остаётся на том
+            # задании, что было тогда. Без переноса пересоздание оставило бы его
+            # слушать отменённое задание, а unwatch снимал бы очередь с нового,
+            # где её никогда не было.
+            if replaced is not None:
+                for queue in list(replaced._subscribers):
+                    replaced.unsubscribe(queue)
+                    job.subscribe(queue)
+
             job.start(self.runner)
         elif job.stage is Stage.ERROR:
-            # Отказ прилипает намеренно. Раньше здесь задание пересоздавалось,
-            # и вместе с опросом, который зовёт get_or_create на каждом запросе,
-            # это давало шторм: отказ → пересоздание → отказ, восемь раз за
-            # тридцать секунд, с обращением к YouTube на каждом витке. Причины
-            # отказов обычно неустранимы сами по себе (ролик слишком длинный,
-            # эфир, возрастное ограничение), так что повторять их бессмысленно.
-            # Осознанный повтор — через drop, он в API есть.
+            # Отказ окончательный или ещё не остыл — отдаём его как есть, см. выше.
             pass
         elif job.stage is Stage.PAUSED:
             # Карту забирал пользователь. Реплики никуда не делись — продолжаем
             # то же задание, а не начинаем заново с распознавания.
             job.resume(self.runner)
+
+        job.touched_at = time.monotonic()
 
         self._evict()
 
@@ -994,6 +1379,20 @@ class JobManager:
         уже никуда не движется: незавершённое задание держит транскрипт, ради
         которого потрачена работа карты.
         """
+        # Сами приостановленные задания не вытесняются — в них работа карты.
+        # Но их отложенный звук, если к заданию полчаса никто не обращался,
+        # убираем: иначе брошенная пауза держала бы на диске десятки и сотни
+        # мегабайт до перезапуска демона, а он живёт неделями.
+        now = time.monotonic()
+
+        for job in self._jobs.values():
+            if (
+                job.stage is Stage.PAUSED
+                and (job._task is None or job._task.done())
+                and now - job.touched_at > PAUSED_AUDIO_TTL
+            ):
+                job.discard_audio()
+
         finished = [j for j in self._jobs.values() if j.finished]
 
         for job in sorted(finished, key=lambda j: j.created_at)[

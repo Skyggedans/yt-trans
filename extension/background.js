@@ -28,13 +28,30 @@ const DEFAULTS = {
 // Пауза после сбоя. Демон может быть не запущен — долбиться в него чаще незачем.
 const RETRY_MS = 3000;
 
+// Проверка живости после обрыва: первая сразу, дальше всё реже, но не реже раза
+// в десять секунд — поднятый заново демон должен подхватываться быстро.
+const PROBE_MIN_MS = 1000;
+const PROBE_MAX_MS = 10000;
+
+// Проверочный запрос отвечает мгновенно. Три секунды тишины — это уже не работа
+// демона, а зависший процесс или порт, который никто не слушает.
+const PROBE_TIMEOUT_MS = 3000;
+
 /** Порты content script'ов по идентификатору вкладки. */
 const tabs = new Map();
 
 /** Какой ролик смотрит вкладка. */
 const watching = new Map();
 
-/** Идущие опросы по идентификатору ролика: { controller, stop }. */
+/**
+ * Идущие опросы по идентификатору ролика: { controller, create, cursor, broken }.
+ *
+ * broken — зрителю показан сбой. Нужен, чтобы сообщить о ВОССТАНОВЛЕНИИ связи:
+ * без этого сообщения надпись об обрыве оставалась на кнопке навсегда — опрос
+ * успешно возобновлялся, но успех никому не сообщался, и зритель видел обрыв
+ * при совершенно живом демоне. Живёт в самом опросе, а не в цикле, потому что
+ * сбой бывает показан и до его начала: повтор сообщает о недошедшем сбросе сам.
+ */
 const polls = new Map();
 
 async function settings() {
@@ -67,16 +84,36 @@ function deliver(videoId, message) {
   }
 }
 
-async function pollLoop(videoId) {
-  // Был ли сбой на прошлом витке. Нужен, чтобы сообщить о ВОССТАНОВЛЕНИИ связи:
-  // без этого сообщения надпись об обрыве оставалась на кнопке навсегда — опрос
-  // через три секунды успешно возобновлялся, но успех никому не сообщался,
-  // и зритель видел «нет связи с демоном» при совершенно живом демоне.
-  let broken = false;
+/** Стадия, на которой задание оказалось по итогам ответа опроса. */
+function lastStage(data) {
+  let stage = data.snapshot?.stage;
 
-  while (polls.has(videoId)) {
-    const poll = polls.get(videoId);
+  for (const event of data.events || []) {
+    if (event.type === "state") stage = event.stage;
+  }
+
+  return stage;
+}
+
+async function pollLoop(videoId, poll) {
+  // Обрывы подряд. Одиночный почти всегда устраивает не демон, а сам браузер:
+  // при смене сети — переподнятый интерфейс docker'а, выход из сна — Firefox
+  // закрывает каждое соединение, по которому пять секунд не шло ни байта,
+  // локальные тоже, и такой запрос не повторяет. Длинный опрос молчит до
+  // двадцати пяти секунд и попадает под это всякий раз. Свежее соединение после
+  // такой чистки работает сразу, поэтому первый обрыв зрителю не показываем
+  // и спрашиваем снова без паузы. Второй подряд — уже повод проверить демон.
+  let failures = 0;
+
+  // Сверяем сам объект, а не наличие ключа. Остановленный и тут же поднятый
+  // заново опрос по тому же ролику — это уже другой опрос, и старый цикл,
+  // проснувшись после await, иначе продолжил бы работать рядом с новым.
+  while (polls.get(videoId) === poll) {
     const config = await settings();
+
+    // Опрос могли остановить, пока читались настройки. Запрос, ушедший после
+    // этого, оборвать было бы уже некому.
+    if (polls.get(videoId) !== poll) return;
 
     if (!config.token) {
       deliver(videoId, { type: "helper", ok: false, reason: "нет токена" });
@@ -85,13 +122,17 @@ async function pollLoop(videoId) {
     }
 
     const controller = new AbortController();
-    polls.get(videoId).controller = controller;
+    poll.controller = controller;
 
     const url =
       `${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}/events` +
       `?cursor=${poll.cursor}&target=${encodeURIComponent(config.targetLang)}` +
       `&authorTrack=${config.useAuthorTrack === false ? "false" : "true"}` +
       `&create=${poll.create ? "true" : "false"}`;
+
+    // Дошёл ли запрос до ответа. Отличает обрыв от ответа, который не удалось
+    // разобрать: второй повторять без паузы нельзя, см. ниже.
+    let answered = false;
 
     try {
       const response = await fetch(url, {
@@ -100,21 +141,28 @@ async function pollLoop(videoId) {
         cache: "no-store",
       });
 
+      // Ответ пришёл — какой угодно, но от живого процесса. Счёт обрывов
+      // ведётся только по запросам, которые не дошли вовсе.
+      answered = true;
+      failures = 0;
+
       if (!response.ok) {
         deliver(videoId, {
           type: "helper",
           ok: false,
           reason: response.status === 401 ? "неверный токен" : `демон ответил ${response.status}`,
         });
-        broken = true;
+        poll.broken = true;
         await sleep(RETRY_MS);
         continue;
       }
 
       const data = await response.json();
 
-      if (broken) {
-        broken = false;
+      if (polls.get(videoId) !== poll) return;
+
+      if (poll.broken) {
+        poll.broken = false;
         deliver(videoId, { type: "helper", ok: true });
       }
 
@@ -132,14 +180,88 @@ async function pollLoop(videoId) {
       if (data.snapshot) deliver(videoId, data.snapshot);
 
       for (const event of data.events || []) deliver(videoId, event);
+
+      // Готовое или упавшее задание больше ничего не пришлёт. Опрос по нему —
+      // это соединение, молчащее по двадцать пять секунд, которое браузер рвёт
+      // на каждой смене сети, и обрыв на экране поверх давно законченной работы.
+      // Заново такое задание начинает только зритель — повтором или сменой
+      // источника реплик, — и опрос тогда поднимается снова.
+      const stage = lastStage(data);
+
+      if (stage === "done" || stage === "error") {
+        stopPolling(videoId);
+
+        return;
+      }
     } catch (error) {
       // Отмена — это наш собственный unwatch, а не сбой.
       if (error.name === "AbortError") return;
 
-      broken = true;
-      deliver(videoId, { type: "helper", ok: false, reason: "нет связи с демоном" });
-      await sleep(RETRY_MS);
+      if (polls.get(videoId) !== poll) return;
+
+      if (answered) {
+        // Ответ пришёл, но разобрать его не вышло: на порту слушает не демон,
+        // а другой сервер, или тело не того вида. Обрывом это не считается —
+        // повтор без паузы долбил бы тот сервер без единой передышки, а зритель
+        // смотрел бы на застывшую кнопку. Поступаем как с ответом-ошибкой.
+        console.warn(`yt-trans: ответ на опрос ${videoId} не разобран`, error);
+        deliver(videoId, { type: "helper", ok: false, reason: "непонятный ответ демона" });
+        poll.broken = true;
+        await sleep(RETRY_MS);
+        continue;
+      }
+
+      console.warn(`yt-trans: опрос ${videoId} оборвался`, error);
+      failures += 1;
+
+      if (failures < 2) continue;
+
+      poll.broken = true;
+      deliver(videoId, { type: "helper", ok: false, reason: "демон не отвечает, переподключаюсь…" });
+
+      if (!(await waitForDaemon(videoId, poll))) return;
+
+      // Сообщаем сразу, не дожидаясь следующего опроса: на тихом задании тот
+      // молчит до двадцати пяти секунд, и всё это время кнопка твердила бы
+      // про обрыв, которого уже нет.
+      poll.broken = false;
+      failures = 0;
+      deliver(videoId, { type: "helper", ok: true });
     }
+  }
+}
+
+/**
+ * Дождаться, пока процесс демона снова ответит.
+ *
+ * Спрашиваем то, на что демон отвечает сразу, ничего не создавая: снимок задания
+ * или 404, если задания нет. Годится ЛЮБОЙ HTTP-ответ, даже 401 — важно не что
+ * сказано, а что сказал живой процесс. С неверным токеном разберётся уже опрос
+ * и покажет ровно эту причину.
+ *
+ * Возвращает false, если опрос за это время остановили.
+ */
+async function waitForDaemon(videoId, poll) {
+  for (let delay = PROBE_MIN_MS; ; delay = Math.min(delay * 2, PROBE_MAX_MS)) {
+    const config = await settings();
+
+    if (polls.get(videoId) !== poll) return false;
+
+    try {
+      await fetch(`${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}`, {
+        headers: { Authorization: `Bearer ${config.token}` },
+        cache: "no-store",
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+
+      return polls.get(videoId) === poll;
+    } catch {
+      // Порт закрыт или демон не успел ответить — ждём и спрашиваем снова.
+    }
+
+    await sleep(delay);
+
+    if (polls.get(videoId) !== poll) return false;
   }
 }
 
@@ -197,9 +319,11 @@ async function restore(tabId, videoId, duration) {
 
   if (data.snapshot) deliver(videoId, data.snapshot);
 
-  // По готовому заданию ждать нечего — опрос не поднимаем вовсе. Раньше он шёл
-  // и здесь, вечно дёргая создающий эндпоинт на каждой открытой вкладке.
-  if (data.stage === "done") return;
+  // По законченному заданию ждать нечего — опрос не поднимаем вовсе. Иначе он
+  // вечно дёргал бы создающий эндпоинт на каждой открытой вкладке. Упавшее
+  // сюда же: опрос с курсора в конце журнала о нём ничего нового не узнает
+  // и остановить себя не сможет.
+  if (data.stage === "done" || data.stage === "error") return;
 
   startPolling(videoId, { create: false, cursor: data.cursor ?? 0 });
 }
@@ -218,13 +342,23 @@ function startPolling(videoId, { create = true, cursor = 0 } = {}) {
   const existing = polls.get(videoId);
 
   if (existing) {
-    if (create) existing.create = true;
+    // Право создавать только что дано — нажатием во вкладке, открытой
+    // перезагрузкой. Висящий запрос ушёл без него и промолчит до двадцати пяти
+    // секунд, а приостановленное задание по нему так и не возобновится.
+    // Поднимаем опрос заново с той же позиции, чтобы согласие дошло сразу.
+    if (create && !existing.create) {
+      stopPolling(videoId);
+      startPolling(videoId, { create: true, cursor: existing.cursor });
+      polls.get(videoId).broken = existing.broken;
+    }
 
     return;
   }
 
-  polls.set(videoId, { controller: null, create, cursor });
-  pollLoop(videoId);
+  const poll = { controller: null, create, cursor, broken: false };
+
+  polls.set(videoId, poll);
+  pollLoop(videoId, poll);
 }
 
 function stopPolling(videoId) {
@@ -236,6 +370,64 @@ function stopPolling(videoId) {
 
   // Обрываем висящий запрос, иначе он додержит соединение до конца ожидания.
   if (poll.controller) poll.controller.abort();
+}
+
+/**
+ * Повторить упавшее задание по просьбе зрителя.
+ *
+ * Отказ на демоне прилипает: окончательный — навсегда, временный — на минуту
+ * остывания. Иначе опрос сам устраивал бы шторм повторов с обращением к YouTube
+ * на каждом витке. Зритель этой минуты ждать не должен, поэтому повтор — это
+ * сброс задания и подписка заново. Курсор с нуля: у нового задания свой журнал,
+ * и позиция в старом ничего в нём не значит.
+ */
+async function retry(videoId) {
+  stopPolling(videoId);
+
+  const config = await settings();
+  const job = `${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}`;
+  const headers = { Authorization: `Bearer ${config.token}` };
+  let unreachable = false;
+
+  try {
+    // Сбрасываем только то, что всё ещё лежит упавшим. Кнопка повтора бывает
+    // старше самого отказа: соседняя вкладка с тем же роликом его уже повторила,
+    // а до этой события нового задания не доходят, если фоновая страница
+    // успела уснуть и забыть, кто что смотрит. Сброс вслепую убил бы идущую
+    // работу — вплоть до распознавания на середине — и начал бы её с нуля.
+    // Идущее задание подписка просто подхватит.
+    const response = await fetch(job, { headers, cache: "no-store" });
+    const snapshot = response.ok ? await response.json() : null;
+
+    if (snapshot?.stage === "error") {
+      await fetch(`${job}/drop`, { method: "POST", headers, cache: "no-store" });
+    }
+  } catch (error) {
+    // Сброс не дошёл. Опрос поднимаем всё равно: дожидаться демона он умеет сам,
+    // а если отказ так и остался на месте, зритель увидит его снова и нажмёт ещё раз.
+    console.warn(`yt-trans: сброс ${videoId} не дошёл`, error);
+    unreachable = true;
+    deliver(videoId, { type: "helper", ok: false, reason: "демон не отвечает, переподключаюсь…" });
+  }
+
+  // Пока шёл сброс, зритель мог уйти с ролика. Задание без зрителя не нужно никому.
+  if (viewers(videoId).length === 0) return;
+
+  startPolling(videoId, { create: true, cursor: 0 });
+
+  // Об обрыве зритель уже знает — значит, и о восстановлении должен узнать.
+  if (unreachable) polls.get(videoId).broken = true;
+}
+
+/** Отметить, какой ролик смотрит вкладка, отпустив прежний, если он больше никому не нужен. */
+function follow(tabId, videoId) {
+  const previous = watching.get(tabId);
+
+  if (previous && previous !== videoId && viewers(previous).length <= 1) {
+    stopPolling(previous);
+  }
+
+  watching.set(tabId, videoId);
 }
 
 async function sendPlayhead(videoId, t) {
@@ -266,26 +458,20 @@ api.runtime.onConnect.addListener((port) => {
 
   port.onMessage.addListener((message) => {
     if (message.op === "watch") {
-      const previous = watching.get(tabId);
-
-      if (previous && previous !== message.videoId && viewers(previous).length <= 1) {
-        stopPolling(previous);
-      }
-
-      watching.set(tabId, message.videoId);
+      follow(tabId, message.videoId);
       startPolling(message.videoId);
     } else if (message.op === "restore") {
       // Ролик вкладки отмечаем синхронно, до запроса: он нужен и для доставки
       // сообщений, и как признак того, что вкладка всё ещё здесь, когда ответ
       // вернётся. Работы это не начинает — её начинает только startPolling.
-      const previous = watching.get(tabId);
-
-      if (previous && previous !== message.videoId && viewers(previous).length <= 1) {
-        stopPolling(previous);
-      }
-
-      watching.set(tabId, message.videoId);
+      follow(tabId, message.videoId);
       restore(tabId, message.videoId, message.duration);
+    } else if (message.op === "retry") {
+      // Вкладка с законченным заданием после переподключения порта о себе
+      // не напоминает, поэтому отмечаем её заново: без этого новому заданию
+      // некому было бы доставлять события.
+      follow(tabId, message.videoId);
+      retry(message.videoId);
     } else if (message.op === "playhead") {
       sendPlayhead(message.videoId, message.t);
     } else if (message.op === "unwatch") {
@@ -307,11 +493,20 @@ api.runtime.onConnect.addListener((port) => {
 
 // Смена адреса или токена: обрываем опросы, они переподключатся с новыми
 // настройками на следующем витке цикла.
+//
+// Поднимаем заново только те, что шли, и каждый с его же правом создавать.
+// Законченное задание опроса не держит, и подписка с правом создания по нему
+// начала бы работу без нажатия: упавшее, остыв, демон пересоздаёт. То же
+// с восстановленной вкладкой — согласия она не давала, и смена настроек его
+// не даёт. Курсор с нуля: по новому адресу может отвечать другой демон,
+// и позиция в чужом журнале ничего не значит.
 api.storage.onChanged.addListener((changes) => {
   if (changes.token || changes.host || changes.port) {
     // По копии: stopPolling меняет polls, а менять коллекцию во время обхода нельзя.
-    for (const videoId of [...polls.keys()]) stopPolling(videoId);
+    const running = [...polls].map(([videoId, poll]) => [videoId, poll.create]);
 
-    for (const videoId of new Set(watching.values())) startPolling(videoId);
+    for (const [videoId] of running) stopPolling(videoId);
+
+    for (const [videoId, create] of running) startPolling(videoId, { create });
   }
 });

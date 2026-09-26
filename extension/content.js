@@ -56,6 +56,15 @@ const state = {
   // Сколько реплик всего. Приходит один раз вместе со стадией перевода
   // и нужен, чтобы показывать прогресс по мере поступления реплик.
   total: 0,
+  // Последняя стадия задания, какой её сообщил демон. По ней кнопка решает,
+  // что показать после обрыва связи и можно ли повторить отказ, а опрос
+  // позиции и переподключение порта — нужны ли они вообще.
+  stage: null,
+  // Отказ, если задание упало: текст причины и может ли он пройти сам.
+  error: "",
+  retryable: true,
+  // Повтор нажат, пока порт переподключался, и уйдёт вместе с переподключением.
+  pendingRetry: false,
   teardown: [],
 };
 
@@ -163,10 +172,22 @@ function buildOverlay(player) {
         cursor: pointer;
         user-select: none;
         transition: opacity 150ms;
+        /* Причина отказа бывает длиной в абзац — это хвост вывода yt-dlp.
+           Одной строкой с многоточием, иначе кнопка вылезала бы за край плеера;
+           целиком текст лежит в подсказке. */
+        box-sizing: border-box;
+        max-width: min(calc(100% - 24px), 40em);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .chip:hover { background: rgba(30, 30, 30, 0.9); }
       .chip[data-mode="busy"] { cursor: default; opacity: 0.85; }
-      .chip[data-mode="error"] { border-color: rgba(255, 140, 140, 0.6); color: #ffc9c9; }
+      .chip[data-mode="error"],
+      .chip[data-mode="retry"] { border-color: rgba(255, 140, 140, 0.6); color: #ffc9c9; }
+      /* Обрыв связи и отказ без повтора нажимать бесполезно — курсор не должен
+         обещать обратное. */
+      .chip[data-mode="error"] { cursor: default; }
       .chip[hidden] { display: none; }
     </style>
     <div class="chip" hidden></div>
@@ -191,7 +212,7 @@ const CHIP_LABELS = {
   paused: "пауза: карта занята",
 };
 
-function setChip(text, mode = "idle") {
+function setChip(text, mode = "idle", title = "") {
   const chip = state.chip;
 
   if (!chip) return;
@@ -199,11 +220,86 @@ function setChip(text, mode = "idle") {
   // Последнюю НЕошибочную надпись запоминаем: к ней надо вернуться, когда связь
   // восстановится. Сообщение об обрыве иначе переживало бы сам обрыв — работа
   // давно идёт дальше, а на кнопке всё ещё написано, что демона нет.
-  if (mode !== "error") state.lastLabel = { text, mode };
+  if (mode !== "error" && mode !== "retry") state.lastLabel = { text, mode };
 
   chip.hidden = false;
   chip.textContent = text;
+  chip.title = title;
   chip.dataset.mode = mode;
+}
+
+/** Задание закончено — удачно или нет. Больше демон по нему ничего не пришлёт. */
+function jobFinished() {
+  return state.stage === "done" || state.stage === "error";
+}
+
+/**
+ * Запомнить стадию из сообщения демона.
+ *
+ * Зовётся раньше слияния реплик: снимок приносит и реплики, и стадию, и счётчик
+ * «перевожу…» не должен лечь на кнопку, когда из того же снимка уже ясно,
+ * что работа закончена.
+ */
+function trackStage(message) {
+  if (message.type !== "state" && message.type !== "snapshot") return;
+  if (!message.stage) return;
+
+  state.stage = message.stage;
+
+  if (message.stage === "error") {
+    state.error = message.message || message.error || "";
+    // Старый демон этого поля не присылает. Отказ без него считаем временным:
+    // лишнее нажатие обойдётся одним сбросом, а отсутствующая кнопка повтора —
+    // роликом без субтитров.
+    state.retryable = message.retryable !== false;
+  }
+}
+
+/**
+ * Показать отказ задания.
+ *
+ * Приглашение повторить стоит в начале надписи: длинная причина обрезается
+ * многоточием, и в конце его просто не было бы видно — кнопка выглядела бы
+ * надписью, на которую незачем нажимать.
+ */
+function showFailure() {
+  const full = state.error || "не получилось";
+  // «ERROR:» — метка уровня из вывода yt-dlp. Зрителю она ничего не сообщает,
+  // а место на кнопке занимает.
+  const reason = full.replace(/\bERROR:\s*/g, "").replace(/\s+/g, " ").trim() || full;
+
+  if (state.retryable) setChip(`↻ повторить — ${reason}`, "retry", full);
+  else setChip(reason, "error", full);
+}
+
+/**
+ * Начать задание по ролику заново: повтором отказа или сменой источника реплик.
+ *
+ * Реплики прежнего задания забываем. У нового свой журнал с нуля, а слияние идёт
+ * по номеру реплики и ничего не удаляет: счётчик «перевожу…» начал бы со старого
+ * числа, а реплики другой разметки — распознавание вместо дорожки автора, другой
+ * прогон распознавания — легли бы на экран вперемешку с новыми.
+ */
+function restartJob(op, label) {
+  state.active = true;
+  state.consented = true;
+  // Стадия прежнего задания больше ничего не значит. Сброс её закрывает
+  // второе нажатие, пока идёт этот повтор, и возвращает переподключению
+  // порта обычную подписку на работу.
+  state.stage = null;
+  state.cues = [];
+  state.total = 0;
+  state.repaint?.();
+  setChip(label, "busy");
+
+  if (state.port) {
+    state.port.postMessage({ op, videoId: state.videoId });
+  } else {
+    // Порт как раз переподключается — фоновая страница уснула. Подписку
+    // переподключение пошлёт само, а повтор надо запомнить: вместо него ушла бы
+    // обычная подписка и принесла бы тот же отказ, пока он на демоне не остыл.
+    state.pendingRetry = op === "retry";
+  }
 }
 
 /** Отразить на кнопке то, что сообщает демон. */
@@ -213,11 +309,15 @@ function updateChip(message) {
   if (message.type === "helper") {
     if (message.ok === false) {
       setChip(message.reason || "нет связи с демоном", "error");
-    } else if (state.chip.dataset.mode === "error" && state.lastLabel) {
-      // Связь вернулась: показываем то, чем демон был занят до обрыва. Новых
-      // событий он мог и не прислать — перевод батча идёт десятками секунд,
+    } else if (state.chip.dataset.mode === "error") {
+      // Связь вернулась. Надпись собираем по последней стадии, а не берём
+      // прежнюю как есть: прежняя бывает старше самой стадии — «перевожу…»
+      // на законченном ролике или занятая кнопка поверх отказа. Новых событий
+      // демон при этом мог и не прислать: перевод батча идёт десятками секунд,
       // и всё это время сказать ему нечего.
-      setChip(state.lastLabel.text, state.lastLabel.mode);
+      if (state.stage === "done") state.chip.hidden = true;
+      else if (state.stage === "error") showFailure();
+      else if (state.lastLabel) setChip(state.lastLabel.text, state.lastLabel.mode);
     }
 
     return;
@@ -227,7 +327,7 @@ function updateChip(message) {
 
   if (message.type === "state" || message.type === "snapshot") {
     if (stage === "error") {
-      setChip(message.message || message.error || "не получилось", "error");
+      showFailure();
 
       return;
     }
@@ -235,6 +335,14 @@ function updateChip(message) {
     if (stage === "done") {
       // Работа закончена, реплики уже на экране — кнопке там больше не место.
       state.chip.hidden = true;
+
+      return;
+    }
+
+    // Без согласия пауза не снимется никогда: опрос такой вкладки задание
+    // только читает. Кнопка поэтому зовёт продолжить, а не просто сообщает.
+    if (stage === "paused" && !state.consented) {
+      setChip("▶ продолжить — карта была занята");
 
       return;
     }
@@ -249,9 +357,19 @@ function updateChip(message) {
 
       // Демон уточняет источник, когда качает не звук, а готовые субтитры автора.
       // Без этого кнопка врала бы «качаю звук» на пути, где звук вообще не нужен.
-      const label = message.source ? `качаю ${message.source}…` : CHIP_LABELS[stage];
+      // Так же он отличает ожидание видеокарты от обычной очереди: ждать её можно
+      // минутами, и «в очереди…» всё это время ничего бы не объясняло.
+      let label = CHIP_LABELS[stage];
 
-      setChip(label + progress, "busy");
+      if (message.source) label = `качаю ${message.source}…`;
+      else if (message.waiting === "gpu") label = "жду видеокарту…";
+
+      // Демон сам повторяет временный сбой загрузки и сообщает номер попытки.
+      // Без него кнопка молча топталась бы на одной стадии, и зависание от
+      // повтора было бы не отличить.
+      const retry = message.retry ? ` (повтор ${message.retry})` : "";
+
+      setChip(label + progress + retry, "busy");
     }
   }
 }
@@ -356,6 +474,10 @@ function teardown() {
   state.consented = false;
   state.duration = 0;
   state.total = 0;
+  state.stage = null;
+  state.error = "";
+  state.retryable = true;
+  state.pendingRetry = false;
 }
 
 function hideNativeCaptions() {
@@ -414,9 +536,11 @@ function startRenderLoop(video, host, box) {
   render();
 
   // Перерисовка по требованию: тик по кадрам на паузе не идёт, поэтому смена
-  // настройки иначе вступила бы в силу только после возобновления.
+  // настройки иначе вступила бы в силу только после возобновления. Отметка
+  // null, а не -1: -1 значит «на экране пусто», и реплика, которой больше нет
+  // в списке, так на экране бы и осталась.
   state.repaint = () => {
-    state.lastIndex = -1;
+    state.lastIndex = null;
     render();
   };
 
@@ -469,8 +593,9 @@ function startLiftTracking(player, host, box) {
 function startPlayheadReports(video, videoId) {
   const timer = setInterval(() => {
     // Только после согласия: без задания позиция просмотра никому не нужна,
-    // а запрос к демону вернул бы 404 на каждой секунде.
-    if (state.active && state.port && state.videoId === videoId) {
+    // а запрос к демону вернул бы 404 на каждой секунде. По законченному
+    // заданию тоже: двигать в нём уже нечего.
+    if (state.active && state.port && state.videoId === videoId && !jobFinished()) {
       state.port.postMessage({ op: "playhead", videoId, t: video.currentTime });
     }
   }, PLAYHEAD_MS);
@@ -490,8 +615,10 @@ function mergeCues(incoming) {
 
   // Прогресс приходит именно репликами: событие о начале перевода демон шлёт
   // один раз и числа готовых в нём нет. Без этой строки счётчик на кнопке
-  // застывал бы на нуле до самого конца работы.
-  if (state.active && state.total) {
+  // застывал бы на нуле до самого конца работы. По законченному заданию
+  // счётчик не ставим: работа уже не идёт, а надпись о ней стала бы последней
+  // запомненной и потом выдавала бы себя за текущую.
+  if (state.active && state.total && !jobFinished()) {
     setChip(`перевожу… ${state.cues.length}/${state.total}`, "busy");
   }
 }
@@ -518,6 +645,31 @@ async function activate(videoId) {
   // study_language в конфиге демона и showOriginal здесь, в браузере.
   // Любое обещание про языки было бы враньём в свежей установке.
   chip.addEventListener("click", () => {
+    // Упавшее задание повторяется нажатием на ту же кнопку. Отказ на демоне
+    // прилипает: окончательный — навсегда, временный — на минуту остывания,
+    // чтобы опрос не устраивал шторм повторов. Обычная подписка сразу после
+    // отказа принесла бы его же, а повтор сбрасывает задание и начинает новое
+    // немедленно.
+    if (state.stage === "error" && state.retryable) {
+      restartJob("retry", "повторяю…");
+
+      return;
+    }
+
+    // Вкладка, открытая перезагрузкой, подхватила идущее задание без согласия,
+    // и задание встало на паузу. Сама пауза снимается только подпиской с правом
+    // создания, то есть нажатием: возобновление — это снова захват карты.
+    // Реплики при этом не трогаем — задание то же, и сделанное остаётся на экране.
+    if (state.stage === "paused" && !state.consented) {
+      state.consented = true;
+      setChip("продолжаю…", "busy");
+      // Порт мог как раз переподключаться. Тогда подписку пошлёт само
+      // переподключение: согласие уже дано, а задание не закончено.
+      state.port?.postMessage({ op: "watch", videoId });
+
+      return;
+    }
+
     if (state.active) return;
 
     state.active = true;
@@ -583,10 +735,13 @@ function connect() {
     // кнопку, чтобы решал зритель.
     if (message.type === "gone" && !state.consented) {
       state.active = false;
+      state.stage = null;
       setChip("Сделать субтитры");
 
       return;
     }
+
+    trackStage(message);
 
     if (message.type === "cues" || message.type === "snapshot") {
       mergeCues(message.cues || []);
@@ -604,10 +759,19 @@ function connect() {
 
       connect();
 
+      // По законченному заданию всё уже на экране, и просить нечего. watch мог
+      // бы заново запустить работу, а restore перечитывал бы кэш при каждом
+      // засыпании фоновой страницы — то есть раз в полминуты, пока открыта вкладка.
+      if (jobFinished()) return;
+
       // Только если согласие уже дано. Иначе разрыв соединения запускал бы
       // обработку сам по себе, в обход кнопки.
       if (state.videoId && state.consented) {
-        state.port.postMessage({ op: "watch", videoId: state.videoId });
+        // Нажатый в окно переподключения повтор уходит сейчас, см. restartJob.
+        const op = state.pendingRetry ? "retry" : "watch";
+
+        state.pendingRetry = false;
+        state.port.postMessage({ op, videoId: state.videoId });
       } else if (state.videoId) {
         // Восстановленная вкладка переспрашивает тем же безопасным путём.
         // Слать сюда watch нельзя: он создаёт задание, а нажатия не было.
@@ -639,6 +803,15 @@ function watchSettings() {
     }
 
     if (touched && state.repaint) state.repaint();
+
+    // Смена источника реплик начинает разбор открытого ролика заново — так
+    // обещают настройки. Идущее задание подхватит её само: опрос уносит
+    // настройку на каждом витке. По законченному опроса уже нет, и без этого
+    // на экране так и остался бы прежний результат. Только там, где нажимали:
+    // восстановленная вкладка согласия на работу не давала.
+    if (changes.useAuthorTrack && state.consented && jobFinished()) {
+      restartJob("watch", "запускаю…");
+    }
   });
 }
 
