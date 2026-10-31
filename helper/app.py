@@ -23,7 +23,16 @@ import secrets
 
 from helper.env import CONFIG_DIR  # импортируется первым: раскладывает кэши и подключает CUDA
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 
 from helper.jobs import JobManager, Stage
@@ -268,10 +277,19 @@ async def set_playhead(video_id: str, payload: dict) -> dict:
 
 
 @app.post("/v1/jobs/{video_id}/drop", dependencies=[Depends(auth)])
-async def drop_job(video_id: str) -> dict:
-    manager.drop(video_id)
+async def drop_job(video_id: str, payload: dict | None = Body(default=None)) -> dict:
+    """Сбросить задание ролика. Тело необязательно; в нём clientId — ключ клиента.
 
-    return {"dropped": video_id}
+    С clientId сбрасывается только то, что нужно одному этому клиенту: с ролика снимается
+    его запись, а задание отменяется, лишь когда живых клиентов не осталось. Без clientId
+    отменяется всё, как до появления ключей. Расширение шлёт этот запрос вовсе без тела и
+    без Content-Type (extension/background.js, повтор после отказа), и обязательное тело
+    превратило бы его в 422. Ответ несёт cancelled: отменено ли хоть одно задание.
+    """
+    # Ключ уходит как есть: пригоден он или нет, решает Job.forget_client, а не обработчик.
+    client_id = (payload or {}).get("clientId")
+
+    return {"dropped": video_id, "cancelled": manager.drop(video_id, client_id)}
 
 
 @app.websocket("/v1/ws")

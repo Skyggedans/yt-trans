@@ -5,6 +5,7 @@ import atexit
 import os
 import shutil
 import tempfile
+import time
 
 import httpx
 import pytest
@@ -75,6 +76,28 @@ def manager(monkeypatch):
     # с ResourceWarning на Python 3.13+, который при запуске с -W error падал бы
     # на случайном соседнем тесте, где как раз сработает сборка.
     registry.cache._db.close()
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """Монотонные часы, что стоят на месте, пока тест не позовёт advance(секунды).
+
+    Подмена на уровне модуля time: jobs.py читает time.monotonic() через модуль.
+    Только для обычных тестов, не async: по этим же часам ходит цикл событий, и стоящие
+    часы остановили бы его таймеры.
+
+    Отсчёт идёт от целого числа, а не от настоящего показания часов. Возраст записи —
+    разность двух вещественных, и «начало плюс срок минус начало» не всегда ровно срок:
+    сумма, перешагнувшая степень двойки, округляется. Проверку границы «ровно
+    PLAYHEAD_TTL» такой шум сделал бы случайной.
+    """
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    def advance(seconds: float) -> None:
+        now[0] += seconds
+
+    return advance
 
 
 @pytest.fixture

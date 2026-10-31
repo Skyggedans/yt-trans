@@ -56,23 +56,6 @@ def test_absurd_client_id_is_refused_not_stored(manager):
     assert job.aim() == 6.0
 
 
-@pytest.fixture
-def clock(monkeypatch):
-    """Монотонные часы, что стоят на месте, пока тест не позовёт advance(секунды).
-
-    Подмена на уровне модуля time: jobs.py читает time.monotonic() через модуль.
-    Только для обычных тестов, не async: по этим же часам ходит цикл событий, и стоящие
-    часы остановили бы его таймеры.
-    """
-    now = [time.monotonic()]
-    monkeypatch.setattr(time, "monotonic", lambda: now[0])
-
-    def advance(seconds: float) -> None:
-        now[0] += seconds
-
-    return advance
-
-
 def test_job_nobody_has_reported_on_aims_at_the_start(manager):
     job = manager.get_or_create(VIDEO, "ru", True)
 
@@ -120,6 +103,55 @@ def test_expired_slots_never_compete_with_a_live_one(manager, clock):
     # Запасная позиция нужна, пока живых нет вовсе. Есть хоть один живой — круг
     # идёт только между живыми.
     assert [job.aim() for _ in range(3)] == [60.0, 60.0, 60.0]
+
+
+def test_slot_exactly_the_ttl_old_is_still_live(manager, clock):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.report_playhead("edge", 1200.0)
+    clock(PLAYHEAD_TTL)
+    job.report_playhead("fresh", 60.0)
+
+    # «Старше» значит строго старше: запись ровно PLAYHEAD_TTL возраста ещё жива и ходит
+    # в круге наравне со свежей. Сделай сравнение строгим, и «edge» выпала бы на одно
+    # мгновение раньше срока: круг стоял бы на 60.0.
+    assert [job.aim() for _ in range(4)] == [1200.0, 60.0, 1200.0, 60.0]
+
+    clock(1)
+
+    # Секундой позже она старше срока и из круга уходит.
+    assert [job.aim() for _ in range(2)] == [60.0, 60.0]
+
+
+def test_live_slots_are_the_clients_not_older_than_the_ttl(manager, clock):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.report_playhead("edge", 1200.0)
+    clock(PLAYHEAD_TTL)
+    job.report_playhead("fresh", 60.0)
+
+    # Порядок записей — порядок появления клиентов, на нём держится очерёдность круга.
+    assert list(job.live_slots()) == ["edge", "fresh"]
+
+    clock(1)
+
+    assert list(job.live_slots()) == ["fresh"]
+
+    clock(PLAYHEAD_TTL)
+
+    # Просрочены все: живых нет, хотя записи в задании остались (см. aim).
+    assert job.live_slots() == {}
+
+
+def test_asking_who_is_live_does_not_turn_the_circle(manager):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.report_playhead("a", 100.0)
+    job.report_playhead("b", 900.0)
+
+    # Вопрос «кто жив» задаёт и JobManager.drop. Был бы он ходом, сброс чужого клиента
+    # отнимал бы у зрителей батч, не принеся перевода.
+    for _ in range(3):
+        job.live_slots()
+
+    assert [job.aim() for _ in range(2)] == [100.0, 900.0]
 
 
 def test_reports_between_batches_do_not_reshuffle_the_circle(manager):
@@ -225,6 +257,42 @@ def test_forgetting_an_unknown_client_is_quiet(manager):
     assert [job.aim() for _ in range(2)] == [120.0, 120.0]
 
 
+def test_forgetting_the_only_client_after_it_expired_leaves_nothing_to_aim_at(manager, clock):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.report_playhead("a", 900.0)
+
+    clock(PLAYHEAD_TTL + 1)
+
+    # Пока клиент числится, его просроченная позиция остаётся запасной.
+    assert job.aim() == 900.0
+
+    job.forget_client("a")
+
+    # Снятого клиента запасная позиция не помнит: записей нет, и это единственный путь
+    # к началу ролика у задания, о позиции которого когда-то сообщали. Отдельного
+    # «последнего за всё время» поля нет намеренно, иначе снятый продолжал бы рулить.
+    assert job.aim() == 0.0
+    assert job.playhead == 0.0
+
+
+def test_forgetting_the_newer_of_two_expired_clients_leaves_the_older_one(manager, clock):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.report_playhead("older", 100.0)
+    clock(10)
+    job.report_playhead("newer", 200.0)
+
+    clock(PLAYHEAD_TTL + 1)
+
+    # Молчат оба, и берётся самое свежее сообщение.
+    assert job.aim() == 200.0
+
+    job.forget_client("newer")
+
+    # Свежее сняли, и запасной становится позиция второго, а не начало ролика.
+    assert job.aim() == 100.0
+    assert job.playhead == 100.0
+
+
 def test_playhead_is_read_only(manager):
     job = manager.get_or_create(VIDEO, "ru", True)
 
@@ -232,6 +300,45 @@ def test_playhead_is_read_only(manager):
     # перестанет что-либо двигать: позицию теперь пишут через report_playhead.
     with pytest.raises(AttributeError):
         job.playhead = 5.0
+
+
+def test_reading_the_playhead_does_not_spend_a_turn(manager):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.report_playhead("a", 100.0)
+    job.report_playhead("b", 900.0)
+
+    # Чтение — только взгляд. Окажись оно ходом, каждая строка лога или поле снимка, что
+    # прочитали свойство, отнимали бы у кого-то из зрителей очередь: круг проворачивался
+    # бы без единого переведённого батча.
+    assert [job.playhead for _ in range(3)] == [100.0, 100.0, 100.0]
+    assert [job.aim() for _ in range(2)] == [100.0, 900.0]
+
+
+def test_playhead_shows_the_position_aim_serves_next(manager):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.report_playhead("a", 100.0)
+    job.report_playhead("b", 900.0)
+    seen = []
+
+    for _ in range(4):
+        ahead = job.playhead
+
+        assert job.aim() == ahead
+        seen.append(ahead)
+
+    assert seen == [100.0, 900.0, 100.0, 900.0]
+
+
+def test_playhead_of_a_job_whose_clients_all_went_silent_is_the_last_known_position(
+    manager, clock
+):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.report_playhead("only", 900.0)
+
+    clock(PLAYHEAD_TTL + 1)
+
+    # Тот же запасной ответ, что у aim(): замороженная вкладка не дёргает окно к нулю.
+    assert job.playhead == 900.0
 
 
 def cues_for_batches(job):
