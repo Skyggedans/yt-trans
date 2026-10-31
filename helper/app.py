@@ -239,17 +239,30 @@ async def restore_job(
 
 @app.post("/v1/jobs/{video_id}/playhead", dependencies=[Depends(auth)])
 async def set_playhead(video_id: str, payload: dict) -> dict:
-    """Куда смотрит зритель — двигает приоритет очереди перевода."""
+    """Куда смотрит зритель — двигает приоритет очереди перевода.
+
+    Тело: t — секунды от начала ролика; clientId — необязательный ключ клиента. С ним
+    у каждого клиента своя позиция, и перевод идёт по кругу между ними. Без него все
+    такие запросы считаются одним клиентом, как до появления ключа.
+    """
     jobs = manager.jobs_for(video_id)
 
     if not jobs:
         raise HTTPException(status_code=404, detail="задание не найдено")
 
+    # Позиция и ключ клиента разбираются один раз, до цикла: проверка одна на все
+    # варианты ролика. Отсутствие t, как и раньше, значит начало ролика. Ключ уходит
+    # как есть: пригоден он или нет, решает report_playhead, а не обработчик.
+    # Расширение ключа не присылает и остаётся единственным клиентом "legacy": для него
+    # всё работает, как с одним плейхедом.
+    position = float((payload or {}).get("t", 0.0))
+    client_id = (payload or {}).get("clientId")
+
     # Позицию присылают без признака дорожки, и какой из вариантов ролика смотрит
     # клиент, демон не знает. Двигаем все: лишний сдвиг безвреден, а пропущенный
     # оставил бы перевод у зрителя с начала ролика.
     for job in jobs:
-        job.playhead = float((payload or {}).get("t", 0.0))
+        job.report_playhead(client_id, position)
 
     return {"ok": True}
 
@@ -363,8 +376,13 @@ async def websocket(socket: WebSocket) -> None:
                 # Двигает приоритет очереди: следующий батч берётся вокруг
                 # текущего места просмотра, а не с начала ролика. Сдвигаются все
                 # варианты ролика, как и у POST /playhead: признака дорожки тут нет.
+                # Позиция и ключ клиента разбираются так же, как в set_playhead, и тоже
+                # до цикла.
+                position = float(message.get("t", 0.0))
+                client_id = message.get("clientId")
+
                 for job in manager.jobs_for(message.get("videoId", "")):
-                    job.playhead = float(message.get("t", 0.0))
+                    job.report_playhead(client_id, position)
 
             elif op == "unwatch":
                 video_id = message.get("videoId", "")
