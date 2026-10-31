@@ -175,8 +175,14 @@ async def job_events(
     # сделанное после перезагрузки страницы. Подписка на ролик обычно И ЕСТЬ
     # согласие на работу, поэтому обычный опрос задание создаёт. Но восстановленная
     # вкладка согласия не давала: исчезни задание из реестра, и создание нового
-    # означало бы, что F5 сам начал качать аудио и занимать карту.
-    job = manager.get_or_create(video_id, target, authorTrack) if create else manager.attach(video_id)
+    # означало бы, что F5 сам начал качать аудио и занимать карту. Вариант дорожки
+    # берётся тот же, что у обычного опроса: у ролика бывает по заданию на каждый,
+    # и вкладка должна подхватить своё, а не соседнее.
+    job = (
+        manager.get_or_create(video_id, target, authorTrack)
+        if create
+        else manager.attach(video_id, authorTrack)
+    )
 
     if job is None:
         return {"gone": True, "cursor": cursor, "events": []}
@@ -220,12 +226,16 @@ async def restore_job(
 @app.post("/v1/jobs/{video_id}/playhead", dependencies=[Depends(auth)])
 async def set_playhead(video_id: str, payload: dict) -> dict:
     """Куда смотрит зритель — двигает приоритет очереди перевода."""
-    job = manager.get(video_id)
+    jobs = manager.jobs_for(video_id)
 
-    if job is None:
+    if not jobs:
         raise HTTPException(status_code=404, detail="задание не найдено")
 
-    job.playhead = float((payload or {}).get("t", 0.0))
+    # Позицию присылают без признака дорожки, и какой из вариантов ролика смотрит
+    # клиент, демон не знает. Двигаем все: лишний сдвиг безвреден, а пропущенный
+    # оставил бы перевод у зрителя с начала ролика.
+    for job in jobs:
+        job.playhead = float((payload or {}).get("t", 0.0))
 
     return {"ok": True}
 
@@ -294,19 +304,19 @@ async def websocket(socket: WebSocket) -> None:
                         watched.add(video_id)
 
             elif op == "playhead":
-                job = manager.get(message.get("videoId", ""))
-
-                if job:
-                    # Двигает приоритет очереди: следующий батч берётся вокруг
-                    # текущего места просмотра, а не с начала ролика.
+                # Двигает приоритет очереди: следующий батч берётся вокруг
+                # текущего места просмотра, а не с начала ролика. Сдвигаются все
+                # варианты ролика, как и у POST /playhead: признака дорожки тут нет.
+                for job in manager.jobs_for(message.get("videoId", "")):
                     job.playhead = float(message.get("t", 0.0))
 
             elif op == "unwatch":
                 video_id = message.get("videoId", "")
-                job = manager.get(video_id)
                 watched.discard(video_id)
 
-                if job:
+                # Очередь сокета снимается со всех вариантов ролика: на каком из них
+                # она оказалась, сокет не помнит, а снятая с лишнего ничего не меняет.
+                for job in manager.jobs_for(video_id):
                     job.unsubscribe(events)
 
     except WebSocketDisconnect:
@@ -326,9 +336,7 @@ async def websocket(socket: WebSocket) -> None:
                 await pump
 
         for video_id in watched:
-            job = manager.get(video_id)
-
-            if job:
+            for job in manager.jobs_for(video_id):
                 job.unsubscribe(events)
 
 
