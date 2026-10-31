@@ -218,7 +218,7 @@ async def restore_job(
         # По готовому заданию ждать больше нечего, а лишний опрос — это лишние
         # обращения к создающему эндпоинту на каждой открытой вкладке.
         "stage": job.stage.value,
-        "cursor": job._dropped + len(job.events),
+        "cursor": job.journal_end,
         "snapshot": job.snapshot(),
     }
 

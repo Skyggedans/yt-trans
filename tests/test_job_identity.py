@@ -3,6 +3,12 @@
 import asyncio
 
 
+def emit_events(job, count):
+    """Дописать в журнал задания count событий тем же способом, что и конвейер."""
+    for number in range(count):
+        job._emit({"type": "state", "stage": "probing", "n": number})
+
+
 def test_client_with_other_author_track_flag_gets_its_own_job(manager):
     first = manager.get_or_create("abcdefghijk", "ru", True)
     second = manager.get_or_create("abcdefghijk", "ru", False)
@@ -51,14 +57,124 @@ def test_second_client_with_other_target_lang_reuses_job_and_can_see_it(manager)
 
 async def test_cursor_ahead_of_the_journal_resyncs_once(manager):
     job = manager.get_or_create("abcdefghijk", "ru", True)
-    ahead = await job.poll(cursor=9999, timeout=0.01)
+    # Журнал у каждого задания отсчитывается от своего основания, а не от нуля,
+    # поэтому «за концом» считаем от конца самого журнала.
+    ahead = await job.poll(cursor=job.journal_end + 9999, timeout=0.01)
 
     assert "snapshot" in ahead
-    assert ahead["cursor"] == 0
+    assert ahead["cursor"] == job.journal_end
 
     again = await job.poll(cursor=ahead["cursor"], timeout=0.01)
 
     assert "snapshot" not in again
+
+
+async def test_fresh_client_at_cursor_zero_gets_one_snapshot_and_then_waits(manager):
+    job = manager.get_or_create("abcdefghijk", "ru", True)
+
+    # С нуля начинает каждый свежий клиент. Основание журнала случайное, поэтому
+    # нуль для него слишком стар: снимок приходит сразу, а не после ожидания первого
+    # события. Дальше клиент идёт с курсором из ответа и ждёт как обычно, плотного
+    # цикла нет.
+    first = await job.poll(cursor=0, timeout=0.01)
+
+    assert "snapshot" in first
+    assert first["cursor"] == job.journal_end
+
+    again = await job.poll(cursor=first["cursor"], timeout=0.01)
+
+    assert "snapshot" not in again
+    assert again["events"] == []
+
+
+async def test_cursor_from_the_other_variant_gets_a_snapshot(manager):
+    source = manager.get_or_create("abcdefghijk", "ru", True)
+    destination = manager.get_or_create("abcdefghijk", "ru", False)
+    emit_events(source, 2)
+    emit_events(destination, 5)
+    # Курсор, с которым клиент уходит с источника на соседний вариант (так делает
+    # расширение при смене переключателя у идущего задания). Он короче журнала
+    # назначения, и при общем нуле отсчёта сошёл бы там за свой: клиент получил бы
+    # хвост чужого журнала и никогда не увидел бы его начала.
+    held = source.journal_end
+
+    answer = await destination.poll(cursor=held, timeout=0.01)
+
+    assert "snapshot" in answer
+    assert answer["events"] == []
+    assert answer["cursor"] == destination.journal_end
+
+
+async def test_cursor_from_a_dropped_job_gets_a_snapshot_after_recreation(manager):
+    dropped = manager.get_or_create("abcdefghijk", "ru", True)
+    emit_events(dropped, 3)
+    held = dropped.journal_end
+
+    manager.drop("abcdefghijk")
+    recreated = manager.get_or_create("abcdefghijk", "ru", True)
+    emit_events(recreated, 5)
+
+    answer = await recreated.poll(cursor=held, timeout=0.01)
+
+    # Тот же ключ, но журнал другой: позиция из прежнего здесь ничего не значит.
+    assert recreated is not dropped
+    assert "snapshot" in answer
+    assert answer["events"] == []
+
+
+def test_fresh_jobs_start_their_journals_at_different_positions(manager):
+    first = manager.get_or_create("abcdefghijk", "ru", True)
+    second = manager.get_or_create("abcdefghijk", "ru", False)
+
+    # Конец журнала без событий и есть его основание. Не значение проверяем, а то,
+    # что у двух заданий оно разное: именно поэтому чужой курсор не годится.
+    assert first.journal_end != second.journal_end
+
+
+def test_journal_positions_stay_exact_in_javascript(monkeypatch):
+    from helper import jobs
+
+    asked = []
+
+    def widest(bits):
+        asked.append(bits)
+
+        return (1 << bits) - 1
+
+    # Генератор подменён на худший случай: наибольшее значение, какое он может
+    # выдать для запрошенной ширины. Настоящий выбор случаен, и по нему нельзя
+    # детерминированно поймать слишком широкое основание.
+    monkeypatch.setattr(jobs.secrets, "randbits", widest)
+
+    job = jobs.Job("abcdefghijk")
+
+    # Курсор уходит в расширение числом JSON и возвращается query-параметром, а
+    # целые в JavaScript точны только до 2^53 - 1. Основание шире исказил бы браузер,
+    # и курсор перестал бы совпадать с тем, что выдал демон.
+    assert asked, "основание журнала должно браться из secrets.randbits"
+    assert 0 <= job.journal_end <= 2**53 - 1
+
+
+async def test_trimmed_journal_keeps_its_positions_relative_to_the_base(manager):
+    from helper.jobs import MAX_EVENT_LOG
+
+    job = manager.get_or_create("abcdefghijk", "ru", True)
+    base = job.journal_end
+    emit_events(job, MAX_EVENT_LOG + 10)
+
+    assert len(job.events) == MAX_EVENT_LOG
+    assert job.journal_end == base + MAX_EVENT_LOG + 10
+
+    # Позиция из выброшенного начала журнала устарела: снимок.
+    stale = await job.poll(cursor=base + 5, timeout=0.01)
+
+    assert "snapshot" in stale
+
+    # Позиция внутри оставшегося окна отдаёт ровно хвост после неё.
+    inside = await job.poll(cursor=job.journal_end - 3, timeout=0.01)
+
+    assert "snapshot" not in inside
+    assert len(inside["events"]) == 3
 
 
 def test_cooled_retryable_failure_recreates_job_as_next_generation(manager):
@@ -273,15 +389,16 @@ async def test_playhead_endpoint_moves_every_variant(client, manager):
 
 async def test_events_without_create_find_only_their_own_variant(client, manager):
     manager.get_or_create("abcdefghijk", "ru", True)
-    # Курсор за концом журнала: опрос отвечает снимком сразу, а не ждёт 25 секунд.
-    params = {"create": "false", "authorTrack": "false", "cursor": "9999"}
+    # Отрицательный курсор слишком стар для любого журнала: опрос отвечает снимком
+    # сразу, а не ждёт 25 секунд.
+    params = {"create": "false", "authorTrack": "false", "cursor": "-1"}
 
     missing = await client.get("/v1/jobs/abcdefghijk/events", params=params)
 
     # Вкладка, подхватившая готовое после F5, просит вариант без дорожки автора.
     # Его нет, и опрос создавать его не вправе: перезагрузка страницы не должна
     # сама начинать работу.
-    assert missing.json() == {"gone": True, "cursor": 9999, "events": []}
+    assert missing.json() == {"gone": True, "cursor": -1, "events": []}
     assert manager.get("abcdefghijk", False) is None
     assert manager.started == ["abcdefghijk"]
 
@@ -289,3 +406,28 @@ async def test_events_without_create_find_only_their_own_variant(client, manager
     found = await client.get("/v1/jobs/abcdefghijk/events", params=params)
 
     assert found.json()["snapshot"]["authorTrack"] is False
+
+
+async def test_restore_cursor_continues_into_the_same_journal(
+    client, manager, monkeypatch
+):
+    from helper import app as helper_app
+
+    # Ожидание длинного опроса сокращаем: курсор из restore стоит на конце журнала,
+    # и опрос по нему честно ждёт новых событий.
+    monkeypatch.setattr(helper_app, "POLL_TIMEOUT", 0.01)
+    job = manager.get_or_create("abcdefghijk", "ru", True)
+    emit_events(job, 3)
+
+    restored = (await client.get("/v1/jobs/abcdefghijk/restore")).json()
+    params = {"create": "false", "cursor": str(restored["cursor"])}
+    polled = (await client.get("/v1/jobs/abcdefghijk/events", params=params)).json()
+
+    # Так расширение подхватывает идущее задание после F5. Курсор обязан быть
+    # абсолютной позицией этого журнала: отсчитай его кто-то от нуля, первый же
+    # опрос получил бы снимок, а позиция дальше разошлась бы с настоящей.
+    assert restored["found"] is True
+    assert restored["cursor"] == job.journal_end
+    assert "snapshot" not in polled
+    assert polled["events"] == []
+    assert polled["cursor"] == job.journal_end
