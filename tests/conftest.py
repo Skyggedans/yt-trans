@@ -1,5 +1,6 @@
 """Оснастка тестов демона: реестр заданий на временных путях и клиент поверх приложения."""
 
+import asyncio
 import atexit
 import os
 import shutil
@@ -7,6 +8,7 @@ import tempfile
 
 import httpx
 import pytest
+from starlette.websockets import WebSocketDisconnect
 
 # Подмена путей стоит на уровне модуля и выполняется ДО любого `import helper.*`.
 # helper.env считает CACHE_DIR и CONFIG_DIR один раз, при импорте, а всё остальное
@@ -88,3 +90,94 @@ async def client(manager):
         headers={"Authorization": f"Bearer {helper_app.TOKEN}"},
     ) as http:
         yield http
+
+
+# Предел ожидания в тестах сокета. Всё идёт в одном цикле событий и без сети, так что
+# в норме ответ приходит за доли миллисекунды. Секунды нужны лишь затем, чтобы
+# сломанный тест падал с TimeoutError, а не висел.
+SOCKET_TIMEOUT = 2.0
+
+
+class FakeSocket:
+    """Подмена WebSocket для helper.app.websocket: ровно то, чем пользуется обработчик.
+
+    TestClient.websocket_connect здесь не годится по двум причинам. Модуль testclient
+    при импорте печатает StarletteDeprecationWarning, и один раз на процесс: фильтр на
+    отдельных тестах поймал бы его только у того, кто импортирует первым. И он гоняет
+    приложение в потоке портала anyio, а тесту нужно класть события прямо в задания
+    (job._emit) и видеть, что дошло до сокета: asyncio.Queue из чужого потока не
+    будят, и читатель проснулся бы неизвестно когда. Здесь обработчик и тест живут
+    в одном цикле, и порядок событий определён.
+
+    receive_json, send_json и accept — то, что обработчик зовёт у настоящего сокета.
+    say, hear и disconnect — сторона клиента, для теста.
+    """
+
+    def __init__(self, token: str) -> None:
+        # Задача обработчика: её ставит фикстура connection, а disconnect дожидается.
+        self.handler: asyncio.Task | None = None
+        # Без Origin: check_origin пускает такие запросы, как curl. Токен настоящий.
+        self.headers: dict[str, str] = {}
+        self.query_params = {"token": token}
+        # Что клиент сказал демону; None — разрыв соединения.
+        self._incoming: asyncio.Queue = asyncio.Queue()
+        # Что демон отправил клиенту, строго по порядку.
+        self._outgoing: asyncio.Queue = asyncio.Queue()
+        # Обработчик разобрал всё сказанное и ждёт следующего сообщения.
+        self._idle = asyncio.Event()
+
+    async def accept(self) -> None:
+        pass
+
+    async def receive_json(self) -> dict:
+        # Очередь пуста: всё, что клиент сказал, уже разобрано, и обработчик ждёт.
+        # Верно, пока между разбором сообщения и следующим receive_json обработчик
+        # ни на чём не ждёт: появись там await на внешнем, say вернулся бы раньше,
+        # чем разбор закончен.
+        if self._incoming.empty():
+            self._idle.set()
+
+        message = await self._incoming.get()
+
+        if message is None:
+            raise WebSocketDisconnect()
+
+        return message
+
+    async def send_json(self, event: dict) -> None:
+        self._outgoing.put_nowait(event)
+
+    async def say(self, message: dict) -> None:
+        """Клиент говорит демону. Возвращается, когда демон разобрал сказанное."""
+        self._idle.clear()
+        self._incoming.put_nowait(message)
+        await asyncio.wait_for(self._idle.wait(), SOCKET_TIMEOUT)
+
+    async def hear(self) -> dict:
+        """Следующее событие, отправленное демоном клиенту. Порядок — как в очереди."""
+        return await asyncio.wait_for(self._outgoing.get(), SOCKET_TIMEOUT)
+
+    async def disconnect(self) -> None:
+        """Разрыв, как у закрытой вкладки. Возвращается, когда обработчик закончил.
+
+        Обработчик выходит штатно, глушит насос и снимает подписки. Можно звать
+        повторно: готовую задачу ожидание не трогает.
+        """
+        self._incoming.put_nowait(None)
+        await asyncio.wait_for(self.handler, SOCKET_TIMEOUT)
+
+
+@pytest.fixture
+async def connection(manager):
+    """Клиент WebSocket, подключённый к настоящему обработчику /v1/ws без сети."""
+    from helper import app as helper_app
+
+    # manager в аргументах ради порядка, как у client: подмена helper.app.manager
+    # должна стоять до первого сообщения.
+    socket = FakeSocket(helper_app.TOKEN)
+    socket.handler = asyncio.create_task(helper_app.websocket(socket))
+
+    yield socket
+
+    # Без ожидания задача обработчика пережила бы тест.
+    await socket.disconnect()

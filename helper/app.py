@@ -44,6 +44,16 @@ POLL_TIMEOUT = 25.0
 
 ALLOWED_ORIGIN_SCHEMES = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
 
+# Признак дорожки автора принимают два места, где разбирается сырой JSON: тело
+# POST /v1/jobs и сообщение watch. Оба требуют настоящий boolean и остальное к нему
+# не приводят. Признак входит в ключ реестра, и не-boolean лёг бы туда как есть:
+# строка "false" или None — призрачным третьим вариантом ролика, которого не найдёт
+# ни один точный get (а get без признака к тому же читает None как «признака нет»).
+# Числа 0 и 1 в ключ сошли бы за False и True, но в Job.use_author_track и в снимок
+# попали бы числами. Параметр /events сюда не относится: его строго разбирает сам
+# FastAPI (authorTrack: bool).
+AUTHOR_TRACK_REFUSAL = "authorTrack должен быть true или false"
+
 
 def load_token() -> str:
     """Токен установки. Создаётся при первом запуске, читается расширением из файла."""
@@ -133,11 +143,15 @@ async def health() -> dict:
 async def create_job(payload: dict) -> dict:
     video_id = (payload or {}).get("videoId", "")
     target = (payload or {}).get("targetLang", "ru")
+    author_track = (payload or {}).get("authorTrack", True)
 
     if not video_id:
         raise HTTPException(status_code=400, detail="нужен videoId")
 
-    job = manager.get_or_create(video_id, target)
+    if not isinstance(author_track, bool):
+        raise HTTPException(status_code=400, detail=AUTHOR_TRACK_REFUSAL)
+
+    job = manager.get_or_create(video_id, target, author_track)
 
     return {"videoId": job.video_id, "stage": job.stage.value}
 
@@ -292,16 +306,58 @@ async def websocket(socket: WebSocket) -> None:
                 video_id = message.get("videoId", "")
 
                 if video_id:
+                    author_track = message.get("authorTrack", True)
+
+                    if not isinstance(author_track, bool):
+                        # Отказ уходит через очередь сокета, а не прямой отправкой: в
+                        # сокет пишет один насос, и отказ встаёт в общий порядок с
+                        # остальными событиями. Отправка из цикла приёма была бы вторым
+                        # писателем. Подписка при этом не делается.
+                        events.put_nowait(
+                            {
+                                "type": "state",
+                                "stage": "error",
+                                "videoId": video_id,
+                                "message": AUTHOR_TRACK_REFUSAL,
+                                "retryable": False,
+                            }
+                        )
+
+                        continue
+
                     # get_or_create вызывается ВСЕГДА, а не только на первой подписке:
                     # это единственное место, откуда возобновляется приостановленное
                     # задание. Под прежним условием повторный watch по уже наблюдаемому
                     # ролику был полной пустышкой, и после вытеснения задание висело
                     # в паузе, пока клиент не разорвёт соединение целиком.
-                    job = manager.get_or_create(video_id, message.get("targetLang", "ru"))
+                    job = manager.get_or_create(
+                        video_id, message.get("targetLang", "ru"), author_track
+                    )
 
-                    if video_id not in watched:
+                    # Сокет следит не больше чем за одним вариантом ролика, и watch
+                    # с другим признаком значит «теперь мне нужен этот»: очередь
+                    # переезжает на его задание. Прежнее остаётся как есть — оно идёт
+                    # у другого клиента или понадобится при обратном переключении, —
+                    # но события из него сюда больше не приходят. Кроме снимка, события
+                    # заданий не несут ни ролика, ни варианта, и сокет, подписанный на
+                    # оба, получал бы два потока в одном, которые клиенту не разделить.
+                    for other in manager.jobs_for(video_id):
+                        if other is not job:
+                            other.unsubscribe(events)
+
+                    # Подписка шлёт догоняющий снимок, поэтому очередь, что уже стоит на
+                    # этом задании, не подписываем заново: повторный watch (он же
+                    # возобновление, см. выше) слал бы весь снимок каждый раз. Спрашиваем
+                    # у самого задания, а не по `video_id in watched`: тот знает ролик,
+                    # но не вариант, и после переезда на другой вариант ответил бы
+                    # неверно.
+                    if not job.is_subscribed(events):
                         job.subscribe(events)
-                        watched.add(video_id)
+
+                    # Подписывать ли, решает не watched, а само задание. Он остался
+                    # списком роликов сокета: по нему unwatch и очистка при разрыве
+                    # находят, с каких заданий снять очередь.
+                    watched.add(video_id)
 
             elif op == "playhead":
                 # Двигает приоритет очереди: следующий батч берётся вокруг

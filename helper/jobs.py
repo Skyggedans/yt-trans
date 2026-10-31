@@ -280,6 +280,13 @@ class Job:
     def unsubscribe(self, queue: asyncio.Queue) -> None:
         self._subscribers.discard(queue)
 
+    def is_subscribed(self, queue: asyncio.Queue) -> bool:
+        """Стоит ли очередь среди подписчиков.
+
+        Нужно, чтобы не подписывать её дважды: каждая подписка шлёт догоняющий снимок.
+        """
+        return queue in self._subscribers
+
     def _emit(self, event: dict) -> None:
         self.events.append(event)
 
