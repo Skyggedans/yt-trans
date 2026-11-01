@@ -129,9 +129,24 @@ class TranslatorConfig:
 
 
 @dataclass(frozen=True)
+class YoutubeConfig:
+    # Файл cookies (формат Netscape) отдельного аккаунта для роликов 18+. Без него
+    # такие ролики не переводятся: YouTube отдаёт их только вошедшему. Всё прочее
+    # демон качает анонимно и с аккаунтом — никогда. По словам самого yt-dlp,
+    # аккаунт, через который он ходит, YouTube может забанить, поэтому свой
+    # основной сюда не ставят. Как выгрузить cookies — в config.example.toml.
+    cookies: str = ""
+
+    @property
+    def cookies_path(self) -> Path | None:
+        return Path(self.cookies).expanduser() if self.cookies else None
+
+
+@dataclass(frozen=True)
 class Config:
     asr: AsrConfig
     translator: TranslatorConfig
+    youtube: YoutubeConfig = YoutubeConfig()
 
     @property
     def asr_vram_mib(self) -> int:
@@ -173,7 +188,15 @@ def load(path: Path = CONFIG_PATH) -> Config:
 
     asr = AsrConfig(**_section(raw, "asr", AsrConfig))
     translator = TranslatorConfig(**_section(raw, "translator", TranslatorConfig))
-    config = Config(asr=asr, translator=translator)
+    youtube = YoutubeConfig(**_section(raw, "youtube", YoutubeConfig))
+    config = Config(asr=asr, translator=translator, youtube=youtube)
+
+    # Не ошибка запуска: без файла не откроются только ролики 18+, а остальное
+    # работает. Зритель такого ролика получит ту же причину в отказе.
+    cookies = youtube.cookies_path
+
+    if cookies is not None and not cookies.is_file():
+        log.warning("[youtube] cookies: файла %s нет, ролики 18+ открываться не будут", cookies)
 
     # Разрешаем расход памяти сразу, при старте. Ошибка в конфиге должна падать
     # на запуске демона, а не через минуту работы посреди первого задания.
