@@ -14,6 +14,7 @@ from helper.jobs import (
     PAUSED_AUDIO_MAX_BYTES,
     PAUSED_AUDIO_TTL,
     CapacityError,
+    JobCue,
     PermanentJobError,
     Stage,
 )
@@ -66,12 +67,14 @@ def test_overflow_is_not_a_permanent_refusal():
 
 
 @pytest.mark.parametrize("stage", list(Stage), ids=lambda stage: stage.value)
-def test_only_finished_stages_free_a_slot(manager, monkeypatch, stage):
+def test_a_fresh_job_holds_a_slot_unless_it_is_finished(manager, monkeypatch, stage):
     # Готовые остаются в реестре: при заданиях сверх MAX_RETAINED_JOBS _evict выбросил
     # бы их сам, и счёт по незавершённым нельзя было бы отличить от счёта по всему реестру.
     monkeypatch.setattr(jobs, "MAX_RETAINED_JOBS", 100)
-    # Приостановленное задание держит место наравне с идущим: в нём работа карты, и
-    # возобновится оно само, как только карта освободится.
+    # Свежая пауза держит место наравне с идущим заданием: зритель мог лишь отойти, и
+    # его опрос возобновит её. Возобновляется она только по запросу клиента, поэтому
+    # брошенная держала бы место вечно, и простоявшая дольше PAUSED_AUDIO_TTL (тот же
+    # срок, что у её звука) в счёт не идёт: см. test_stale_pauses_do_not_hold_a_slot.
     first = manager.get_or_create("video00000a", "ru", True)
     first.stage = stage
 
@@ -98,6 +101,50 @@ def test_existing_jobs_are_still_served_at_the_cap(manager, full):
     # Приостановленное при этом возобновилось: оно уже было в счёте, и его возобновление
     # числа заданий не меняет.
     assert manager.started == started + [paused.video_id]
+
+
+def test_stale_pauses_do_not_hold_a_slot(manager, clock):
+    # Пауза возобновляется только запросом клиента, сама она не продолжится. Брошенная,
+    # она осталась бы в реестре до перезапуска демона, а шестнадцать таких закрыли бы
+    # его для новых роликов насовсем. Поэтому простоявшая дольше PAUSED_AUDIO_TTL, то
+    # есть дольше срока, по которому _evict убирает её звук, в счёт не идёт.
+    paused = [manager.get_or_create(f"video{i:05d}a", "ru", True) for i in range(MAX_ACTIVE_JOBS)]
+
+    for job in paused:
+        job.stage = Stage.PAUSED
+
+    # Ровно срок ещё не старость: сравнение строгое, как у звука в _evict.
+    clock(PAUSED_AUDIO_TTL)
+
+    with pytest.raises(CapacityError):
+        manager.get_or_create(OVERFLOW, "ru", True)
+
+    clock(1)
+
+    assert manager.get_or_create(OVERFLOW, "ru", True) is not None
+
+
+def test_a_stale_pause_stays_registered_and_is_resumed_at_the_cap(manager, clock):
+    stale = manager.get_or_create("abcdefghijk", "ru", True)
+    stale.stage = Stage.PAUSED
+    stale.cues = [JobCue(index=0, start=0.0, end=1.5, src="Zdravo", lines=["Привет"])]
+    clock(PAUSED_AUDIO_TTL + 1)
+
+    # Остальные места заняты идущими заданиями: брошенная пауза у них ничего не отнимает.
+    for i in range(MAX_ACTIVE_JOBS):
+        manager.get_or_create(f"video{i:05d}a", "ru", True)
+
+    with pytest.raises(CapacityError):
+        manager.get_or_create(OVERFLOW, "ru", True)
+
+    started = list(manager.started)
+
+    # Пауза осталась в реестре со своими репликами, и вернувшийся зритель возобновляет её
+    # как любое существующее задание: предел стережёт создание, а не возобновление.
+    assert manager.get("abcdefghijk", True) is stale
+    assert [cue.src for cue in stale.cues] == ["Zdravo"]
+    assert manager.get_or_create("abcdefghijk", "ru", True) is stale
+    assert manager.started == started + ["abcdefghijk"]
 
 
 def test_each_variant_of_a_video_counts_once(manager):
@@ -353,6 +400,58 @@ def test_time_cleanup_runs_before_the_budget(manager, audio_dir, monkeypatch):
     # уже нечего.
     assert abandoned._audio_path is None
     assert watched._audio_path is not None
+
+
+class FakeTask:
+    """Задача задания в тех пределах, что спрашивают _evict и счёт мест: закончилась ли она."""
+
+    def __init__(self, finished):
+        self._finished = finished
+
+    def done(self):
+        return self._finished
+
+
+# Что считается брошенной паузой: приостановлено, задачи нет или она закончилась, и
+# к заданию дольше PAUSED_AUDIO_TTL никто не обращался. Остальные строки отличаются от
+# первой ровно одним признаком каждая.
+STALE_PAUSE_CASES = [
+    pytest.param(Stage.PAUSED, PAUSED_AUDIO_TTL + 1, None, True, id="paused-without-a-task"),
+    pytest.param(Stage.PAUSED, PAUSED_AUDIO_TTL + 1, FakeTask(True), True, id="paused-task-done"),
+    pytest.param(Stage.PAUSED, PAUSED_AUDIO_TTL, None, False, id="paused-exactly-at-the-ttl"),
+    pytest.param(
+        Stage.PAUSED, PAUSED_AUDIO_TTL + 1, FakeTask(False), False, id="paused-task-running"
+    ),
+    pytest.param(Stage.TRANSLATING, PAUSED_AUDIO_TTL + 1, None, False, id="not-a-pause"),
+]
+
+
+@pytest.mark.parametrize(("stage", "age", "task", "stale"), STALE_PAUSE_CASES)
+def test_one_staleness_decides_both_the_audio_and_the_slot(
+    manager, audio_dir, clock, stage, age, task, stale
+):
+    # Один признак на звук и на место: брошенная пауза теряет и то и другое, а любое
+    # другое задание сохраняет оба. Разойдись они, звук паузы пропал бы, а место за ней
+    # осталось, или наоборот.
+    subject = manager.get_or_create("video00000a", "ru", True)
+
+    for i in range(1, MAX_ACTIVE_JOBS):
+        manager.get_or_create(f"video{i:05d}a", "ru", True)
+
+    stash(subject, mtime=1000)
+    subject.stage = stage
+    subject._task = task
+    clock(age)
+
+    manager._evict()
+
+    assert (subject._audio_path is None) is stale
+
+    if stale:
+        assert manager.get_or_create(OVERFLOW, "ru", True) is not None
+    else:
+        with pytest.raises(CapacityError):
+            manager.get_or_create(OVERFLOW, "ru", True)
 
 
 def test_evict_without_a_paused_audio_directory_is_quiet(manager):
