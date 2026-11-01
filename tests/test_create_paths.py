@@ -156,6 +156,28 @@ async def test_disconnect_after_a_move_leaves_no_subscription_on_either_variant(
     assert manager.get(VIDEO, False)._subscribers == set()
 
 
+async def test_unwatch_after_a_move_stops_events_from_both_variants(manager, connection):
+    await connection.say(watch(VIDEO, authorTrack=True))
+    await connection.hear()
+    await connection.say(watch(VIDEO, authorTrack=False))
+    await connection.hear()
+    # Другой клиент опросил прежний вариант, и самым свежим стал он, а не тот, на котором
+    # стоит сокет: отписка не вправе ограничиться самым свежим заданием ролика.
+    manager.get_or_create(VIDEO, "ru", True)
+
+    await connection.say({"op": "unwatch", "videoId": VIDEO})
+
+    # Оба варианта шлют по событию, а следом приходит снимок другого ролика. Очередь
+    # сокета одна и идёт по порядку: останься сокет подписан хоть на один вариант, его
+    # событие пришло бы раньше снимка.
+    manager.get(VIDEO, True)._emit({"type": "state", "stage": "probing", "variant": "with-track"})
+    manager.get(VIDEO, False)._emit({"type": "state", "stage": "probing", "variant": "without"})
+    await connection.say(watch(OTHER))
+    heard = await connection.hear()
+
+    assert (heard["type"], heard.get("videoId")) == ("snapshot", OTHER)
+
+
 async def test_watch_after_a_drop_subscribes_the_socket_to_the_new_job(manager, connection):
     await connection.say(watch(VIDEO))
     await connection.hear()

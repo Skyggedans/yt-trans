@@ -1,8 +1,11 @@
 """Два предела на случай открытого порта: незавершённых заданий не больше MAX_ACTIVE_JOBS,
 а отложенного звука на диске не больше PAUSED_AUDIO_MAX_BYTES."""
 
+import errno
+import logging
 import os
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -461,3 +464,123 @@ def test_evict_without_a_paused_audio_directory_is_quiet(manager):
     manager._evict()
 
     assert not PAUSED_AUDIO_DIR.exists()
+
+
+# ── уборка звука не роняет запрос ────────────────────────────────────────
+
+
+def refuse_in_audio_dir(monkeypatch, method):
+    """Подменить метод Path: внутри каталога звука пауз он отказывает правами.
+
+    Отказ такой же, как у настоящего каталога без прав: PermissionError с именем пути.
+    Права на сам каталог тесту не годятся: под root их не проверяет никто, и тест
+    проходил бы там, где ничего не проверил. Пути вне каталога работают как обычно, чтобы
+    подмена не задела ни остальной демон, ни pytest.
+    """
+    original = getattr(Path, method)
+
+    def refusing(self, *args, **kwargs):
+        if PAUSED_AUDIO_DIR in (self, self.parent):
+            raise PermissionError(errno.EACCES, "Permission denied", str(self))
+
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, method, refusing)
+
+
+@pytest.mark.parametrize("method", ["iterdir", "stat", "unlink"])
+def test_disk_errors_in_audio_housekeeping_do_not_fail_a_request(
+    manager, audio_dir, clock, monkeypatch, caplog, method
+):
+    # Уборка идёт в конце каждого get_or_create, то есть на каждом опросе, что создаёт
+    # задания, и отказ диска в ней ронял запрос, когда задание уже заведено и запущено:
+    # клиент получал 500, а задание работало. Каталог, куда демону нельзя, не убирает и
+    # перезапуск: rmtree с ignore_errors его просто пропускает.
+    monkeypatch.setattr(jobs, "PAUSED_AUDIO_MAX_BYTES", CHUNK_BYTES)
+    watched = manager.get_or_create("video00000a", "ru", True)
+    abandoned = manager.get_or_create("video00001a", "ru", True)
+    # Звука больше бюджета, и одна пауза брошена: уборка доходит до всех трёх мест —
+    # срока, перечня каталога и бюджета.
+    stash(watched, mtime=1000)
+    stash(abandoned, mtime=2000)
+    orphan = audio_dir / "orphan.f32"
+    orphan.write_bytes(bytes(CHUNK_BYTES))
+    os.utime(orphan, (500, 500))
+    clock(PAUSED_AUDIO_TTL + 1)
+    refuse_in_audio_dir(monkeypatch, method)
+    caplog.set_level(logging.WARNING, logger="helper.jobs")
+
+    # Опрос существующего задания отдаёт его, а новое заводится, регистрируется и
+    # запускается: уборка не удалась, но запрос от этого не зависит.
+    assert manager.get_or_create("video00000a", "ru", True) is watched
+
+    fresh = manager.get_or_create("video00002a", "ru", True)
+
+    assert manager.get("video00002a", True) is fresh
+    assert manager.started[-1] == "video00002a"
+
+    # Отказ не проглочен молча: в журнале сказано, какой путь и почему.
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "helper.jobs" and record.levelno == logging.WARNING
+    ]
+
+    assert warnings
+    assert all(str(PAUSED_AUDIO_DIR) in message for message in warnings)
+    assert all("Permission denied" in message for message in warnings)
+
+
+def test_audio_that_cannot_be_removed_still_counts_against_the_budget(
+    manager, audio_dir, monkeypatch
+):
+    monkeypatch.setattr(jobs, "PAUSED_AUDIO_MAX_BYTES", CHUNK_BYTES)
+    stuck, middle, fresh = (audio_dir / name for name in ("stuck.f32", "middle.f32", "fresh.f32"))
+
+    for age, path in enumerate((stuck, middle, fresh)):
+        path.write_bytes(bytes(CHUNK_BYTES))
+        os.utime(path, (1000 + age, 1000 + age))
+
+    original = Path.unlink
+
+    def refusing(self, *args, **kwargs):
+        if self == stuck:
+            raise PermissionError(errno.EPERM, "Operation not permitted", str(self))
+
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refusing)
+
+    manager._evict()
+
+    # Бюджет — это то, что лежит на диске. Самый старый не стёрся и место занимает
+    # по-прежнему, поэтому остаётся в сумме, а уложиться в предел бюджет добирает
+    # следующими по старшинству.
+    assert stuck.exists()
+    assert not middle.exists()
+    assert not fresh.exists()
+
+
+def test_a_handle_cleared_between_two_reads_does_not_fail_a_request(
+    manager, audio_dir, monkeypatch
+):
+    job = manager.get_or_create("video00000a", "ru", True)
+    path = stash(job, mtime=1000)
+    reads = []
+
+    def handle(self):
+        # Первое чтение видит файл, следующие — уже нет: между ними рабочий поток позвал
+        # discard_audio (take_audio и stash_audio идут через to_thread).
+        reads.append(self)
+
+        return path if len(reads) == 1 else None
+
+    # Свойство на классе заслоняет поле экземпляра. Так ручка пропадает ровно между
+    # двумя чтениями, без потоков и без гонки в самом тесте.
+    monkeypatch.setattr(
+        jobs.Job, "_audio_path", property(handle, lambda self, value: None), raising=False
+    )
+
+    # Уборка читает ручку задания один раз: второе чтение после проверки на None упало
+    # бы AttributeError на опросе.
+    assert manager.get_or_create("video00000a", "ru", True) is job
