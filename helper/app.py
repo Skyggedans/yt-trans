@@ -35,7 +35,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 
-from helper.jobs import JobManager, Stage
+from helper.jobs import CapacityError, JobManager, Stage, refusal_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +62,21 @@ ALLOWED_ORIGIN_SCHEMES = ("chrome-extension://", "moz-extension://", "safari-web
 # попали бы числами. Параметр /events сюда не относится: его строго разбирает сам
 # FastAPI (authorTrack: bool).
 AUTHOR_TRACK_REFUSAL = "authorTrack должен быть true или false"
+
+
+def refusal_event(video_id: str, message: str, retryable: bool) -> dict:
+    """Отказ на watch событием сокета: вид тот же, что у падения задания, плюс videoId.
+
+    Задания, от чьего имени сообщить, у отказа нет, а сокету иначе не узнать, о каком
+    ролике речь.
+    """
+    return {
+        "type": "state",
+        "stage": "error",
+        "videoId": video_id,
+        "message": message,
+        "retryable": retryable,
+    }
 
 
 def load_token() -> str:
@@ -160,7 +175,10 @@ async def create_job(payload: dict) -> dict:
     if not isinstance(author_track, bool):
         raise HTTPException(status_code=400, detail=AUTHOR_TRACK_REFUSAL)
 
-    job = manager.get_or_create(video_id, target, author_track)
+    try:
+        job = manager.get_or_create(video_id, target, author_track)
+    except CapacityError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     return {"videoId": job.video_id, "stage": job.stage.value}
 
@@ -201,11 +219,25 @@ async def job_events(
     # означало бы, что F5 сам начал качать аудио и занимать карту. Вариант дорожки
     # берётся тот же, что у обычного опроса: у ролика бывает по заданию на каждый,
     # и вкладка должна подхватить своё, а не соседнее.
-    job = (
-        manager.get_or_create(video_id, target, authorTrack)
-        if create
-        else manager.attach(video_id, authorTrack)
-    )
+    if create:
+        try:
+            job = manager.get_or_create(video_id, target, authorTrack)
+        except CapacityError as exc:
+            # Отказ — ответ 200 со снимком в стадии error, а не 429. На ответ не 200
+            # расширение пишет «демон ответил …», как о сломанном демоне, и повторяет
+            # запрос через паузу, а снимок со стадией error показывает фразой и опрос
+            # останавливает: зритель повторит кнопкой, когда захочет. Это единственный
+            # путь, которым расширение создаёт задания. Курсор клиента возвращается как
+            # есть: у отказа нет журнала, и двигаться клиенту некуда, как в ветке gone ниже.
+            return {
+                "cursor": cursor,
+                "events": [],
+                "snapshot": refusal_snapshot(
+                    video_id, target, authorTrack, str(exc), retryable=True
+                ),
+            }
+    else:
+        job = manager.attach(video_id, authorTrack)
 
     if job is None:
         return {"gone": True, "cursor": cursor, "events": []}
@@ -345,13 +377,7 @@ async def websocket(socket: WebSocket) -> None:
                         # остальными событиями. Отправка из цикла приёма была бы вторым
                         # писателем. Подписка при этом не делается.
                         events.put_nowait(
-                            {
-                                "type": "state",
-                                "stage": "error",
-                                "videoId": video_id,
-                                "message": AUTHOR_TRACK_REFUSAL,
-                                "retryable": False,
-                            }
+                            refusal_event(video_id, AUTHOR_TRACK_REFUSAL, retryable=False)
                         )
 
                         continue
@@ -361,9 +387,17 @@ async def websocket(socket: WebSocket) -> None:
                     # задание. Под прежним условием повторный watch по уже наблюдаемому
                     # ролику был полной пустышкой, и после вытеснения задание висело
                     # в паузе, пока клиент не разорвёт соединение целиком.
-                    job = manager.get_or_create(
-                        video_id, message.get("targetLang", "ru"), author_track
-                    )
+                    try:
+                        job = manager.get_or_create(
+                            video_id, message.get("targetLang", "ru"), author_track
+                        )
+                    except CapacityError as exc:
+                        # Через ту же очередь и тем же видом, что отказ выше, но
+                        # повторяемый: место освободится само, и зрителю нужна кнопка
+                        # повтора. Подписки нет — не на что.
+                        events.put_nowait(refusal_event(video_id, str(exc), retryable=True))
+
+                        continue
 
                     # Сокет следит не больше чем за одним вариантом ролика, и watch
                     # с другим признаком значит «теперь мне нужен этот»: очередь
