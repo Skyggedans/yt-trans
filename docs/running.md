@@ -26,8 +26,8 @@ journalctl --user -u yt-trans
 ```
 
 Хозяина нет в списке (команду запускают из чужого сеанса) — менеджера нет,
-виноват выход из сеанса. Хозяин в списке, а демон не `active` — он упал сам,
-причина в журнале. Демон `active` — дело в обрыве на петле.
+виноват выход или загрузка без входа. Хозяин в списке, а демон не `active` —
+он упал сам, причина в журнале. Демон `active` — дело в обрыве на петле.
 
 ## Как сейчас
 
@@ -99,8 +99,6 @@ udev `uaccess` (`/dev/snd/*` с ACL, `/etc/udev/rules.d/70-tobii-uaccess.rules`)
 - Вставкой зависимость не убрать. systemd.unit(5), пример 2: «dependencies can
   only be added in drop-ins. If you want to remove dependencies, you have to
   override the entire unit».
-- `tobiid` пережил бы выход: `PartOf` у `tobii-gaze-keys` до него не
-  дотягивается.
 - Что даст запуск `pipewire`, `wireplumber` и `tobiid` до входа, не проверено,
   поэтому откатили до первой перезагрузки: `disable-linger` выполнен, вставки и
   ссылки убраны (прежний `debug.conf` у `tobii-gaze-keys` на месте).
@@ -112,21 +110,38 @@ udev `uaccess` (`/dev/snd/*` с ACL, `/etc/udev/rules.d/70-tobii-uaccess.rules`)
 1. Править юниты там, откуда их раскладывают:
    `~/Work/system-config/files/home/.config/systemd/user/`, а для
    `tobii-gaze-keys` ещё `~/Work/tobii/systemd/` (юниты tobii приходят
-   пакетом). Правка в развёрнутом файле пропадёт: `deploy.sh` кладёт файлы из
-   репозитория через `rsync -a --backup` без `--delete`, а `enable_user`
-   включает юнит, только если он ещё не `enabled`.
-2. Убрать явные подтяжки — `Wants=pipewire.service` у `guitar-monitor-link` и
-   `Requires=tobiid.service` у `tobii-gaze-keys` — и положиться на сокеты:
-   `pipewire.socket` и `tobiid.socket` включены для всех. Осторожно: по
-   комментарию в юните, `Requires=` связывает жизнь клиента с жизнью демона,
-   так что замена не бесплатна.
+   пакетом). `deploy.sh` кладёт эти юниты записями `file` из `manifest.txt`
+   через `put_file`: прежний файл уходит в резерв (`cp -a`), поверх ставится
+   файл из репозитория (`install -D -m`). Так что правка прямо в развёрнутом
+   файле пропадёт при следующей раскладке, если прежде не снять её в
+   репозиторий через `collect.sh`.
+2. По желанию — убрать явные подтяжки (`Wants=pipewire.service` у
+   `guitar-monitor-link` и `Requires=tobiid.service` у `tobii-gaze-keys`) и
+   положиться на сокеты: `pipewire.socket` и `tobiid.socket` включены для всех.
+   Без этого шага можно обойтись: юнит, который при загрузке никто не хочет,
+   свои `Wants=` и `Requires=` не вычисляет вовсе, так что вес несёт шаг 3. А
+   цена у шага есть: по комментарию в юните, `Requires=` связывает жизнь
+   клиента с жизнью демона, и без него эта связь пропадёт.
 3. Привязать сеансовые юниты к `graphical-session.target` в самих юнитах, а не
    через `ConditionEnvironment`, чья верность зависит от того, когда рабочий
    стол передаст дисплей менеджеру: `WantedBy=graphical-session.target` в
    `[Install]` и `PartOf=graphical-session.target` в `[Unit]` (так советует
    systemd.special(7); образец в том же каталоге — `deskflow-rearm.service`).
-   После правки проверить, где лежат ссылки включения: уже включённый юнит
-   `enable_user` не трогает.
+
+   Новый `[Install]` сам ссылок не переставит. Уже включённый юнит сохранит
+   прежнюю ссылку из `default.target.wants`, `is-enabled` так и ответит
+   `enabled`, и `enable_user` в `deploy.sh`, который включает только ещё не
+   включённое, юнит пропустит. Поэтому после раскладки переставить ссылки
+   руками, один раз, и проверить, что `default.target` в `WantedBy=` больше нет:
+
+   ```
+   systemctl --user reenable keep-soundbar-alive guitar-monitor-link tobii-gaze-keys
+   systemctl --user show -p Id,WantedBy keep-soundbar-alive guitar-monitor-link tobii-gaze-keys
+   ```
+
+   `reenable`, как и `disable`, снимает все ссылки на юнит, в том числе
+   поставленную руками `~/.config/systemd/user/tobiid.service.wants/tobii-gaze-keys.service`.
+   Если она нужна, её придётся поставить заново.
 4. Выйти и войти один раз: звук и клавиши взгляда должны работать.
 5. Только потом `enable-linger`, и после выхода убедиться из сеанса другого
    пользователя, что порт слушается:
