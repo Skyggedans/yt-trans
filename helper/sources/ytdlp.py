@@ -56,17 +56,29 @@ THROTTLED = re.compile(
     re.IGNORECASE,
 )
 
+# Возрастное ограничение. Анонимно оно окончательное, но, в отличие от прочих,
+# снимается входом в аккаунт — поэтому отдельным выражением: по нему задание
+# решает, идти ли за роликом ещё раз с аккаунтом из настроек. «Sign in to
+# confirm you’re not a bot» сюда не относится: это проверка на бота, она
+# в THROTTLED, и аккаунт под неё подставлять нельзя.
+AGE_RESTRICTED = re.compile(
+    r"confirm your age|age-restricted|inappropriate for some users",
+    re.IGNORECASE,
+)
+
 # Окончательные: ролика нет, он закрыт, платный, с возрастным ограничением,
 # недоступен из этой страны или ещё не вышел в эфир. Ничего из этого не пройдёт
-# само, сколько ни повторяй.
+# само, сколько ни повторяй. Файл cookies, который yt-dlp не смог разобрать,
+# тоже: пока его не заменят, каждая попытка упадёт так же.
 PERMANENT = re.compile(
     r"Video unavailable|This video is (?:unavailable|not available|private)|Private video"
     r"|has been removed|no longer available|account .{0,80}terminated"
     r"|members-only|members on level|Join this channel"
-    r"|confirm your age|age-restricted|inappropriate for some users"
+    rf"|{AGE_RESTRICTED.pattern}"
     r"|live event will begin|Premieres? in |Premiere will begin"
     r"|not made this video available in your country|not available from your location"
-    r"|Incomplete YouTube ID|Unsupported URL",
+    r"|Incomplete YouTube ID|Unsupported URL"
+    r"|Netscape format cookies file",
     re.IGNORECASE,
 )
 
@@ -119,6 +131,7 @@ class YtDlpError(RuntimeError):
     permanent — отказ, который сам не пройдёт, и повторять его бессмысленно
     ни сейчас, ни через минуту. Оба False — ни то ни другое: например,
     ограничение частоты, которое сразу повторять вредно, а позже можно.
+    age_restricted — ролик 18+: анонимно окончательно, с аккаунтом может пройти.
     diagnostics — подробности для журнала, не для зрителя.
     """
 
@@ -128,11 +141,13 @@ class YtDlpError(RuntimeError):
         *,
         transient: bool = False,
         permanent: bool = False,
+        age_restricted: bool = False,
         diagnostics: str = "",
     ) -> None:
         super().__init__(message)
         self.transient = transient
         self.permanent = permanent
+        self.age_restricted = age_restricted
         self.diagnostics = diagnostics
 
 
@@ -141,7 +156,13 @@ def _failure(message: str, detail: str, diagnostics: str = "") -> YtDlpError:
     transient, permanent = _classify(detail)
 
     return YtDlpError(
-        message, transient=transient, permanent=permanent, diagnostics=diagnostics
+        message,
+        transient=transient,
+        permanent=permanent,
+        # Только среди окончательных: ограничение частоты разбирается первым,
+        # и подставлять под него аккаунт нельзя, даже если в тексте нашлось бы и то и другое.
+        age_restricted=permanent and bool(AGE_RESTRICTED.search(detail)),
+        diagnostics=diagnostics,
     )
 
 
@@ -188,7 +209,13 @@ class VideoInfo:
         return self.live_status in ("is_live", "is_upcoming", "post_live")
 
 
-def _ytdlp_cmd(*args: str, warnings: bool = False) -> list[str]:
+def _ytdlp_cmd(*args: str, warnings: bool = False, cookies: Path | None = None) -> list[str]:
+    """Вызов yt-dlp. cookies — аккаунт, и только для роликов 18+: всё прочее анонимно.
+
+    Аккаунт, которым ходит yt-dlp, YouTube может забанить, поэтому он отдельный,
+    а не зрителя, и подставляется лишь туда, где без него никак. yt-dlp при выходе
+    дописывает в файл обновлённые cookies — так сессия и живёт дольше.
+    """
     YTDLP_CACHE.mkdir(parents=True, exist_ok=True)
 
     return [
@@ -208,6 +235,7 @@ def _ytdlp_cmd(*args: str, warnings: bool = False) -> list[str]:
         # запуск платит 1.5–4 с холодного извлечения.
         "--cache-dir",
         str(YTDLP_CACHE),
+        *(["--cookies", str(cookies)] if cookies else []),
         *args,
     ]
 
@@ -253,7 +281,7 @@ def _caption_tracks(raw: dict, key: str) -> list[CaptionTrack]:
     return tracks
 
 
-def probe(video_id: str, timeout: float = 90.0) -> VideoInfo:
+def probe(video_id: str, timeout: float = 90.0, *, cookies: Path | None = None) -> VideoInfo:
     """Метаданные ролика одним вызовом: дорожки, заголовок, описание, теги, главы.
 
     `skip=translated_subs` существенно: без него yt-dlp материализует ~200 tlang-вариантов
@@ -267,6 +295,7 @@ def probe(video_id: str, timeout: float = 90.0) -> VideoInfo:
             "--extractor-args",
             "youtube:skip=translated_subs",
             f"https://www.youtube.com/watch?v={_check_id(video_id)}",
+            cookies=cookies,
         ),
         timeout=timeout,
     )
@@ -314,7 +343,9 @@ SPEAKER_MARKER = re.compile(r"(^|\s)>{2,}\s*")
 SOUND_MARKER = re.compile(r"\[[^\]]{1,30}\]")
 
 
-def fetch_manual_track(video_id: str, lang: str, timeout: float = 120.0) -> list[dict]:
+def fetch_manual_track(
+    video_id: str, lang: str, timeout: float = 120.0, *, cookies: Path | None = None
+) -> list[dict]:
     """Скачать авторскую дорожку субтитров и разобрать в реплики.
 
     Качаем через сам yt-dlp, а не прямым запросом по baseUrl: у ссылки со страницы
@@ -338,6 +369,7 @@ def fetch_manual_track(video_id: str, lang: str, timeout: float = 120.0) -> list
                 "-o",
                 f"{tmp}/track.%(ext)s",
                 f"https://www.youtube.com/watch?v={_check_id(video_id)}",
+                cookies=cookies,
             ),
             timeout=timeout,
         )
@@ -483,7 +515,7 @@ class _Trace:
         return "\n".join(lines)
 
 
-def audio_pcm(video_id: str, timeout: float = 900.0) -> np.ndarray:
+def audio_pcm(video_id: str, timeout: float = 900.0, *, cookies: Path | None = None) -> np.ndarray:
     """Аудиодорожка ролика как float32 mono 16 кГц, без промежуточных файлов.
 
     Пайп `yt-dlp -o - | ffmpeg` намеренно выбран вместо передачи прямого URL в ffmpeg:
@@ -515,6 +547,7 @@ def audio_pcm(video_id: str, timeout: float = 900.0) -> np.ndarray:
             "-",
             f"https://www.youtube.com/watch?v={_check_id(video_id)}",
             warnings=True,
+            cookies=cookies,
         ),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

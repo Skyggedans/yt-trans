@@ -198,6 +198,10 @@ class Job:
         # возобновление после паузы не обращалось за ней к YouTube снова: пока
         # карта занята, пауза повторяется каждые две минуты.
         self.track_failed = False
+        # Ролик 18+, и анонимно YouTube его не отдал. Дальше всё по нему — метаданные,
+        # дорожка, звук, в том числе после паузы — идёт с аккаунтом из настроек;
+        # любой другой ролик аккаунта не касается.
+        self.account = False
         self.created_at = time.time()
 
         # Журнал событий с курсором. Нужен для длинных опросов: клиент говорит,
@@ -516,7 +520,7 @@ class JobRunner:
         # иначе задание упало бы, а не встало на паузу.
         if job.info is None:
             job._set_stage(Stage.PROBING)
-            job.info = await self._with_retries(job, Stage.PROBING, probe)
+            job.info = await self._fetch(job, Stage.PROBING, probe)
 
             # Проверка раньше is_live, который включает и этот случай. Эфир уже
             # закончился, YouTube собирает из него запись, и через минуты или часы
@@ -563,10 +567,12 @@ class JobRunner:
                 # С повторами, как метаданные и звук: отказ запоминается на всё
                 # задание (track_failed), и разовый 403 иначе навсегда променял бы
                 # дорожку автора на распознавание.
-                segments = await self._with_retries(
+                segments = await self._fetch(
                     job,
                     Stage.FETCHING,
-                    lambda video_id: fetch_manual_track(video_id, track.lang),
+                    lambda video_id, *, cookies: fetch_manual_track(
+                        video_id, track.lang, cookies=cookies
+                    ),
                     source=source,
                 )
             except YtDlpError as exc:
@@ -626,7 +632,7 @@ class JobRunner:
 
             if audio is None:
                 job._set_stage(Stage.FETCHING)
-                audio = await self._with_retries(job, Stage.FETCHING, audio_pcm, held=held)
+                audio = await self._fetch(job, Stage.FETCHING, audio_pcm, held=held)
 
             duration = audio.size / SAMPLE_RATE
 
@@ -673,6 +679,57 @@ class JobRunner:
 
         await self._finish_translation(job)
 
+    async def _fetch(self, job: Job, stage: Stage, fetch, **kwargs):
+        """Обращение к YouTube: анонимно, а за роликом 18+ — с аккаунтом из настроек.
+
+        Сначала всегда анонимно, и аккаунт подставляется, только когда YouTube
+        отказал именно возрастным ограничением. Заранее ролик 18+ от обычного
+        не отличить, а лишний запрос под аккаунтом — это лишний шанс его потерять:
+        по словам самого yt-dlp, YouTube банит аккаунты, через которые он ходит.
+
+        Все отказы, связанные с аккаунтом, окончательные. Повторяемый пересоздаётся
+        опросом раз в минуту, пока вкладка открыта, и это значило бы стучаться
+        к YouTube под аккаунтом каждую минуту. Починить их всё равно может только
+        человек: подключить аккаунт или выгрузить свежие cookies — и перезапустить демон.
+        """
+        try:
+            return await self._with_retries(job, stage, fetch, **kwargs)
+        except YtDlpError as exc:
+            if not exc.age_restricted:
+                raise
+
+            diagnostics = "\n".join(filter(None, [str(exc), exc.diagnostics]))
+
+            if job.account:
+                raise YtDlpError(
+                    "ролик 18+, и аккаунт из настроек YouTube его не открыл: cookies "
+                    "устарели или у аккаунта не подтверждён возраст",
+                    permanent=True,
+                    diagnostics=diagnostics,
+                ) from exc
+
+            cookies = self._config.youtube.cookies_path
+
+            if cookies is None:
+                raise YtDlpError(
+                    "ролик 18+: YouTube отдаёт его только вошедшему, а аккаунт для "
+                    "таких роликов не подключён — [youtube] cookies в config.toml демона",
+                    permanent=True,
+                    diagnostics=diagnostics,
+                ) from exc
+
+            if not cookies.is_file():
+                raise YtDlpError(
+                    f"ролик 18+, а файла cookies из настроек нет: {cookies}",
+                    permanent=True,
+                    diagnostics=diagnostics,
+                ) from exc
+
+            log.info("%s: ролик 18+, иду за ним с аккаунтом из настроек", job.video_id)
+            job.account = True
+
+            return await self._fetch(job, stage, fetch, **kwargs)
+
     async def _with_retries(self, job: Job, stage: Stage, fetch, *, held=None, **extra):
         """Метаданные или звук, с повтором временных сбоев на месте.
 
@@ -699,10 +756,11 @@ class JobRunner:
         чтобы кнопка не превращала «качаю дорожку автора» в «качаю звук».
         """
         started = time.monotonic()
+        cookies = self._config.youtube.cookies_path if job.account else None
 
         for attempt in range(1, FETCH_ATTEMPTS + 1):
             try:
-                return await asyncio.to_thread(fetch, job.video_id)
+                return await asyncio.to_thread(fetch, job.video_id, cookies=cookies)
             except YtDlpError as exc:
                 if held is not None:
                     held.check()
