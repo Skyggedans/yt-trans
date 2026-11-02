@@ -794,6 +794,33 @@ def _log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None:
                     job.video_id, silent)
 
 
+def track_key(config: Config, video_id: str, fingerprint: str, pin: str | None) -> CacheKey:
+    """Ключ кэша дорожки. Рецепт один: по нему ищет и пишет конвейер и ищет восстановление.
+
+    Язык в ключе — закрепление человека (pin; None — не закреплён), а не действующий
+    язык, хотя замысел велел иначе: «в ключ кэша идёт действующий язык… поиск по
+    объявленному, запись под действующим». Кэш обязан ответить до любой работы на карте
+    (докстрока helper/cache.py), а действующий язык появляется только после воркера.
+    Когда язык закрепил человек, действующий с ним совпадает, а решение по
+    незакреплённому ролику лежит в самой записи и видно на проводе.
+
+    Метаданные YouTube в ключ не входят: канал Juske помечен en при сербской речи, и язык
+    такого ролика решает определитель. targetLang не входит тоже: на выходе всегда
+    русская и черногорская строки, и клиент с другим targetLang получает ту же дорожку.
+
+    Обе модели входят в ключ, поэтому смена любой из них обесценивает старые дорожки
+    автоматически, а не подсовывает перевод от другой модели.
+    """
+    return CacheKey(
+        video_id=video_id,
+        pin=pin or "",
+        asr_model=f"{config.asr.model}/{config.asr.compute_type}",
+        translator_model=config.translator.model,
+        study_lang=config.translator.study_language,
+        track_fingerprint=fingerprint,
+    )
+
+
 class JobRunner:
     """Выполняет задание, соблюдая дисциплину GPU."""
 
@@ -811,17 +838,11 @@ class JobRunner:
         return self._config.translator.model
 
     def _cache_key(self, job: Job) -> CacheKey:
-        # Обе модели входят в ключ, поэтому смена любой из них обесценивает старые
-        # дорожки автоматически, а не подсовывает перевод от другой модели.
-        return CacheKey(
-            video_id=job.video_id,
-            source_lang=self._config.asr.language,
-            target_lang=job.target_lang,
-            asr_model=f"{self._config.asr.model}/{self._config.asr.compute_type}",
-            translator_model=self._mt_model,
-            study_lang=self._config.translator.study_language,
-            track_fingerprint=job.source,
-        )
+        # Объявление — через _declaration, а не hint: негодное закрепление _pipeline уже
+        # отказал через _pin(), а объявление на ролик и на ссылку придёт тоже туда (см.
+        # _declaration). Возобновление после паузы пишет под тем же ключом, под которым
+        # задание искало: настройка не меняется до перезапуска демона.
+        return track_key(self._config, job.video_id, job.source, self._declaration(job)[0])
 
     async def run(self, job: Job) -> None:
         try:
@@ -1285,11 +1306,23 @@ class JobRunner:
 
             return
 
+        if not job.cues:
+            # Пустая дорожка в кэш не идёт. Записанная, она отдавалась бы готовой навсегда
+            # (в кэше демона таких три, одна на 41-минутный ролик), а восстановление
+            # считает её испорченной записью. Цена — ролик без единой реплики не
+            # кэшируется: новое задание по нему — когда реестр вытеснит это (см.
+            # MAX_RETAINED_JOBS) или демон перезапустят — снова качает звук и распознаёт
+            # под пропуском.
+            job._set_stage(Stage.DONE, total=0, cached=False)
+
+            return
+
         await asyncio.to_thread(
             self._cache.put,
             self._cache_key(job),
             [c.payload() for c in job.cues],
             job.info.duration if job.info else None,
+            language=job.language.wire() if job.language else None,
         )
         job._set_stage(Stage.DONE, total=len(job.cues))
 
@@ -1419,8 +1452,17 @@ class JobRunner:
             self._cache.get, self._cache_key(job), job.info.duration
         )
 
-        if not cached:
+        # Запись без реплик — промах, как у restore: готовой такая дорожка не бывает.
+        if not cached or not cached.get("cues"):
             return False
+
+        # Решение раньше реплик, как на свежем распознавании: иначе флаг расхождения
+        # пропадал бы на каждом повторном просмотре. Запись без поля или с негодным —
+        # язык null и события language нет, без падения.
+        verdict = LanguageVerdict.from_wire(cached.get("language"))
+
+        if verdict is not None:
+            job._set_language(verdict)
 
         job.cues = [
             JobCue(
@@ -1817,15 +1859,15 @@ class JobManager:
 
         return job
 
-    def _key_for(self, video_id: str, target_lang: str, fingerprint: str) -> CacheKey:
-        return CacheKey(
-            video_id=video_id,
-            source_lang=self.config.asr.language,
-            target_lang=target_lang,
-            asr_model=f"{self.config.asr.model}/{self.config.asr.compute_type}",
-            translator_model=self.config.translator.model,
-            study_lang=self.config.translator.study_language,
-            track_fingerprint=fingerprint,
+    def _key_for(self, video_id: str, fingerprint: str) -> CacheKey:
+        # Тот же рецепт, что у конвейера (track_key), иначе восстановление молча не
+        # находило бы сделанного. Закрепление — через hint, а не _pin: восстановление
+        # только читает и не отказывает. Негодное закрепление отказывает задание
+        # в конвейере, а ролики, закэшированные без закрепа, по-прежнему открываются:
+        # восстановление читает негодный код как «не закреплено»; сделанные при прежнем
+        # годном закрепе не находятся, пока код не исправлен.
+        return track_key(
+            self.config, video_id, fingerprint, language.hint(self.config.asr.language)
         )
 
     def restore(
@@ -1861,7 +1903,7 @@ class JobManager:
 
             return job
 
-        payload = self._cached_variant(video_id, target_lang, use_author_track, duration)
+        payload = self._cached_variant(video_id, use_author_track, duration)
 
         # Пустая дорожка — это не «всё готово», а испорченная запись. Отдай мы её,
         # оверлей включился бы, спрятал кнопку по стадии done и не показал ничего,
@@ -1871,6 +1913,13 @@ class JobManager:
 
         job = Job(video_id, target_lang, use_author_track)
         job.source = payload.get("track_fingerprint", "asr")
+        # Решение раньше реплик, как у _serve_cached; запись без него или с негодным —
+        # язык null и события language нет.
+        verdict = LanguageVerdict.from_wire(payload.get("language"))
+
+        if verdict is not None:
+            job._set_language(verdict)
+
         job.cues = [
             JobCue(
                 index=i,
@@ -1894,11 +1943,7 @@ class JobManager:
         return job
 
     def _cached_variant(
-        self,
-        video_id: str,
-        target_lang: str,
-        use_author_track: bool,
-        duration: float | None = None,
+        self, video_id: str, use_author_track: bool, duration: float | None = None
     ) -> dict | None:
         """Сохранённая дорожка, отвечающая текущим настройкам.
 
@@ -1906,18 +1951,25 @@ class JobManager:
         совпадение ключа и означает, что дорожка сделана теми же моделями и тем же
         промптом, что стоят сейчас. Иначе восстановление подсовывало бы результат
         от другой модели, обходя ровно ту проверку, ради которой ключ и заведён.
+
+        Закрепление в пересчитанном ключе — нынешнее, из настройки, а не записанное
+        в файле. Поэтому запись, сделанная при другом закреплении, при другой модели
+        или версии, не находится, но и не удаляется.
         """
+        # Из записи берётся только отпечаток. Ключ у отпечатка один, а get пишет used_at,
+        # поэтому на каждый отпечаток — один get, сколько бы записей его ни несли.
+        fingerprints = dict.fromkeys(
+            stored.get("track_fingerprint", "asr")
+            for stored in self.cache.variants(video_id)
+        )
         found: dict[str, dict] = {}
 
-        for stored in self.cache.variants(video_id):
-            fingerprint = stored.get("track_fingerprint", "asr")
+        for fingerprint in fingerprints:
             # Длительность приходит от самого плеера: страница её знает точно,
             # и запрашивать метаданные у YouTube на каждой загрузке не нужно.
             # Без этой сверки перезалитый под тем же идентификатором ролик
             # молча получал бы съехавшие тайминги.
-            hit = self.cache.get(
-                self._key_for(video_id, target_lang, fingerprint), duration
-            )
+            hit = self.cache.get(self._key_for(video_id, fingerprint), duration)
 
             if hit is not None:
                 found[fingerprint] = hit
@@ -1926,7 +1978,14 @@ class JobManager:
             # Дорожка автора приоритетнее — при включённом переключателе конвейер
             # выбрал бы её же. Её отсутствие означает, что у ролика её просто нет,
             # и распознавание для этой настройки такой же законный результат.
-            manual = next((v for k, v in found.items() if k.startswith("manual:")), None)
+            #
+            # Из нескольких дорожек автора (manual:sr и manual:sr-Latn) — самая свежая
+            # по created_at, последняя сделанная, а не первая по порядку строк индекса.
+            manual = max(
+                (v for k, v in found.items() if k.startswith("manual:")),
+                key=lambda v: v.get("created_at") or 0.0,
+                default=None,
+            )
 
             return manual or found.get("asr")
 

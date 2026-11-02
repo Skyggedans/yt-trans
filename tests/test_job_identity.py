@@ -332,7 +332,7 @@ def test_restore_from_cache_registers_the_variant_under_its_own_key(manager):
     # должен оставаться без сохранённых дорожек.
     video = "cachedvideo"
     cues = [{"start": 0.0, "end": 1.5, "src": "Zdravo", "lines": ["Привет"]}]
-    manager.cache.put(manager._key_for(video, "ru", "asr"), cues, 10.0)
+    manager.cache.put(manager._key_for(video, "asr"), cues, 10.0)
     live = manager.get_or_create(video, "ru", True)
 
     restored = manager.restore(video, "ru", False, 10.0)

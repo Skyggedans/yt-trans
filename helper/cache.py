@@ -6,7 +6,9 @@
 
 Ключ содержательный, а не временной. Срок годности здесь не нужен: если поменялась
 модель, промпт или схема — поменяется ключ, и старая запись просто перестанет
-находиться, а потом уедет по LRU.
+находиться. С диска она сама не уходит: вытеснение по давности чтения идёт только
+внутри put и только когда записи переросли бюджет, так что осиротевшие лежат, пока
+его хватает. Удалять их — решение хозяина.
 """
 
 from __future__ import annotations
@@ -21,10 +23,13 @@ from pathlib import Path
 
 from helper.env import CACHE_DIR, TRACKS_DIR
 
-# Поднимать при любом изменении промпта или формата записи — это часть ключа,
-# поэтому смена версии автоматически обесценивает старые записи.
+# Поднимать при любом изменении промпта — это часть ключа, поэтому смена версии
+# автоматически обесценивает старые записи.
 PROMPT_VERSION = 1
-SCHEMA_VERSION = 1
+
+# Формат записи на диске: поднимать, когда меняется то, что пишет put.
+# 2 — запись несёт language и pin вместо source_lang и target_lang.
+SCHEMA_VERSION = 2
 
 DEFAULT_BUDGET_MIB = 2048
 
@@ -32,8 +37,10 @@ DEFAULT_BUDGET_MIB = 2048
 @dataclass(frozen=True)
 class CacheKey:
     video_id: str
-    source_lang: str
-    target_lang: str
+    # Язык, закреплённый человеком в [asr] language, нормализованный; "" — не закреплён.
+    # Ни "auto", ни метаданных YouTube тут не бывает: действующий язык и решение
+    # определителя лежат в самой записи, в поле language.
+    pin: str
     asr_model: str
     translator_model: str
     # Учебный язык второй строки. В ключе обязателен: без него переключение
@@ -48,8 +55,7 @@ class CacheKey:
             [
                 self.video_id,
                 self.track_fingerprint,
-                self.source_lang,
-                self.target_lang,
+                self.pin,
                 self.asr_model,
                 self.translator_model,
                 self.study_lang,
@@ -134,19 +140,30 @@ class TrackCache:
 
         return payload
 
-    def put(self, key: CacheKey, cues: list[dict], length_seconds: float | None) -> None:
+    def put(
+        self,
+        key: CacheKey,
+        cues: list[dict],
+        length_seconds: float | None,
+        *,
+        language: dict | None = None,
+    ) -> None:
         """Сохранить готовую дорожку.
 
         Только целиком: частично переведённое задание не кэшируется никогда, иначе
         обрыв посреди работы навсегда закрепил бы дырявую дорожку под валидным ключом.
+
+        language — решение о языке, LanguageVerdict.wire(), или None. Читатели берут его
+        через .get("language"), и запись без поля отдаётся с языком null.
         """
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         payload = {
             "video_id": key.video_id,
-            "source_lang": key.source_lang,
-            "target_lang": key.target_lang,
+            # Поле ключа пишется в файл по той же причине, что study_lang ниже: без него
+            # запись при разборе глазами не объясняет, почему ключ не сходится.
+            "pin": key.pin,
             "asr_model": key.asr_model,
             "translator_model": key.translator_model,
             # В хэш ключа входит, а в файл не писался — и при разборе глазами
@@ -157,6 +174,7 @@ class TrackCache:
             "prompt_version": PROMPT_VERSION,
             "schema_version": SCHEMA_VERSION,
             "length_seconds": length_seconds,
+            "language": language,
             "created_at": time.time(),
             "cues": cues,
         }
