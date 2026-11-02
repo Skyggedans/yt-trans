@@ -1,10 +1,13 @@
 """Сброс по клиенту: уходящий снимает свою регистрацию, а работа, которую ещё смотрит
 другой, остаётся. Без ключа сброс отменяет всё, как до появления ключей."""
 
+import logging
+
+import numpy as np
 import pytest
 
 from helper import jobs
-from helper.jobs import PLAYHEAD_TTL
+from helper.jobs import PLAYHEAD_TTL, Stage
 
 VIDEO = "abcdefghijk"
 OTHER = "zzzzzzzzzzz"
@@ -227,3 +230,120 @@ async def test_drop_with_an_unusable_client_id_cannot_cancel_for_everyone(
     assert response.status_code == 200
     assert response.json() == {"dropped": VIDEO, "cancelled": False}
     assert manager.get(VIDEO) is job
+
+
+# ── сброс, когда звук паузы не стирается ─────────────────────────────────
+
+
+class LiveTask:
+    """Задача задания, что ещё идёт: отмену запоминает, done() отвечает после неё."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def cancel(self) -> bool:
+        self.cancelled = True
+
+        return True
+
+    def done(self) -> bool:
+        return self.cancelled
+
+
+class RunningWhisper:
+    """Процесс распознавания, что ещё работает: poll() — None, пока его не убили."""
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    def poll(self):
+        return -9 if self.killed else None
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def resumed_in_asr(job):
+    """Возобновлённое задание посреди распознавания: звук паузы на диске, задача и Whisper живы.
+
+    Только такое держит и карту, и звук: при первом проходе звук в памяти, а у паузы нет
+    ни задачи, ни процесса.
+    """
+    job.stage = Stage.ASR
+    job.stash_audio(np.zeros(1000, dtype="<f4"))
+    job._task = LiveTask()
+    job._asr_proc = RunningWhisper()
+
+    return job._audio_path
+
+
+def test_cancel_frees_the_card_even_if_the_paused_audio_stays(
+    manager, audio_dir, refuse_in_audio_dir, caplog, monkeypatch
+):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    path = resumed_in_asr(job)
+    refuse_in_audio_dir("unlink")
+    caplog.set_level(logging.WARNING, logger="helper.jobs")
+    # Что держало карту в тот миг, когда сброс дошёл до звука.
+    seen = []
+    discard = job.discard_audio
+
+    def watched():
+        seen.append((job._asr_proc.killed, job._task.cancelled))
+        discard()
+
+    monkeypatch.setattr(job, "discard_audio", watched)
+
+    job.cancel()
+
+    # Карту держат процесс и задача, и сброс снимает обоих раньше звука, что бы с ним
+    # ни случилось: иначе задание, которое реестр уже забыл, распознавало бы и переводило дальше.
+    assert seen == [(True, True)]
+    assert job._asr_proc.killed
+    assert job._task.cancelled
+    # Звук не стёрся и остался без хозяина; отказ диска — строка в журнале, а не исключение.
+    assert job._audio_path is None
+    assert path.exists()
+    assert any(
+        str(path) in record.getMessage() and "Permission denied" in record.getMessage()
+        for record in caplog.records
+        if record.name == "helper.jobs" and record.levelno == logging.WARNING
+    )
+
+
+def test_drop_with_undeletable_audio_still_stops_every_variant(
+    manager, audio_dir, refuse_in_audio_dir
+):
+    steady = manager.get_or_create(VIDEO, "ru", False)
+    steady._task = LiveTask()
+    stuck = manager.get_or_create(VIDEO, "ru", True)
+    resumed_in_asr(stuck)
+    # Тронуто последним: jobs_for отдаёт его сбросу первым, и отказ на нём не должен
+    # оставить соседний вариант неотменённым. Явно, а не по часам: два вызова подряд
+    # могли бы получить одно показание, и порядок решила бы вставка в реестр.
+    stuck.touched_at = steady.touched_at + 1.0
+    refuse_in_audio_dir("unlink")
+
+    assert manager.jobs_for(VIDEO)[0] is stuck
+    assert manager.drop(VIDEO) is True
+    assert manager.jobs_for(VIDEO) == []
+    assert stuck._asr_proc.killed
+    assert stuck._task.cancelled
+    assert steady._task.cancelled
+
+
+async def test_drop_endpoint_answers_even_if_the_paused_audio_cannot_be_removed(
+    client, manager, audio_dir, refuse_in_audio_dir
+):
+    job = manager.get_or_create(VIDEO, "ru", True)
+    resumed_in_asr(job)
+    refuse_in_audio_dir("unlink")
+
+    response = await client.post(f"/v1/jobs/{VIDEO}/drop")
+
+    # Настоящий сервер на исключение отсюда отвечал 500; ASGITransport тестов
+    # отдаёт его самому тесту.
+    assert response.status_code == 200
+    assert response.json() == {"dropped": VIDEO, "cancelled": True}
+    assert job._asr_proc.killed
+    assert job._task.cancelled

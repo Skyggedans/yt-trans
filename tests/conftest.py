@@ -2,10 +2,12 @@
 
 import asyncio
 import atexit
+import errno
 import os
 import shutil
 import tempfile
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -98,6 +100,48 @@ def clock(monkeypatch):
         now[0] += seconds
 
     return advance
+
+
+@pytest.fixture
+def audio_dir(manager):
+    """Каталог отложенного звука: к началу теста чистый, по окончании убранный.
+
+    После manager, а не раньше: JobManager() при создании сносит этот каталог.
+    Убирать надо и ради разреженных файлов на гигабайты: места они не занимают, но
+    остались бы в каталоге кэша до конца прогона.
+    """
+    from helper.jobs import PAUSED_AUDIO_DIR
+
+    PAUSED_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+
+    yield PAUSED_AUDIO_DIR
+
+    shutil.rmtree(PAUSED_AUDIO_DIR, ignore_errors=True)
+
+
+@pytest.fixture
+def refuse_in_audio_dir(monkeypatch):
+    """Фабрика refuse(method): метод Path внутри каталога звука пауз отказывает правами.
+
+    Отказ такой же, как у настоящего каталога без прав: PermissionError с именем пути.
+    Права на сам каталог тесту не годятся: под root их не проверяет никто, и тест
+    проходил бы там, где ничего не проверил. Пути вне каталога работают как обычно, чтобы
+    подмена не задела ни остальной демон, ни pytest. Подмена держится до конца теста.
+    """
+    from helper.jobs import PAUSED_AUDIO_DIR
+
+    def refuse(method: str) -> None:
+        original = getattr(Path, method)
+
+        def refusing(self, *args, **kwargs):
+            if PAUSED_AUDIO_DIR in (self, self.parent):
+                raise PermissionError(errno.EACCES, "Permission denied", str(self))
+
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, method, refusing)
+
+    return refuse
 
 
 @pytest.fixture

@@ -298,20 +298,6 @@ CHUNK = 1000
 CHUNK_BYTES = CHUNK * 4
 
 
-@pytest.fixture
-def audio_dir(manager):
-    """Каталог отложенного звука: к началу теста чистый, по окончании убранный.
-
-    Убирать надо и ради разреженных файлов на гигабайты: места они не занимают, но
-    остались бы в каталоге кэша до конца прогона.
-    """
-    PAUSED_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-
-    yield PAUSED_AUDIO_DIR
-
-    shutil.rmtree(PAUSED_AUDIO_DIR, ignore_errors=True)
-
-
 def stash(job, mtime):
     """Приостановить задание с настоящим отложенным звуком и задним числом записи."""
     job.stage = Stage.PAUSED
@@ -469,28 +455,9 @@ def test_evict_without_a_paused_audio_directory_is_quiet(manager):
 # ── уборка звука не роняет запрос ────────────────────────────────────────
 
 
-def refuse_in_audio_dir(monkeypatch, method):
-    """Подменить метод Path: внутри каталога звука пауз он отказывает правами.
-
-    Отказ такой же, как у настоящего каталога без прав: PermissionError с именем пути.
-    Права на сам каталог тесту не годятся: под root их не проверяет никто, и тест
-    проходил бы там, где ничего не проверил. Пути вне каталога работают как обычно, чтобы
-    подмена не задела ни остальной демон, ни pytest.
-    """
-    original = getattr(Path, method)
-
-    def refusing(self, *args, **kwargs):
-        if PAUSED_AUDIO_DIR in (self, self.parent):
-            raise PermissionError(errno.EACCES, "Permission denied", str(self))
-
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, method, refusing)
-
-
 @pytest.mark.parametrize("method", ["iterdir", "stat", "unlink"])
 def test_disk_errors_in_audio_housekeeping_do_not_fail_a_request(
-    manager, audio_dir, clock, monkeypatch, caplog, method
+    manager, audio_dir, clock, monkeypatch, caplog, refuse_in_audio_dir, method
 ):
     # Уборка идёт в конце каждого get_or_create, то есть на каждом опросе, что создаёт
     # задания, и отказ диска в ней ронял запрос, когда задание уже заведено и запущено:
@@ -507,7 +474,7 @@ def test_disk_errors_in_audio_housekeeping_do_not_fail_a_request(
     orphan.write_bytes(bytes(CHUNK_BYTES))
     os.utime(orphan, (500, 500))
     clock(PAUSED_AUDIO_TTL + 1)
-    refuse_in_audio_dir(monkeypatch, method)
+    refuse_in_audio_dir(method)
     caplog.set_level(logging.WARNING, logger="helper.jobs")
 
     # Опрос существующего задания отдаёт его, а новое заводится, регистрируется и
