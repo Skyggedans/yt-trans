@@ -11,20 +11,29 @@
 PCM приходит на stdin как f32le 16 кГц mono — ровно то, что отдаёт ffmpeg в
 sources/ytdlp.py, без промежуточных файлов. JSON с репликами уходит в stdout.
 
-  yt-dlp ... | ffmpeg ... -f f32le pipe:1 | python -m helper.asr.worker --language sr
+  yt-dlp ... | ffmpeg ... -f f32le pipe:1 | python -m helper.asr.worker --language auto --hint en
+
+--language — код, закреплённый хозяином, или auto; --hint — метка языка от YouTube;
+определитель слушает запись в любом случае, решение — helper.language.decide.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 
 import numpy as np
 
 import helper.env  # noqa: F401  — уводит кэш весов с ramdisk, обязателен до faster_whisper
 
-SAMPLE_RATE = 16000
+# Под именем lang, а не language: параметры transcribe называются language и hint
+# и затенили бы внутри неё и сам модуль, и его функцию hint.
+from helper import language as lang
+
+# Определение одно, в helper.language; jobs.py и spikes/asr_real.py берут его отсюда.
+SAMPLE_RATE = lang.SAMPLE_RATE
 
 # large-v3, а не large-v3-turbo. Turbo оценивался только на языках, где large-v3
 # показывает WER ≤20%; сербский сидит на 16–29%, то есть в оценку почти наверняка
@@ -33,93 +42,71 @@ SAMPLE_RATE = 16000
 DEFAULT_MODEL = "large-v3"
 
 
-# Окна для определения языка: сколько и в каком диапазоне длительности их брать.
-# С начала брать нельзя — там заставка, музыка или реклама спонсора, и язык
-# определился бы по ним. Замерено на этом корпусе: у KCR-dkZIhxY первая реплика
-# начинается на 21-й секунде, то есть первое тридцатисекундное окно на две трети
-# состоит из заставки.
-PROBE_WINDOWS = 8
-PROBE_SPAN = (0.10, 0.90)
-WINDOW_SECONDS = 30
+def _speech_seconds(audio: np.ndarray) -> float:
+    """Секунды речи в отрывке.
 
-# Языки, между которыми Whisper не различает: bs/hr/sr — это три метки одного языка,
-# попавшие в обучение из VoxLingua107 по недосмотру, и выбор между ними произволен.
-# Любую из них трактуем как сербский, потому что дальше по конвейеру ждут его.
-BCMS = frozenset({"sr", "hr", "bs", "sh", "me", "cnr"})
-
-
-def _detect(model, audio: np.ndarray) -> tuple[str, float]:
-    """Определить язык речи по отрывку из середины записи.
-
-    Модель принимается уже загруженной: определение и распознавание идут одной
-    и той же, и грузить её дважды значит платить лишние секунды и лишнюю память.
-
-    Определяем по куску, а не по всей записи — на часовом ролике это разница
-    между долями секунды и минутами. Отрывок берётся с 40% длительности:
-    начало занято заставкой, музыкой или рекламой спонсора, и язык определился
-    бы по ним, а не по речи.
+    Тот же VAD с теми же умолчаниями, что у detect_language(vad_filter=True), — ровно
+    столько определитель и услышит.
     """
-    window = WINDOW_SECONDS * SAMPLE_RATE
+    # Импорт здесь, а не наверху: jobs.py импортирует этот модуль ради SAMPLE_RATE, и
+    # faster_whisper процессу демона не нужен. Заодно подмена get_speech_timestamps
+    # в тестах видна: атрибут читается при каждом вызове.
+    from faster_whisper.vad import get_speech_timestamps
 
-    if audio.size <= window:
-        language, probability, _ = model.detect_language(audio, vad_filter=True)
+    chunks = get_speech_timestamps(audio)
 
-        return language, probability
-
-    # Окна раскладываем сами, по всей длине. Штатный language_detection_segments
-    # для этого не годится: он означает «первые N×30 секунд подряд от начала»,
-    # а не «N проб по ролику», и вдобавок порог 0.5 обрывает перебор на первом же
-    # окне — то есть увеличение числа сегментов обычно не меняет вообще ничего.
-    low, high = PROBE_SPAN
-    span = audio.size * (high - low) - window
-    offsets = [
-        int(audio.size * low + span * i / max(PROBE_WINDOWS - 1, 1))
-        for i in range(PROBE_WINDOWS)
-    ]
-
-    totals: dict[str, float] = {}
-
-    for offset in offsets:
-        chunk = audio[offset : offset + window]
-
-        if chunk.size < SAMPLE_RATE:
-            continue
-
-        try:
-            _, _, probs = model.detect_language(chunk, vad_filter=True)
-        except Exception:
-            # Окно могло целиком оказаться тишиной — VAD вернёт пусто.
-            continue
-
-        # Складываем распределения, а не голоса top-1. Жёсткое голосование
-        # разорвало бы сербский на три метки bs/hr/sr, и ролик с раскладом
-        # 4×hr / 3×sr / 3×bs проиграл бы языку, набравшему меньше суммарно.
-        for code, value in probs:
-            totals[code] = totals.get(code, 0.0) + value
-
-    if not totals:
-        return "", 0.0
-
-    merged = _merge_bcms(totals)
-    best = max(merged, key=merged.get)
-
-    return best, merged[best] / max(sum(merged.values()), 1e-9)
+    return sum(chunk["end"] - chunk["start"] for chunk in chunks) / SAMPLE_RATE
 
 
-def _merge_bcms(totals: dict[str, float]) -> dict[str, float]:
-    """Сложить массу bs/hr/sr в одну метку.
+def _window(model, audio: np.ndarray, speech: float) -> tuple[float, list[tuple[str, float]]]:
+    """Одна запись для lang.summarize: секунды речи и распределение определителя.
 
-    Это три ярлыка одного языка, попавшие в обучение Whisper из VoxLingua107
-    по недосмотру: выбор между ними произволен, а разнесённые по трём меткам
-    они проигрывают любому конкуренту, набравшему меньше суммарно.
+    Речи меньше lang.MIN_SPEECH_SECONDS — распределение пустое, модель на таком отрывке
+    не зовётся. Упавший определитель — тоже пустое: окно просто не голосует.
     """
-    merged: dict[str, float] = {}
+    if speech < lang.MIN_SPEECH_SECONDS:
+        return speech, []
 
-    for code, value in totals.items():
-        key = "sr" if code in BCMS else code
-        merged[key] = merged.get(key, 0.0) + value
+    try:
+        _, _, probs = model.detect_language(audio=audio, vad_filter=True)
+    except Exception:  # noqa: BLE001 — одно окно не должно ронять распознавание
+        return speech, []
 
-    return merged
+    return speech, list(probs)
+
+
+def _detect(model, audio: np.ndarray) -> lang.Detection:
+    """Язык речи по окнам, разложенным по записи, — правилом lang.summarize.
+
+    Модель приходит уже загруженной: определение и распознавание идут одной и той же,
+    и грузить её дважды значит платить лишние секунды и лишнюю память.
+
+    Окна раскладываем сами (lang.probe_offsets). Штатный language_detection_segments —
+    это «первые N×30 секунд речи подряд», а не N проб по ролику, и вдобавок порог 0.5
+    обрывает перебор на первом же окне. Окно, где речи меньше lang.MIN_SPEECH_SECONDS,
+    модели не отдаётся: на набивке она всё равно ответила бы, и тишина голосовала бы
+    наравне с речью. Окно, где определитель упал, не голосует.
+
+    Не проголосовало ни одно окно, а запись длиннее окна — один проход по первым
+    тридцати секундам речи всего файла: речь могла оказаться между окнами. Он идёт
+    последней записью в windows (на ролике длиннее 37,5 с — девятой), и модель на нём
+    зовут, только если речи в файле не меньше lang.MIN_SPEECH_SECONDS.
+    """
+    records = []
+
+    for offset in lang.probe_offsets(audio.size):
+        chunk = audio[offset : offset + lang.WINDOW_SAMPLES]
+        records.append(_window(model, chunk, _speech_seconds(chunk)))
+
+    detection = lang.summarize(records)
+
+    if detection.votes or audio.size <= lang.WINDOW_SAMPLES:
+        return detection
+
+    # detect_language слушает первые тридцать секунд речи: столько её и записываем.
+    records.append(_window(model, audio, min(30.0, _speech_seconds(audio))))
+
+    return lang.summarize(records)
 
 
 def transcribe(
@@ -128,6 +115,7 @@ def transcribe(
     model_name: str = DEFAULT_MODEL,
     compute_type: str = "float16",
     language: str = "sr",
+    hint: str | None = None,
     initial_prompt: str | None = None,
     hotwords: str | None = None,
     batch_size: int = 16,
@@ -138,25 +126,21 @@ def transcribe(
 ) -> dict:
     from faster_whisper import BatchedInferencePipeline, WhisperModel
 
+    # До загрузки весов: негодный код — UnknownLanguage, auto — None.
+    pin = lang.normalize(language)
     model = WhisperModel(model_name, device="cuda", compute_type=compute_type)
-    detected, confidence = "", 0.0
-
-    if language == "auto":
-        detected, confidence = _detect(model, audio)
-
-        # bs/hr/sr — три метки одного языка, и выбор между ними произволен.
-        # Приводим к sr: дальше по конвейеру ждут именно его, а разница
-        # в тексте сводится к диалектным предпочтениям, а не к языку.
-        language = "sr" if detected in BCMS else detected
-
+    # Определитель слушает всегда, и при закреплённом языке: тогда он проверяет
+    # закрепление, и расхождение уходит демону в решении.
+    detection = _detect(model, audio)
+    verdict = lang.decide(pin, lang.hint(hint), detection)
     pipeline = BatchedInferencePipeline(model=model)
 
     segments, info = pipeline.transcribe(
         audio,
-        # Язык фиксируется жёстко. Разделение bs/hr/sr — признанный артефакт импорта
-        # меток из VoxLingua107, это один язык с тремя токенами, и автодетект между
-        # ними произволен. Плюс он смотрит только первые 30 секунд, а там интро.
-        language=language,
+        # Язык решён выше и никогда не пустой и не None. Собственное определение
+        # библиотеки слушает только первые тридцать секунд речи, а там интро; bs/hr/sr
+        # для неё — три токена одного языка с произвольным выбором.
+        language=verdict.effective,
         # НЕ 'translate': эта задача у Whisper выдаёт только английский и молча
         # подменила бы язык источника для всего пайплайна ниже.
         task="transcribe",
@@ -203,23 +187,34 @@ def transcribe(
     ]
 
     return {
-        "language": language,
-        # Что показал определитель до приведения bs/hr/sr к одному языку, и
-        # насколько уверенно. Нужно выше по конвейеру: по низкой уверенности
-        # видно, что ролик, возможно, вообще не про речь.
-        "detected": detected or info.language,
-        "confidence": confidence,
+        # Язык, с которым распознавали: демон латинизирует по нему реплики.
+        "language": verdict.effective,
+        "verdict": verdict.wire(),
+        # Окна определителя — для журнала демона и для подбора порогов по нему.
+        "detection": {
+            "bcmsShare": round(detection.bcms_share, 2),
+            "votes": detection.votes,
+            "probed": detection.probed,
+            # Секунды речи — вниз: окно, показанное с MIN_SPEECH_SECONDS и больше, ушло в модель.
+            "windows": [
+                [code, round(share, 2), math.floor(speech * 10) / 10]
+                for code, share, speech in detection.windows
+            ],
+        },
         "duration": info.duration,
         "model": model_name,
         "cues": [c for c in cues if c["text"]],
     }
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--compute-type", default="float16")
+    # Код, закреплённый хозяином, или auto. На умолчание sr рассчитывает helper/measure.py,
+    # который язык не передаёт.
     parser.add_argument("--language", default="sr")
+    parser.add_argument("--hint", default=None, help="метка языка от YouTube, только подсказка")
     parser.add_argument("--initial-prompt", default=None)
     parser.add_argument("--hotwords", default=None)
     parser.add_argument("--batch-size", type=int, default=16)
@@ -229,7 +224,20 @@ def main() -> int:
         help="только для замера памяти: без VAD тишина доходит до энкодера",
     )
     parser.add_argument("--pcm", help="файл с f32le вместо stdin (для отладки)")
-    args = parser.parse_args()
+
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    # Отказ стоит ровно разбора аргументов: ни звука, ни весов. Код 2 и "permanent" —
+    # демон делает из этого окончательный отказ (JobRunner._run_asr).
+    try:
+        lang.normalize(args.language)
+    except lang.UnknownLanguage as exc:
+        print(json.dumps({"error": lang.refusal(exc.raw), "permanent": True}, ensure_ascii=False))
+        return 2
 
     raw = open(args.pcm, "rb").read() if args.pcm else sys.stdin.buffer.read()
 
@@ -248,6 +256,7 @@ def main() -> int:
         model_name=args.model,
         compute_type=args.compute_type,
         language=args.language,
+        hint=args.hint,
         initial_prompt=args.initial_prompt,
         hotwords=args.hotwords,
         batch_size=args.batch_size,

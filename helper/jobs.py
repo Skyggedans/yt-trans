@@ -1183,6 +1183,7 @@ class JobRunner:
     def _run_asr(self, audio, job: Job) -> dict:
         """Распознавание отдельным процессом — выход процесса гарантирует возврат VRAM."""
         prompt = _initial_prompt(job.info)
+        pin, hint = self._declaration(job)
         args = [
             sys.executable,
             "-m",
@@ -1192,8 +1193,11 @@ class JobRunner:
             "--compute-type",
             self._config.asr.compute_type,
             "--language",
-            self._source_language(job),
+            pin or "auto",
         ]
+
+        if hint:
+            args += ["--hint", hint]
 
         if prompt:
             args += ["--initial-prompt", prompt]
@@ -1275,31 +1279,22 @@ class JobRunner:
         except language.UnknownLanguage as exc:
             raise PermanentJobError(language.refusal(exc.raw)) from None
 
-    def _source_language(self, job: Job) -> str:
-        """Язык речи: сначала бесплатно из метаданных, и только потом моделью.
+    def _declaration(self, job: Job) -> tuple[str | None, str | None]:
+        """Что сказано о языке до звука: (закрепление хозяина, метка YouTube).
 
-        yt-dlp выводит язык аудио из оригинальной ASR-дорожки YouTube, поэтому
-        для английских и русских роликов поле заполнено, а для сербских пусто —
-        автосубтитров для BCMS не существует. Замерено: en и ru отдаются верно,
-        сербский корпус из 60 роликов дал None во всех шестидесяти.
+        Решает не это, а воркер (helper.language.decide): определитель слушает всегда.
+        Метка YouTube — только подсказка. yt-dlp выводит её из ASR-дорожки YouTube, а та
+        помечает сербские каналы английскими (Juske); у сербских роликов метки обычно нет
+        вовсе — сербский корпус из 60 роликов дал None во всех шестидесяти. Незнакомая
+        метка — просто «не знаем».
 
-        Настройка со значением языка перекрывает всё: она означает «я знаю, что
-        тут, не гадай». Значение "auto" оставляет решение метаданным и модели.
+        Сюда потом придёт объявление на ролик и на ссылку (раздел «Отложено» в
+        docs/superpowers/plans/2026-11-01-source-language.md): объявление для решения,
+        ключа кэша и выбора дорожки читается только здесь. Исключения — проверка
+        закрепления в начале _pipeline (_pin) и восстановление (JobManager._key_for:
+        задания там нет, оно читает настройку через hint и меняется вместе с этой функцией).
         """
-        pin = self._pin()
-
-        if pin:
-            return pin
-
-        declared = (job.info.audio_language or "").split("-")[0].lower() if job.info else ""
-
-        if declared:
-            log.info("язык %s взят из метаданных, распознаватель определять не будет", declared)
-
-            return declared
-
-        # Метаданных нет — пусть решает Whisper по окнам, разложенным по ролику.
-        return "auto"
+        return self._pin(), (language.hint(job.info.audio_language) if job.info else None)
 
     async def _serve_cached(self, job: Job) -> bool:
         """Отдать готовые реплики из кэша. True — задание закончено, идти дальше не нужно.

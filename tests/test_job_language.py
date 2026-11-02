@@ -4,6 +4,7 @@ import pytest
 from conftest import metadata
 
 from helper import jobs, language
+from helper.asr import worker
 from helper.config import AsrConfig, Config, TranslatorConfig
 
 VIDEO = "abcdefghijk"
@@ -120,3 +121,45 @@ async def test_worker_error_reply_reaches_the_viewer(manager, pipeline):
     assert job.stage is jobs.Stage.ERROR
     assert job.error == "ASR не справился: аудио короче половины секунды"
     assert job.retryable is True
+
+
+# ── Объявленное уходит в воркер подсказкой ───────────────────────────────────────
+
+
+def test_declaration_is_the_pin_and_the_normalised_label(manager):
+    job = manager.get_or_create(VIDEO, "ru", True)
+
+    assert runner_with(manager, "SR")._declaration(job) == ("sr", None)
+
+    job.info = metadata(audio_language="en-US")
+
+    assert runner_with(manager, "SR")._declaration(job) == ("sr", "en")
+    assert runner_with(manager, "auto")._declaration(job) == (None, "en")
+
+    job.info = metadata(audio_language="xx-YY")
+
+    assert runner_with(manager, "auto")._declaration(job) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("pin", "audio_language", "sent", "hint"),
+    [
+        ("auto", "en-US", "auto", "en"),
+        ("auto", None, "auto", None),
+        ("auto", "xx-YY", "auto", None),
+        ("sr", "en", "sr", "en"),
+        ("sh", None, "sr", None),
+    ],
+)
+async def test_worker_argv_parses_with_the_worker_parser(manager, pipeline, pin, audio_language, sent, hint):
+    pipeline.configure(language=pin)
+    job = manager.get_or_create(VIDEO, "ru", True)
+    job.info = metadata(audio_language=audio_language)
+
+    await pipeline.run(job)
+
+    args = pipeline.workers[-1].args
+    parsed = worker.build_parser().parse_args(args[3:])
+
+    assert args[1:3] == ["-m", "helper.asr.worker"]
+    assert (parsed.language, parsed.hint) == (sent, hint)
