@@ -504,7 +504,11 @@ class Job:
         if self._audio_dead:
             return
 
-        if self._audio_path is not None and self._audio_path.exists():
+        # Ручку читаем один раз: запись идёт в рабочем потоке, а уборка бюджета в цикле
+        # событий может сбросить её между проверкой на None и проверкой файла.
+        path = self._audio_path
+
+        if path is not None and path.exists():
             return
 
         PAUSED_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -535,11 +539,14 @@ class Job:
         """
         self.touched_at = time.monotonic()
 
-        if self._audio_path is None or not self._audio_path.exists():
+        # Один раз, по той же причине, что в stash_audio: чтение идёт в рабочем потоке.
+        path = self._audio_path
+
+        if path is None or not path.exists():
             return None
 
         try:
-            return np.fromfile(self._audio_path, dtype="<f4")
+            return np.fromfile(path, dtype="<f4")
         except OSError as exc:
             log.warning("отложенный звук %s не прочитан: %s", self.video_id, exc)
             self.discard_audio()

@@ -551,3 +551,46 @@ def test_a_handle_cleared_between_two_reads_does_not_fail_a_request(
     # Уборка читает ручку задания один раз: второе чтение после проверки на None упало
     # бы AttributeError на опросе.
     assert manager.get_or_create("video00000a", "ru", True) is job
+
+
+def handle_gone_after_first_read(monkeypatch, path) -> None:
+    """Ручка задания видит файл только при первом чтении, дальше она None.
+
+    Так выглядит уборка бюджета (_trim_paused_audio → discard_audio в цикле событий),
+    сбросившая ручку, пока take_audio или stash_audio шли в рабочем потоке. Свойство на
+    классе заслоняет поле экземпляра, запись в него глотается.
+    """
+    reads = []
+
+    def handle(self):
+        reads.append(self)
+
+        return path if len(reads) == 1 else None
+
+    monkeypatch.setattr(
+        jobs.Job, "_audio_path", property(handle, lambda self, value: None), raising=False
+    )
+
+
+def test_take_audio_survives_a_handle_cleared_between_two_reads(manager, audio_dir, monkeypatch):
+    job = manager.get_or_create("video00000a", "ru", True)
+    path = stash(job, mtime=1000)
+    handle_gone_after_first_read(monkeypatch, path)
+
+    # Ручка прочитана один раз: файл, что был на месте при проверке, и прочитан. Второе
+    # чтение после сброса упало бы AttributeError, и возобновление провалилось бы
+    # повторяемым отказом вместо того, чтобы взять звук или скачать его заново.
+    assert job.take_audio().size == CHUNK
+
+
+def test_stash_audio_survives_a_handle_cleared_between_two_reads(
+    manager, audio_dir, monkeypatch
+):
+    job = manager.get_or_create("video00000a", "ru", True)
+    path = stash(job, mtime=1000)
+    handle_gone_after_first_read(monkeypatch, path)
+
+    job.stash_audio(np.zeros(CHUNK, dtype="<f4"))
+
+    # Файл застан при первом и единственном чтении ручки, и звук не пишется второй раз.
+    assert list(audio_dir.iterdir()) == [path]
