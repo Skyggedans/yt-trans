@@ -36,6 +36,7 @@ from helper.cache import CacheKey, TrackCache
 from helper.config import Config, load as load_config
 from helper.env import YTDLP_CACHE
 from helper.gpulease import GpuLease, Preempted
+from helper.language import LanguageVerdict
 from helper.script import normalize_cues
 from helper.segment import Cue, build_cues
 from helper.sources.ytdlp import (
@@ -270,6 +271,11 @@ class Job:
         # Откуда взяты реплики: 'asr' или 'manual:<язык>'. Входит в ключ кэша —
         # дорожка автора и результат распознавания это разные дорожки.
         self.source = "asr"
+        # Какой язык решил демон и почему: на каком языке реплики и откуда это известно.
+        # None, пока решения нет. Пишется только через _set_language: оно же сообщает о
+        # решении клиентам. В ключ реестра не входит — вариант ролика это
+        # (video_id, use_author_track), а язык — свойство материала, а не варианта.
+        self.language: LanguageVerdict | None = None
         # Дорожка автора есть в метаданных, но не скачалась. Запоминаем, чтобы
         # возобновление после паузы не обращалось за ней к YouTube снова: пока
         # карта занята, пауза повторяется каждые две минуты.
@@ -439,6 +445,12 @@ class Job:
             # По смене номера клиент узнаёт, что задание пересоздано и реплики с
             # курсором, которые он держит, относились к прежнему: см. Job.generation.
             "generation": self.generation,
+            # Решение о языке целиком, одним вложенным объектом. Ключи верхнего уровня
+            # source, message, waiting и retry читает extension/content.js (сборка
+            # надписи бейджа), и «source: asr» наверху превратил бы бейдж в «качаю
+            # asr…». Поэтому у решения свой ключ, а его поля лежат внутри. Снимок отказа
+            # (refusal_snapshot) собран из настоящего Job и получает language: null сам.
+            "language": self.language.wire() if self.language else None,
             "stage": self.stage.value,
             "error": self.error,
             "retryable": self.retryable,
@@ -456,6 +468,19 @@ class Job:
         # Любая следующая стадия ожидание снимает, поэтому берётся из каждой.
         self.waiting = extra.get("waiting")
         self._emit({"type": "state", "stage": stage.value, **extra})
+
+    def _set_language(self, verdict: LanguageVerdict) -> None:
+        """Решение о языке на задание и в журнал: клиенты услышат его событием language."""
+        self.language = verdict
+        # Не через _set_stage: тот снимает waiting и шлёт state, по которому
+        # extension/content.js (updateChip) перерисовывает бейдж, а extension/background.js
+        # (lastStage) решает, продолжать ли опрос. Событие нового типа расширение
+        # пропускает: trackStage, mergeCues и updateChip действуют только на state,
+        # snapshot и cues. Проверено прогоном неизменённых content.js и background.js
+        # в Node: снимок с вложенным language и событие language оставляют бейдж
+        # «перевожу… 2/290» как был, а lastStage по одному событию language даёт
+        # undefined — опрос идёт дальше.
+        self._emit({"type": "language", "language": verdict.wire()})
 
     def _fail(self, message: str, retryable: bool) -> None:
         self.error = message
@@ -721,6 +746,54 @@ def refusal_snapshot(
     return refused.snapshot()
 
 
+def _log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None:
+    """Решение о языке — в журнал: строка INFO и предупреждения словами.
+
+    Расширение решения не покажет, а страницы планшета ещё нет: до неё журнал и снимок
+    (GET /v1/jobs/{id}) — единственные места, где решение видно. windows — окна
+    определителя из ответа воркера: [код или None, доля, секунды речи].
+
+    Всё, чего нет, пишется знаком «—»: объявление целиком, услышанный язык, уверенность,
+    код окна, которое не проголосовало, и сам список окон (дорожка автора определителя
+    не слушает).
+    """
+    if verdict.declared:
+        declared = f"{verdict.declared} ({verdict.declared_by or '—'})"
+    else:
+        declared = "—"
+
+    confidence = "—" if verdict.confidence is None else f"{verdict.confidence:.2f}"
+    # Секунды целые и вниз, как на проводе: окно, показанное с тремя секундами и больше,
+    # ушло в модель. Округление до ближайшего показало бы окно в 2,6–2,9 с, не дошедшее
+    # до модели, как «3с» — и не объяснило бы, почему о нём нет предупреждения ниже.
+    shown = ", ".join(
+        f"{code or '—'} {share:.2f}/{int(seconds)}с" for code, share, seconds in windows
+    )
+
+    log.info(
+        "язык %s: %s (%s), объявлен %s, по речи %s, уверенность %s, окна: %s",
+        job.video_id, verdict.effective, verdict.reason, declared,
+        verdict.detected or "—", confidence, shown or "—",
+    )
+
+    note = verdict.note()
+
+    if verdict.mismatch and note:
+        log.warning("язык %s: %s", job.video_id, note)
+
+    # Без голосов решение молча уходит к метке YouTube или к sr, и сломавшийся определитель
+    # (падает на каждом окне, например после обновления faster-whisper) выглядел бы как
+    # ролик без речи. Окно короче порога в модель не шло, и молчать о нём верно.
+    silent = sum(
+        1 for code, _, seconds in windows
+        if code is None and seconds >= language.MIN_SPEECH_SECONDS
+    )
+
+    if silent:
+        log.warning("язык %s: определитель не ответил, окон с речью без ответа: %d",
+                    job.video_id, silent)
+
+
 class JobRunner:
     """Выполняет задание, соблюдая дисциплину GPU."""
 
@@ -877,6 +950,23 @@ class JobRunner:
                 if await self._serve_cached(job):
                     return
             else:
+                # Объявление то же, что у decide: закрепление человека перекрывает
+                # метаданные. Дорожку определитель не слушает, и верна ли она речи,
+                # неизвестно (verified=None).
+                pin, hint = self._declaration(job)
+                verdict = LanguageVerdict(
+                    effective=language.hint(track.lang) or "sr",
+                    declared=pin or hint,
+                    declared_by="config" if pin else ("metadata" if hint else None),
+                    detected=None,
+                    confidence=None,
+                    reason="track",
+                    source="manual",
+                    track=track.lang,
+                    verified=None,
+                )
+                job._set_language(verdict)
+                _log_language(job, verdict, [])
                 job.cues = self._to_job_cues_from_track(
                     normalize_cues(segments, track.lang)
                 )
@@ -958,18 +1048,11 @@ class JobRunner:
             except OSError as exc:
                 log.warning("звук %s не убран после распознавания: %s", job.video_id, exc)
 
-            segments = result["cues"]
-            spoken = result.get("language") or "sr"
-
-            if result.get("detected") and result.get("detected") != spoken:
-                log.info("язык речи: %s (определитель дал %s, уверенность %.2f)",
-                         spoken, result["detected"], result.get("confidence") or 0.0)
-
-            # Присваиваем реплики ДО проверки вытеснения. Транскрипт уже получен,
+            # Решение о языке и реплики — до проверки вытеснения. Транскрипт уже получен,
             # и выбрасывать его только потому, что карту забрали секундой позже,
-            # значит потерять минуты работы GPU: возобновление начнётся с перевода.
-            job.cues = self._to_job_cues(build_cues(normalize_cues(segments, spoken)))
-            job._emit({"type": "segmented", "total": len(job.cues)})
+            # значит потерять минуты работы GPU: возобновление начнётся с перевода, и
+            # решение о языке к этому времени должно лежать на задании вместе с репликами.
+            self._accept_asr(job, result)
             held.check()
 
         await self._finish_translation(job)
@@ -1126,6 +1209,36 @@ class JobRunner:
             raise
         finally:
             preempt.cancel()
+
+    def _accept_asr(self, job: Job, result: dict) -> None:
+        """Ответ воркера — на задание: сначала решение о языке, потом реплики и segmented."""
+        verdict = LanguageVerdict.from_wire(result.get("verdict"))
+
+        if verdict is None:
+            # Решения в ответе нет или оно негодное: язык берётся из поля language тем же
+            # правилом, что и закрепление. Неизвестный код — отказ окончательный: повтор
+            # через минуту снова гонял бы распознавание на карте и получал тот же ответ.
+            raw = result.get("language")
+
+            try:
+                effective = language.normalize(raw)
+            except language.UnknownLanguage:
+                effective = None
+
+            if effective is None:
+                raise PermanentJobError(f"распознаватель вернул неизвестный язык «{raw}»")
+
+            verdict = LanguageVerdict(
+                effective=effective, declared=None, declared_by=None,
+                detected=None, confidence=None, reason="detector",
+            )
+
+        job._set_language(verdict)
+        _log_language(job, verdict, (result.get("detection") or {}).get("windows") or [])
+        job.cues = self._to_job_cues(
+            build_cues(normalize_cues(result["cues"], verdict.effective))
+        )
+        job._emit({"type": "segmented", "total": len(job.cues)})
 
     async def _finish_translation(self, job: Job) -> None:
         """Перевести недостающие реплики и, если всё готово, закэшировать дорожку."""

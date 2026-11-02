@@ -290,6 +290,41 @@ def metadata(**overrides):
     return VideoInfo(**{**fields, **overrides}, manual_tracks=tracks)
 
 
+def watch(video_id, **fields):
+    """Сообщение watch от вкладки: подписка на задание ролика."""
+    return {"op": "watch", "videoId": video_id, **fields}
+
+
+async def hear_until_done(connection):
+    """Всё, что сокет услышал до конца задания: до события state со стадией done или error."""
+    heard = []
+
+    while True:
+        event = await connection.hear()
+        heard.append(event)
+
+        if event["type"] == "state" and event["stage"] in ("done", "error"):
+            return heard
+
+
+def preempt_after_asr(pipeline, monkeypatch):
+    """Карту отбирают сразу после распознавания: первая проверка вытеснения после воркера."""
+    from helper import gpulease
+
+    real_check = gpulease._Holder.check
+    taken = []
+
+    def check(holder):
+        if pipeline.workers and not taken:
+            taken.append(holder)
+
+            raise gpulease.Preempted("пользователь начал свою работу на GPU")
+
+        real_check(holder)
+
+    monkeypatch.setattr(gpulease._Holder, "check", check)
+
+
 class FakeLease:
     """Пропуск на карту без NVML и ollama: записывает обращения и выдаёт настоящий _Holder.
 

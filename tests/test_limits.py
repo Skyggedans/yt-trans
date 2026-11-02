@@ -268,6 +268,7 @@ async def test_events_with_create_answers_200_with_an_error_snapshot(
     assert snapshot["targetLang"] == "sr"
     assert snapshot["generation"] == 0
     assert snapshot["waiting"] is None
+    assert snapshot["language"] is None
     assert snapshot["title"] == ""
     assert (snapshot["total"], snapshot["translated"], snapshot["cues"]) == (0, 0, [])
     # Задание для снимка в реестр не попало и не запускалось.
