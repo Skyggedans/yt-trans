@@ -30,6 +30,7 @@ from pathlib import Path
 import httpx
 import numpy as np
 
+from helper import language
 from helper.asr.worker import SAMPLE_RATE
 from helper.cache import CacheKey, TrackCache
 from helper.config import Config, load as load_config
@@ -796,6 +797,12 @@ class JobRunner:
 
             return
 
+        # Негодный код в [asr] language — отказ до первого обращения к YouTube и к карте:
+        # ни метаданных, ни звука, ни пропуска. Отказ окончательный, иначе остывание
+        # в get_or_create пересоздавало бы задание раз в минуту, как было с трассировкой
+        # Whisper. Возобновление выше языка не спрашивает: распознавание уже позади.
+        self._pin()
+
         # Метаданные уже есть, если задание возобновляется после паузы: пока карта
         # занята, пауза повторяется каждые две минуты, и спрашивать YouTube о том же
         # ролике на каждом витке незачем. Проверки ниже они тогда тоже уже прошли —
@@ -1231,6 +1238,22 @@ class JobRunner:
             if proc.returncode < 0:
                 raise RuntimeError(f"распознавание убито сигналом {-proc.returncode}")
 
+            # Воркер отказал сам — фраза в stdout, а не трассировка в stderr. Отказ с
+            # "permanent" не пройдёт и при повторе (негодный код языка), поэтому
+            # окончательный: остывание не пересоздаёт такое задание. Фраза без флага
+            # («аудио короче половины секунды») — отказ повторяемый, но зритель видит её,
+            # а не пустой хвост stderr.
+            try:
+                reply = json.loads(out)
+            except ValueError:
+                reply = None
+
+            if isinstance(reply, dict) and reply.get("error"):
+                if reply.get("permanent") is True:
+                    raise PermanentJobError(str(reply["error"]))
+
+                raise RuntimeError(f"ASR не справился: {reply['error']}")
+
             raise RuntimeError(f"ASR не справился: {err.decode(errors='replace')[-500:]}")
 
         result = json.loads(out)
@@ -1239,6 +1262,18 @@ class JobRunner:
             raise RuntimeError(result["error"])
 
         return result
+
+    def _pin(self) -> str | None:
+        """Язык, закреплённый хозяином в [asr] language: код Whisper или None («auto»).
+
+        load() приводит значение к коду, а негодное лишь пишет в журнал: демон должен
+        подняться. Задание же с негодным кодом получает отказ человеческой фразой,
+        окончательный: повтор с тем же конфигом дал бы то же самое.
+        """
+        try:
+            return language.normalize(self._config.asr.language)
+        except language.UnknownLanguage as exc:
+            raise PermanentJobError(language.refusal(exc.raw)) from None
 
     def _source_language(self, job: Job) -> str:
         """Язык речи: сначала бесплатно из метаданных, и только потом моделью.
@@ -1251,10 +1286,10 @@ class JobRunner:
         Настройка со значением языка перекрывает всё: она означает «я знаю, что
         тут, не гадай». Значение "auto" оставляет решение метаданным и модели.
         """
-        configured = self._config.asr.language
+        pin = self._pin()
 
-        if configured and configured != "auto":
-            return configured
+        if pin:
+            return pin
 
         declared = (job.info.audio_language or "").split("-")[0].lower() if job.info else ""
 

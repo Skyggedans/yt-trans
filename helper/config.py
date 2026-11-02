@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import logging
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from helper import language
 from helper.env import CONFIG_DIR
 
 log = logging.getLogger(__name__)
@@ -63,12 +64,14 @@ class AsrConfig:
     # int8 на GPU не быстрее fp16 — замерено 19.6 с против 19.2 на одном клипе.
     # Он экономит около гигабайта памяти и стоит скорости, а не наоборот.
     compute_type: str = "float16"
-    # "auto" — язык берётся из метаданных, а если их нет, определяется по окнам,
-    # разложенным по всей длине ролика. Жёстко заданный язык означал бы, что
-    # на любом не-сербском ролике Whisper получает указание, противоречащее звуку:
-    # поведение декодера в этом случае не определено, и он начинает выбирать между
-    # переводом, транслитерацией и записью услышанного чужим алфавитом — заново
-    # в каждом тридцатисекундном окне.
+    # Язык речи. "auto" — решает определитель: он слушает окна по всей длине ролика
+    # и работает всегда, а метка языка от YouTube для него лишь подсказка. Код языка
+    # закрепляет язык для КАЖДОГО ролика: Whisper декодирует с ним, даже если звучит
+    # другое, а определитель только отмечает расхождение. Закреплять стоит, лишь
+    # когда все ролики на одном языке: на чужом звуке поведение декодера не
+    # определено, и он начинает выбирать между переводом, транслитерацией и записью
+    # услышанного чужим алфавитом — заново в каждом тридцатисекундном окне.
+    # load() приводит значение к коду Whisper (helper/language.py), auto остаётся auto.
     language: str = "auto"
     vram_mib: int = 0
 
@@ -187,6 +190,17 @@ def load(path: Path = CONFIG_PATH) -> Config:
             raise ConfigError(f"не читается {path}: {exc}") from exc
 
     asr = AsrConfig(**_section(raw, "asr", AsrConfig))
+
+    # Код языка приводится к виду Whisper здесь, один раз: "sh", "SR" и "sr-Latn" — это
+    # sr, и дальше по демону ходит уже код. Незнакомое значение — не ошибка запуска, как
+    # и cookies: демон поднимается, а каждое новое задание получает отказ той же фразой
+    # (JobRunner._pin). str() — на случай числа вместо строки.
+    try:
+        asr = replace(asr, language=language.normalize(str(asr.language)) or "auto")
+    except language.UnknownLanguage as exc:
+        asr = replace(asr, language=exc.raw)
+        log.error(language.refusal(exc.raw))
+
     translator = TranslatorConfig(**_section(raw, "translator", TranslatorConfig))
     youtube = YoutubeConfig(**_section(raw, "youtube", YoutubeConfig))
     config = Config(asr=asr, translator=translator, youtube=youtube)
