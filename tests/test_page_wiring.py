@@ -424,6 +424,16 @@ def test_the_saved_copy_is_marked_while_the_daemon_is_alive():
     assert "savedForLink(link.id)" in body
 
 
+def test_a_saved_copy_keeps_collecting_cues_while_the_daemon_is_alive():
+    # Копия могла быть снята до конца перевода: её запись должна расти и при
+    # обычном просмотре, иначе офлайн останутся только титры момента копии.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function playLocal"):source.index("function switchToCopy")]
+
+    assert "follow = {" in body
+    assert "daemonAlive" in body
+
+
 def test_the_page_imports_every_helper_it_uses():
     # Пропущенное имя в импорте видно только в браузере: node --check имён не
     # знает, а разметка и текст остаются на месте. Поэтому имена сверяются
