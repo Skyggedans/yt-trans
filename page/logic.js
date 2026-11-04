@@ -291,3 +291,11 @@ export function sharedUrl(params) {
 
   return "";
 }
+
+/** Размеры субтитров, которые предлагает страница; имя — то же, что в разметке. */
+export const FONT_SIZES = ["tiny", "small", "normal", "large"];
+
+/** Размер из хранилища; чужое или испорченное значение — обычный размер. */
+export function readFontSize(raw) {
+  return FONT_SIZES.includes(raw) ? raw : "normal";
+}

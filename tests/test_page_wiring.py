@@ -156,3 +156,34 @@ def test_the_saved_links_scroll_while_the_fields_stay_in_place():
     assert 'id="links-filter"' not in library.group(1)
     assert re.search(r"#home \{[^}]*height: 100dvh", css, re.S)
     assert re.search(r"#library \{[^}]*overflow-y: auto", css, re.S)
+
+
+def test_the_viewer_picks_the_subtitle_size():
+    # С планшета в другой комнате 22px не читаются, а на телефоне 34px не
+    # помещаются. Размер выбирается из нескольких вариантов, а не угадывается
+    # по ширине экрана.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="font-size"' in html
+    for size in ("tiny", "small", "normal", "large"):
+        assert f'value="{size}"' in html
+    assert 'value="huge"' not in html
+
+
+def test_the_chosen_size_survives_a_reload_and_shapes_the_layer():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    assert "readFontSize(" in source
+    assert "fontSize" in source
+    assert 'addEventListener("change"' in source
+    # Размер задаётся на сцене признаком: сам слой в shadow root, и правила
+    # для него лежат в style.css рядом с остальным видом строк.
+    assert re.search(r"#stage\[data-font=", css)
+    assert re.search(r'#stage\[data-font="tiny"\]', css)
+    assert 'data-font="huge"' not in css
+    # Строки рисуются в shadow root: внешние правила внутрь не проходят,
+    # поэтому множитель должен стоять в LAYER_CSS рядом с var(--font).
+    layer = source[source.index("const LAYER_CSS"):source.index("function layerNodes")]
+    assert "var(--font" in layer
+    assert "--overlay-scale" in layer

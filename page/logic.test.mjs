@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import {
   activeCueIndex, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
-  languageText, parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
+  languageText, parsePositions, readFontSize, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
   stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
@@ -254,4 +254,16 @@ test("nothing found is an empty list, not the whole one", () => {
 
 test("a link without a title does not break the search", () => {
   assert.deepEqual(filterLinks([{ id: "4", url: "https://youtu.be/ddd" }], "ddd"), [{ id: "4", url: "https://youtu.be/ddd" }]);
+});
+
+test("the subtitle size is remembered, and rubbish means the usual one", () => {
+  assert.equal(readFontSize("tiny"), "tiny");
+  assert.equal(readFontSize("small"), "small");
+  assert.equal(readFontSize("large"), "large");
+  // «Огромный» убран: сохранённый им размер сводится к обычному.
+  assert.equal(readFontSize("huge"), "normal");
+  assert.equal(readFontSize(null), "normal");
+  assert.equal(readFontSize(""), "normal");
+  assert.equal(readFontSize("громадный"), "normal");
+  assert.equal(readFontSize("[large]"), "normal");
 });

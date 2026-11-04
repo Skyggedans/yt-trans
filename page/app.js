@@ -3,7 +3,8 @@
 
 import {
   activeCueIndex, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
-  languageText, parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
+  languageText, parsePositions, pendingAt, positionFor, readFontSize, readSwitches, rememberPosition,
+  sharedUrl,
   stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
@@ -11,6 +12,7 @@ const TOKEN_KEY = "yt-trans-token";
 const CLIENT_KEY = "yt-trans-client";
 const POSITIONS_KEY = "yt-trans-positions";
 const SWITCHES_KEY = "yt-trans-switches";
+const FONT_KEY = "yt-trans-font";
 const POLL_VIDEO_MS = 2000;
 const RECONNECT_MS = 1000;
 const PLAYHEAD_MS = 1000;
@@ -38,6 +40,7 @@ const els = {
   title: document.getElementById("title"),
   toggleTarget: document.getElementById("toggle-target"),
   toggleStudy: document.getElementById("toggle-study"),
+  fontSize: document.getElementById("font-size"),
   fullscreen: document.getElementById("fullscreen"),
 };
 
@@ -75,6 +78,9 @@ let linksQuery = "";
 // Какие строки показывать — тоже своё на устройство: планшет в другой комнате
 // не должен менять то, что настроено на компьютере.
 let switches = readSwitches(store(SWITCHES_KEY));
+// Размер строк тоже запоминается на устройстве: на планшете в другой комнате
+// он нужен другой, чем за компьютером.
+let fontSize = readFontSize(store(FONT_KEY));
 
 const clientId = makeClientId();
 
@@ -647,8 +653,8 @@ function render() {
 
 // Стили слоя живут в его теневом дереве, а не в style.css: теневая граница
 // не пропускает внешние правила внутрь. Вид — тот же, что в extension/content.js;
-// --font наследуется сквозь границу, поэтому крупный шрифт широкого экрана
-// приходит сюда сам.
+// --font и --overlay-scale наследуются сквозь границу, поэтому крупный шрифт
+// широкого экрана и выбранный зрителем размер приходят сюда сами.
 const LAYER_CSS = `
   .box {
     max-width: 88%;
@@ -660,7 +666,9 @@ const LAYER_CSS = `
   .line {
     margin: 0;
     color: #fff;
-    font-size: var(--font, 22px);
+    /* --overlay-scale — выбранный на сцене размер; множитель, а не замена:
+       на широком экране обычный уже крупнее. */
+    font-size: calc(var(--font, 22px) * var(--overlay-scale, 1));
     line-height: 1.3;
     text-shadow: 0 1px 2px rgba(0, 0, 0, .9);
     white-space: pre-wrap;
@@ -844,6 +852,21 @@ function flipLine(name) {
   paint();
 }
 
+// --- Размер строк ---------------------------------------------------------
+
+function drawFontSize() {
+  els.fontSize.value = fontSize;
+  // Слой живёт в shadow root, но признак стоит на сцене: правило для .line
+  // в LAYER_CSS находит его через унаследованную переменную.
+  els.stage.dataset.font = fontSize;
+}
+
+function pickFontSize() {
+  fontSize = readFontSize(els.fontSize.value);
+  store(FONT_KEY, fontSize);
+  drawFontSize();
+}
+
 // --- Уход со сцены --------------------------------------------------------
 
 /** Вернуться к списку: браузерная кнопка «назад» зовёт то же самое. */
@@ -890,7 +913,9 @@ function boot() {
   els.toggleTarget.addEventListener("click", () => flipLine("target"));
   els.toggleStudy.addEventListener("click", () => flipLine("study"));
   els.fullscreen.addEventListener("click", toggleFullscreen);
+  els.fontSize.addEventListener("change", pickFontSize);
   drawSwitches();
+  drawFontSize();
 
   // Список эпизодов и сцена — один адрес, поэтому «назад» в браузере сам по себе
   // ничего не менял бы. Свой шаг истории кладётся при входе в ролик, а возврат

@@ -68,12 +68,19 @@
     <div id="overlay"></div>
     <!-- Выключатели строк: планшет смотрят и без русского перевода, когда
          важнее черногорский текст, и без черногорского — когда нужен только
-         перевод. -->
+         перевод. Рядом — размер строк: с другого конца комнаты обычный мелковат,
+         а вплотную к экрану крупный мешает. -->
     <div id="lines">
       <button id="toggle-target" type="button" aria-pressed="true"
         aria-label="русский перевод" title="русский перевод">RU</button>
       <button id="toggle-study" type="button" aria-pressed="true"
         aria-label="черногорская строка" title="черногорская строка">CNR</button>
+      <select id="font-size" aria-label="размер субтитров" title="размер субтитров">
+        <option value="tiny">очень мелкий</option>
+        <option value="small">мелкий</option>
+        <option value="normal" selected>обычный</option>
+        <option value="large">крупный</option>
+      </select>
     </div>
     <button id="fullscreen" type="button" aria-label="во весь экран"
       title="во весь экран">⛶</button>
