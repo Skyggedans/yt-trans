@@ -440,6 +440,32 @@ class Job:
 
         return {"cursor": end, "events": self.events[cursor - self._dropped :]}
 
+    def readiness(self) -> dict:
+        """Что уже переведено, а что ещё пусто — для страницы, которая ждёт на месте.
+
+        Зритель ставит ролик на паузу там, где ждёт: перевод идёт от текущего места
+        просмотра батчами, поэтому «переведено 30 из 40» ничего не говорит о том,
+        есть ли субтитры именно здесь. pending — слитые интервалы реплик, до которых
+        рука ещё не дошла. translatedThrough — начало первого такого интервала,
+        то есть до какой секунды перевод идёт сплошняком; None значит, что
+        непереведённого не осталось вовсе.
+        """
+        pending: list[list[float]] = []
+
+        for cue in self.cues:
+            if cue.translated:
+                continue
+
+            if pending and cue.start <= pending[-1][1]:
+                pending[-1][1] = cue.end
+            else:
+                pending.append([cue.start, cue.end])
+
+        return {
+            "translatedThrough": pending[0][0] if pending else None,
+            "pending": pending,
+        }
+
     def snapshot(self) -> dict:
         return {
             "type": "snapshot",
@@ -470,6 +496,7 @@ class Job:
             "total": len(self.cues),
             "translated": sum(c.translated for c in self.cues),
             "cues": [c.payload() for c in self.cues if c.translated],
+            **self.readiness(),
         }
 
     def _set_stage(self, stage: Stage, **extra) -> None:
@@ -1004,7 +1031,7 @@ class JobRunner:
                 job.cues = self._to_job_cues_from_track(
                     normalize_cues(segments, verdict.effective)
                 )
-                job._emit({"type": "segmented", "total": len(job.cues)})
+                job._emit({"type": "segmented", "total": len(job.cues), **job.readiness()})
                 await self._finish_translation(job)
 
                 return
@@ -1283,7 +1310,7 @@ class JobRunner:
         # Индексы JobCue остаются сплошными: отсев идёт до _to_job_cues, а на index
         # опираются _next_batch и _context_for.
         job.cues = self._to_job_cues(cues)
-        job._emit({"type": "segmented", "total": len(job.cues)})
+        job._emit({"type": "segmented", "total": len(job.cues), **job.readiness()})
 
     async def _finish_translation(self, job: Job) -> None:
         """Перевести недостающие реплики и, если всё готово, закэшировать дорожку."""
@@ -1508,7 +1535,7 @@ class JobRunner:
             )
             for i, c in enumerate(cached["cues"])
         ]
-        job._emit({"type": "cues", "cues": [c.payload() for c in job.cues]})
+        job._emit({"type": "cues", "cues": [c.payload() for c in job.cues], **job.readiness()})
         job._set_stage(Stage.DONE, cached=True, total=len(job.cues))
 
         return True
@@ -1587,7 +1614,7 @@ class JobRunner:
                     cue.lines = [cue.src]
                     cue.failed = True
 
-            job._emit({"type": "cues", "cues": [c.payload() for c in batch_cues]})
+            job._emit({"type": "cues", "cues": [c.payload() for c in batch_cues], **job.readiness()})
 
     async def _translate_once(
         self, batch: Batch, cues: list[JobCue] | None = None
@@ -1976,7 +2003,7 @@ class JobManager:
             )
             for i, c in enumerate(payload["cues"])
         ]
-        job._emit({"type": "cues", "cues": [c.payload() for c in job.cues]})
+        job._emit({"type": "cues", "cues": [c.payload() for c in job.cues], **job.readiness()})
         job._set_stage(Stage.DONE, cached=True, total=len(job.cues))
 
         self._jobs[key] = job

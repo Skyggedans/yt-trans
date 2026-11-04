@@ -100,7 +100,10 @@ def test_the_language_reuses_no_name_the_extension_reads(manager):
 
     assert event.keys() == {"type", "language"}
     assert event["type"] not in EXTENSION_TYPES
-    assert snapshot.keys() - OLD_SNAPSHOT_KEYS == {"language"}
+    # Ключи снимка до плана о языке. pending и translatedThrough добавил план страницы
+    # для планшета; расширение не читает ни одного из трёх, поэтому любой четвёртый
+    # новый ключ — ошибка.
+    assert snapshot.keys() - OLD_SNAPSHOT_KEYS == {"language", "pending", "translatedThrough"}
     assert snapshot.keys() >= OLD_SNAPSHOT_KEYS
 
 
