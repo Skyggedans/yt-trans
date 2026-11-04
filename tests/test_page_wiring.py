@@ -258,3 +258,40 @@ def test_the_stage_bar_holds_both_buttons():
     css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
 
     assert re.search(r"#stage-bar \{[^}]*display: flex", css, re.S)
+
+
+def test_a_saved_video_plays_from_the_device():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "URL.createObjectURL" in source
+    assert "URL.revokeObjectURL" in source
+    assert "switchToCopy(" in source
+    assert "playLocal(" in source
+    assert "playSource(" in source
+
+
+def test_the_copy_carries_its_cues_without_the_daemon():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "seedCues(" in source
+    assert "mergeCues(" in source
+    assert "демона нет — играю сохранённое" in source
+
+
+def test_offline_says_why_a_rolled_video_does_not_play():
+    # Спека: без копии офлайн сцена не открывается вовсе — сообщение остаётся
+    # на домашней странице, чтобы чёрный экран не притворялся поломкой.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function play("):source.index("async function createJob")]
+
+    assert "демона нет, этого ролика на устройстве нет" in body
+    assert body.index("playSource(") < body.index("els.home.hidden = true")
+
+
+def test_an_evicted_copy_does_not_lie_in_the_list():
+    # Браузер вправе вытеснить Blob: запись в базе есть, играть нечего.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function playLocal"):source.index("function switchToCopy")]
+
+    assert "savedVideos.delete(" in body
+    assert "deleteVideo(" in body

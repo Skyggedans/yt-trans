@@ -5,11 +5,12 @@ import {
   activeCueIndex, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
   languageText, parsePositions, pendingAt, positionFor, readFontSize, readSwitches, rememberPosition,
   sharedUrl, SPARE_BYTES, copyState, copyVerdict, formatBytes, mergeCues, percent,
+  playSource,
   stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
 import {
-  askPersist, downloadVideo, freeBytes, listVideos, openDb, putVideo,
+  askPersist, deleteVideo, downloadVideo, freeBytes, getVideo, listVideos, openDb, putVideo,
 } from "./cache.js";
 
 const TOKEN_KEY = "yt-trans-token";
@@ -366,7 +367,7 @@ async function openLink(id) {
   // Одиночный ролик — это не список, а сразу просмотр: кнопка с одним пунктом
   // только заставляла бы нажимать дважды.
   if (videos.length === 1) {
-    play(videos[0].videoId, videos[0].title || title);
+    play(videos[0], { id, title });
 
     return;
   }
@@ -379,7 +380,7 @@ async function openLink(id) {
 
   for (const video of videos) {
     const item = document.createElement("li");
-    item.append(button(episodeLabel(video), () => play(video.videoId, video.title || title)));
+    item.append(button(episodeLabel(video), () => play(video, { id, title })));
     els.episodeList.append(item);
   }
 
@@ -388,11 +389,19 @@ async function openLink(id) {
 
 // --- Сцена ----------------------------------------------------------------
 
-function play(videoId, title) {
+function play(video, link = {}) {
+  // Без копии и без демона играть нечего: чёрный экран притворялся бы поломкой,
+  // поэтому сцена не открывается, а домашняя страница говорит, в чём дело.
+  if (playSource(savedVideos.has(video.videoId), daemonAlive) === "none") {
+    drawLinks(knownLinks, "демона нет, этого ролика на устройстве нет");
+
+    return;
+  }
+
   const previous = state.videoId;
 
   Object.assign(state, {
-    videoId,
+    videoId: video.videoId,
     cues: [],
     pending: [],
     language: null,
@@ -402,12 +411,16 @@ function play(videoId, title) {
     retryable: false,
     total: 0,
     translated: 0,
-    title: title || "",
+    title: video.title || link.title || "",
     notice: "",
+    link: { id: link.id || "", title: link.title || "" },
+    duration: Number(video.duration) || 0,
   });
 
   cuesByIndex.clear();
   paintedKey = null;
+
+  copyFailure = null;
 
   els.title.textContent = state.title;
   els.home.hidden = true;
@@ -415,10 +428,10 @@ function play(videoId, title) {
   drawCacheButton();
   render();
 
-  history.pushState({ videoId }, "");
+  history.pushState({ videoId: state.videoId }, "");
 
-  createJob(videoId);
-  watch(videoId, previous);
+  createJob(state.videoId);
+  watch(state.videoId, previous);
   prepareVideo();
 }
 
@@ -429,7 +442,8 @@ async function createJob(videoId) {
       body: JSON.stringify({ videoId, targetLang: "ru", authorTrack: true }),
     });
   } catch (error) {
-    note(error.message);
+    // Демона нет, но копия на устройстве есть — заводить задание не для кого.
+    note(!daemonAlive && savedVideos.has(videoId) ? "демона нет — играю сохранённое" : error.message);
   }
 }
 
@@ -451,12 +465,20 @@ async function prepareVideo() {
 
   stopVideoPoll();
 
+  // Копия на устройстве предпочтительнее демона: она не ждёт склейки и не
+  // рвётся вместе со связью.
+  if (playSource(savedVideos.has(videoId), daemonAlive) === "copy" && await playLocal(videoId)) {
+    return;
+  }
+
   let status;
 
   try {
     status = await api(`/v1/videos/${encodeURIComponent(videoId)}`, { method: "POST" });
   } catch (error) {
-    note(error.message);
+    note(playSource(false, daemonAlive) === "none"
+      ? "демона нет, этого ролика на устройстве нет"
+      : error.message);
 
     return;
   }
@@ -506,6 +528,88 @@ async function prepareVideo() {
 }
 
 // --- Кеш роликов на устройстве -------------------------------------------
+
+/** Сохранённые титры в память страницы: они не зависят ни от сокета, ни от демона. */
+function seedCues(record) {
+  if (!record.cues || !record.cues.length) {
+    return;
+  }
+
+  cuesByIndex.clear();
+
+  for (const cue of record.cues) {
+    cuesByIndex.set(cue.i, cue);
+  }
+
+  state.cues = [...cuesByIndex.values()].sort((a, b) => a.start - b.start);
+  state.language = record.language || state.language;
+  state.translated = countTranslated();
+  paintedKey = null;
+  render();
+  paint();
+}
+
+/** Открыть ролик из копии; false — копии нет или она не наша. */
+async function playLocal(videoId) {
+  if (!savedVideos.has(videoId) || !db) {
+    return false;
+  }
+
+  const record = await getVideo(db, videoId);
+
+  if (videoId !== state.videoId) {
+    return false;
+  }
+
+  if (!record || !record.blob) {
+    // Браузер вправе вытеснить Blob: запись в базе есть, играть нечего, и
+    // строка списка не должна больше врать, что ролик на устройстве.
+    savedVideos.delete(videoId);
+    deleteVideo(db, videoId).catch(() => {});
+    drawCacheButton();
+
+    return false;
+  }
+
+  switchToCopy(record, { resume: positionFor(positions, videoId), autoplay: true });
+  seedCues(record);
+
+  if (!daemonAlive) {
+    note("демона нет — играю сохранённое");
+  }
+
+  return true;
+}
+
+/**
+ * Играть из копии, не потеряв место и паузу: адрес объекта подставляется в
+ * <video>, а время возвращается по loadedmetadata. `resume` не задан — берём
+ * то место, где ролик стоит сейчас.
+ */
+function switchToCopy(record, { resume = 0, autoplay = false } = {}) {
+  const from = resume || els.video.currentTime;
+  const wasPlaying = !els.video.paused || autoplay;
+
+  if (objectUrl) {
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  objectUrl = URL.createObjectURL(record.blob);
+
+  els.video.addEventListener("loadedmetadata", () => {
+    if (from > 0) {
+      els.video.currentTime = from;
+    }
+
+    if (wasPlaying) {
+      els.video.play().catch(() => {
+        // Вне нажатия браузер вправе отказать — тогда зритель начнёт сам.
+      });
+    }
+  }, { once: true });
+
+  els.video.src = objectUrl;
+}
 
 // Запись сохранённых титров стоит дорого (целый mp4 поверх), поэтому копим их
 // и пишем не чаще раза в пять секунд — к концу перевода в базе всё равно всё.
@@ -789,6 +893,8 @@ async function finishCopy(blob) {
 
   if (state.videoId === record.videoId) {
     note("сохранено на устройстве");
+    // Копия готова посреди просмотра — подхватываем её без потери места.
+    switchToCopy(record);
     // Перевод идёт дальше: сохранённые титры дописываем, пока зритель тут.
     follow = { videoId: record.videoId, record, timer: null };
   } else {
@@ -1253,6 +1359,11 @@ function leaveStage() {
 
   if (state.videoId && !copying) {
     send(unwatchMessage(state.videoId));
+  }
+
+  if (objectUrl) {
+    URL.revokeObjectURL(objectUrl);
+    objectUrl = null;
   }
 
   els.video.pause();
