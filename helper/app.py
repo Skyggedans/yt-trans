@@ -1,6 +1,6 @@
 """Локальный демон: HTTP для управления, WebSocket для потока реплик.
 
-Слушает только петлю. Транспорт — WebSocket, а не SSE: в MV3 service worker
+Слушает петлю по умолчанию. Транспорт — WebSocket, а не SSE: в MV3 service worker
 умирает, если ответ fetch идёт дольше 30 секунд, а распознавание с переводом
 двадцатиминутного ролика занимает минуты. Трафик WebSocket при этом сбрасывает
 таймер простоя воркера, поэтому соединение само себя поддерживает.
@@ -20,6 +20,7 @@ import contextlib
 import logging
 import os
 import secrets
+from urllib.parse import urlsplit
 
 from helper.env import CONFIG_DIR  # импортируется первым: раскладывает кэши и подключает CUDA
 
@@ -30,6 +31,7 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -39,7 +41,6 @@ from helper.jobs import CapacityError, JobManager, Stage, refusal_snapshot
 
 log = logging.getLogger(__name__)
 
-HOST = "127.0.0.1"
 PORT = int(os.environ.get("YT_TRANS_PORT", "8756"))
 TOKEN_PATH = CONFIG_DIR / "token"
 
@@ -99,6 +100,9 @@ def load_token() -> str:
 TOKEN = load_token()
 manager = JobManager()
 
+# Адрес берётся из [server] после того, как появился сам менеджер и его конфиг.
+HOST = manager.config.server.host
+
 app = FastAPI(title="yt-trans helper", docs_url=None, redoc_url=None)
 
 # Заголовки CORS обязательны даже для петли: запрос из service worker несёт
@@ -113,22 +117,38 @@ app.add_middleware(
 )
 
 
-def check_origin(origin: str | None) -> None:
-    """Пускаем расширения и запросы без Origin (curl), но не обычные страницы.
+def same_origin(origin: str, host: str | None) -> bool:
+    """Origin страницы, которую раздаёт сам демон: тот же хост и порт, что в Host.
+
+    Сравнивается authority целиком, а не только имя: браузер присылает порт
+    в Origin тогда же, когда он есть в адресе. Страницы, раздаваемой демоном,
+    это пускает, а любой другой сайт — нет.
+    """
+    if not host:
+        return False
+
+    parts = urlsplit(origin)
+
+    return parts.scheme in ("http", "https") and parts.netloc.lower() == host.lower()
+
+
+def check_origin(origin: str | None, host: str | None = None) -> None:
+    """Пускаем расширения, свою страницу и запросы без Origin (curl), но не чужие сайты.
 
     Страница в браузере не может подделать Origin, поэтому это рабочая защита
     от того, чтобы произвольный сайт дёргал демон через привязку DNS к петле.
     """
-    if origin and not origin.startswith(ALLOWED_ORIGIN_SCHEMES):
+    if origin and not origin.startswith(ALLOWED_ORIGIN_SCHEMES) and not same_origin(origin, host):
         raise HTTPException(status_code=403, detail="origin не разрешён")
 
 
 async def auth(
+    request: Request,
     origin: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
     token: str | None = Query(default=None),
 ) -> None:
-    check_origin(origin)
+    check_origin(origin, request.headers.get("host"))
 
     supplied = token
 
@@ -328,11 +348,17 @@ async def drop_job(video_id: str, payload: dict | None = Body(default=None)) -> 
 async def websocket(socket: WebSocket) -> None:
     """Один сокет на вкладку. Клиент говорит, что смотрит, демон шлёт реплики."""
     origin = socket.headers.get("origin")
+
+    try:
+        check_origin(origin, socket.headers.get("host"))
+    except HTTPException:
+        await socket.close(code=4401)
+
+        return
+
     token = socket.query_params.get("token")
 
-    if (origin and not origin.startswith(ALLOWED_ORIGIN_SCHEMES)) or not (
-        token and secrets.compare_digest(token, TOKEN)
-    ):
+    if not (token and secrets.compare_digest(token, TOKEN)):
         await socket.close(code=4401)
 
         return
@@ -477,7 +503,7 @@ def main() -> None:
     # сначала отфильтровать, чтобы увидеть единственную важную строку.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     log.info("токен установки лежит в %s", TOKEN_PATH)
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="warning", proxy_headers=False)
 
 
 if __name__ == "__main__":

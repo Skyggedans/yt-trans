@@ -146,10 +146,20 @@ class YoutubeConfig:
 
 
 @dataclass(frozen=True)
+class ServerConfig:
+    # Адрес, на котором слушает демон. По умолчанию петля: демон запускает
+    # запросы к YouTube по команде клиента, и открывать его в сеть «на всякий
+    # случай» нельзя. Планшет в другой комнате — это host = "0.0.0.0"
+    # и токен из ~/.config/yt-trans/token как единственная защита.
+    host: str = "127.0.0.1"
+
+
+@dataclass(frozen=True)
 class Config:
     asr: AsrConfig
     translator: TranslatorConfig
     youtube: YoutubeConfig = YoutubeConfig()
+    server: ServerConfig = ServerConfig()
 
     @property
     def asr_vram_mib(self) -> int:
@@ -203,7 +213,8 @@ def load(path: Path = CONFIG_PATH) -> Config:
 
     translator = TranslatorConfig(**_section(raw, "translator", TranslatorConfig))
     youtube = YoutubeConfig(**_section(raw, "youtube", YoutubeConfig))
-    config = Config(asr=asr, translator=translator, youtube=youtube)
+    server = ServerConfig(**_section(raw, "server", ServerConfig))
+    config = Config(asr=asr, translator=translator, youtube=youtube, server=server)
 
     # Не ошибка запуска: без файла не откроются только ролики 18+, а остальное
     # работает. Зритель такого ролика получит ту же причину в отказе.

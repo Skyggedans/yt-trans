@@ -198,9 +198,15 @@ class FakeSocket:
         self._outgoing: asyncio.Queue = asyncio.Queue()
         # Обработчик разобрал всё сказанное и ждёт следующего сообщения.
         self._idle = asyncio.Event()
+        # Что обработчик сделал с соединением: принял или закрыл и с каким кодом.
+        self.accepted = False
+        self.closed: int | None = None
 
     async def accept(self) -> None:
-        pass
+        self.accepted = True
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed = code
 
     async def receive_json(self) -> dict:
         # Очередь пуста: всё, что клиент сказал, уже разобрано, и обработчик ждёт.
