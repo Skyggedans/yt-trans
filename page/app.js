@@ -37,6 +37,7 @@ const els = {
   title: document.getElementById("title"),
   toggleTarget: document.getElementById("toggle-target"),
   toggleStudy: document.getElementById("toggle-study"),
+  fullscreen: document.getElementById("fullscreen"),
 };
 
 const state = {
@@ -709,23 +710,30 @@ function paint() {
 }
 
 // Родная кнопка плеера разворачивает сам <video>, а слой строк — соседний
-// элемент, и в этом режиме его не видно. Перехватить саму кнопку нельзя (её
-// рисует браузер), но момент видно: как только полноэкранным стал ролик,
-// просим полноэкранным всю сцену. Документ уже в полноэкранном режиме, поэтому
-// браузер не требует нового нажатия и просто меняет элемент.
+// элемент, и в этом режиме его не видно. Подменить элемент «по факту» браузер
+// не даёт: полноэкранный режим требует нажатия, и запрос из обработчика
+// fullscreenchange отклоняется — видно, как экран разворачивается и сразу
+// возвращается. Поэтому у плеера его кнопка спрятана (controlslist), а сцену
+// разворачивает своя — по нажатию, когда браузер разрешает.
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+    return;
+  }
+
+  els.stage.requestFullscreen().catch(() => {});
+}
+
+// Там, где спрятать родную кнопку нечем (iOS), остаётся перехват: если
+// полноэкранным стал ролик, просим сцену. Отказ больше не выкидывает из
+// режима — иначе получался бы тот же прыжок туда и обратно.
 function watchFullscreen() {
   document.addEventListener("fullscreenchange", () => {
     if (document.fullscreenElement !== els.video || !els.stage.requestFullscreen) {
       return;
     }
 
-    els.stage.requestFullscreen().catch(() => {
-      // Браузер вправе отказать. Тогда лучше выйти из режима без строк, чем
-      // оставить зрителя без них и без способа вернуться.
-      if (document.fullscreenElement === els.video) {
-        document.exitFullscreen().catch(() => {});
-      }
-    });
+    els.stage.requestFullscreen().catch(() => {});
   });
 }
 
@@ -833,6 +841,7 @@ function boot() {
   els.linkForm.addEventListener("submit", addLink);
   els.toggleTarget.addEventListener("click", () => flipLine("target"));
   els.toggleStudy.addEventListener("click", () => flipLine("study"));
+  els.fullscreen.addEventListener("click", toggleFullscreen);
   drawSwitches();
 
   // Список эпизодов и сцена — один адрес, поэтому «назад» в браузере сам по себе

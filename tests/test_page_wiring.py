@@ -66,7 +66,6 @@ def test_the_stage_is_left_by_the_browser_history():
     assert "history.pushState" in source
     assert "popstate" in source
     assert 'id="back"' not in html
-    assert 'id="fullscreen"' not in html
 
 
 def test_the_players_fullscreen_turns_into_the_whole_stage():
@@ -76,3 +75,21 @@ def test_the_players_fullscreen_turns_into_the_whole_stage():
 
     assert "fullscreenchange" in source
     assert "requestFullscreen" in source
+
+
+def test_the_players_own_fullscreen_button_is_hidden():
+    # Он разворачивает голый <video>, а слой строк — соседний элемент и в этом
+    # режиме не рисуется. Своя кнопка разворачивает сцену целиком.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    tag = re.search(r"<video[^>]*>", html)
+
+    assert tag is not None
+    assert 'controlslist="nofullscreen"' in tag.group(0)
+
+
+def test_the_stage_goes_fullscreen_by_the_pages_own_button():
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="fullscreen"' in html
+    assert "els.stage.requestFullscreen" in source

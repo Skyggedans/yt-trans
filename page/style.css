@@ -272,6 +272,18 @@ input {
   opacity: .45;
 }
 
+/* Своя кнопка «во весь экран» — слева сверху, чтобы не спорить с выключателями
+   строк справа и не лезть под контролы плеера снизу. */
+#fullscreen {
+  position: absolute;
+  left: 12px;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  padding: 10px 12px;
+  font-size: 18px;
+  line-height: 1;
+  background: rgba(20, 20, 24, .82);
+}
+
 @media (min-width: 900px) {
   :root {
     --font: 34px;

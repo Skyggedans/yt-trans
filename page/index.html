@@ -42,8 +42,11 @@
   <section id="stage" hidden>
     <!-- controls обязательны: браузер не даёт запустить звук вне нажатия, и
          автозапуск после ответа демона отклоняется молча. Со своими кнопками
-         зритель в любом случае может начать, встать на паузу и перемотать. -->
-    <video id="video" controls playsinline preload="metadata"></video>
+         зритель в любом случае может начать, встать на паузу и перемотать.
+         controlslist убирает родную кнопку «во весь экран»: она разворачивает
+         только ролик, а строки — соседний слой, и в этом режиме их не видно.
+         Вместо неё — своя кнопка, которая разворачивает всю сцену. -->
+    <video id="video" controls controlslist="nofullscreen" playsinline preload="metadata"></video>
     <div id="overlay"></div>
     <!-- Выключатели строк: планшет смотрят и без русского перевода, когда
          важнее черногорский текст, и без черногорского — когда нужен только
@@ -54,6 +57,8 @@
       <button id="toggle-study" type="button" aria-pressed="true"
         aria-label="черногорская строка" title="черногорская строка">CNR</button>
     </div>
+    <button id="fullscreen" type="button" aria-label="во весь экран"
+      title="во весь экран">⛶</button>
     <div id="status" role="status"></div>
     <div id="title"></div>
   </section>
