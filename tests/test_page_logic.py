@@ -20,3 +20,16 @@ def test_the_page_logic_passes_its_own_tests():
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="нет node")
+def test_the_cache_module_passes_its_own_tests():
+    proc = subprocess.run(
+        ["node", "--test", "page/cache.test.mjs"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
