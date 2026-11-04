@@ -283,34 +283,26 @@ async def test_daemon_sends_title_and_tag_names_not_a_ready_prompt(pipeline, man
     assert parsed.prompt_names == ["Мамини", "Епизода", "Beograd"]
 
 
-async def test_an_empty_name_list_means_no_prompt_and_the_phrase_is_speech(pipeline, manager, caplog):
+async def test_an_empty_name_list_keeps_the_bare_phrase_and_its_echo_is_dropped(
+    whisper, monkeypatch, pipeline, manager, caplog
+):
     caplog.set_level(logging.INFO, logger="helper.jobs")
-    # Ни заголовок, ни теги имён не дают: список пуст, воркер пришлёт prompt=None,
-    # и фраза затравки после этого — обычная речь, а не эхо.
+    # Ни заголовок, ни теги имён не дают: список пуст, но затравка у сербского
+    # остаётся — голая фраза без имён, и реплика из неё сама приходит эхом.
     pipeline.info = replace(pipeline.info, title="copyright 2026", tags=["subscribe", "instagram"])
-    verdict = LanguageVerdict(
-        effective="sr", declared=None, declared_by=None, detected="sr", confidence=0.97,
-        reason="detector",
-    )
-    pipeline.asr_result = {
-        "language": "sr",
-        "verdict": verdict.wire(),
-        "detection": {
-            "bcmsShare": 0.97, "votes": 8, "probed": 8, "windows": [["sr", 0.97, 25.0]] * 8,
-        },
-        "duration": 2.0,
-        "model": "large-v3",
-        "prompt": None,
-        "cues": [segment(0.0, 4.0, PHRASE)],
-    }
+    heard(monkeypatch, SERBIAN_SPEECH)
+    whisper.segments = [whisper.segment(0.0, 4.0, f" {PHRASE}")]
+    # Ответ воркера настоящий: пустой список имён даёт голую фразу, а не None.
+    pipeline.asr_result = worker.transcribe(MINUTE, language="sr", prompt_names=[])
     job = manager.get_or_create(VIDEO, "ru", True)
 
     await pipeline.run(job)
 
     argv = pipeline.workers[-1].args
-
-    assert job.stage is Stage.DONE
-    assert argv[argv.index("--prompt-names") + 1] == "[]"
-    assert [c.src for c in job.cues] == [PHRASE]
     logged = [r.getMessage() for r in caplog.records if r.name == "helper.jobs"]
-    assert f"затравка {VIDEO}: нет" in logged
+
+    assert argv[argv.index("--prompt-names") + 1] == "[]"
+    assert job.stage is Stage.DONE
+    assert job.cues == []
+    assert f"затравка {VIDEO}: {PHRASE}" in logged
+    assert f"выброшено {VIDEO} (эхо затравки): {PHRASE}" in logged
