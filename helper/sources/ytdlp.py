@@ -219,12 +219,20 @@ class VideoInfo:
         return self.live_status in ("is_live", "is_upcoming", "post_live")
 
 
-def _ytdlp_cmd(*args: str, warnings: bool = False, cookies: Path | None = None) -> list[str]:
+def _ytdlp_cmd(
+    *args: str,
+    warnings: bool = False,
+    cookies: Path | None = None,
+    playlist: bool = False,
+) -> list[str]:
     """Вызов yt-dlp. cookies — аккаунт, и только для роликов 18+: всё прочее анонимно.
 
     Аккаунт, которым ходит yt-dlp, YouTube может забанить, поэтому он отдельный,
     а не зрителя, и подставляется лишь туда, где без него никак. yt-dlp при выходе
     дописывает в файл обновлённые cookies — так сессия и живёт дольше.
+
+    playlist=True — только для страницы ссылок, где человек даёт адрес списка
+    воспроизведения целиком. Всё остальное по-прежнему берёт один ролик.
     """
     YTDLP_CACHE.mkdir(parents=True, exist_ok=True)
 
@@ -236,7 +244,7 @@ def _ytdlp_cmd(*args: str, warnings: bool = False, cookies: Path | None = None) 
         # Метаданным и дорожкам они лишь засоряют текст ошибки, который целиком
         # уходит в сообщение зрителю.
         *([] if warnings else ["--no-warnings"]),
-        "--no-playlist",
+        *(["--yes-playlist"] if playlist else ["--no-playlist"]),
         # Deno на этой машине нет, а без JS-рантайма клиент `web` молча выпадает
         # из дефолтов и извлечение деградирует до одного visionos.
         "--js-runtimes",
@@ -698,3 +706,51 @@ def fetch_video(
         os.replace(produced, target)
 
     return target
+
+
+def probe_url(url: str, timeout: float = 60.0, *, cookies: Path | None = None) -> dict:
+    """Что лежит по ссылке: один ролик или плейлист, плоским списком без захода в каждый.
+
+    --flat-playlist берёт только то, что YouTube отдал в самом ответе: для списка
+    воспроизведения это пачка id и названий, один запрос вместо сотни.
+    """
+    raw = json.loads(
+        _run(
+            _ytdlp_cmd(
+                "-J",
+                "--skip-download",
+                "--flat-playlist",
+                url,
+                warnings=True,
+                cookies=cookies,
+                playlist=True,
+            ),
+            timeout,
+        )
+    )
+    entries = raw.get("entries") or []
+
+    if raw.get("_type") == "playlist":
+        videos = [
+            {
+                "videoId": entry["id"],
+                "title": entry.get("title") or "",
+                "duration": entry.get("duration"),
+            }
+            for entry in entries
+            if entry.get("id")
+        ]
+
+        return {"kind": "playlist", "title": raw.get("title") or "", "videos": videos}
+
+    return {
+        "kind": "video",
+        "title": raw.get("title") or "",
+        "videos": [
+            {
+                "videoId": raw.get("id") or "",
+                "title": raw.get("title") or "",
+                "duration": raw.get("duration"),
+            }
+        ],
+    }

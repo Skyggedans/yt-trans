@@ -41,7 +41,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from helper.jobs import CapacityError, JobManager, Stage, refusal_snapshot
+from helper import links
 from helper.sources import ytdlp
+from helper.sources.ytdlp import YtDlpError, probe_url
 
 log = logging.getLogger(__name__)
 
@@ -384,6 +386,73 @@ async def video_file(video_id: str) -> FileResponse:
         )
 
     return FileResponse(status.path, media_type="video/mp4")
+
+
+LINKS_REFUSAL = "нужна ссылка на YouTube"
+
+
+@app.get("/v1/links", dependencies=[Depends(auth)])
+async def list_links() -> dict:
+    return {"links": [link.wire() for link in links.load()]}
+
+
+@app.post("/v1/links", dependencies=[Depends(auth)])
+async def add_link(payload: dict) -> dict:
+    """Сохранить ссылку. Название и вид берём у YouTube, а не у человека."""
+    url = (payload or {}).get("url", "")
+
+    if not isinstance(url, str) or not links.is_youtube_url(url):
+        raise HTTPException(status_code=400, detail=LINKS_REFUSAL)
+
+    try:
+        found = await asyncio.to_thread(probe_url, url)
+    except YtDlpError as exc:
+        raise HTTPException(status_code=502, detail=f"не удалось прочитать ссылку: {exc}") from exc
+
+    try:
+        link = links.add(url, found["title"] or url, found["kind"])
+    except links.TooManyLinks as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"link": link.wire()}
+
+
+@app.delete("/v1/links/{link_id}", dependencies=[Depends(auth)])
+async def drop_link(link_id: str) -> dict:
+    return {"removed": links.remove(link_id)}
+
+
+@app.get("/v1/links/{link_id}/videos", dependencies=[Depends(auth)])
+async def link_videos(link_id: str) -> dict:
+    """Ролики ссылки плоским списком. Состояние картинки — у каждого сразу.
+
+    Список отвечает на вопрос «что можно смотреть мгновенно»: ready уже лежит
+    в кэше, preparing качается, absent — ничего нет. Спрашивать про каждый ролик
+    отдельно значило бы десяток запросов на открытие плейлиста.
+    """
+    link = next((item for item in links.load() if item.id == link_id), None)
+
+    if link is None:
+        raise HTTPException(status_code=404, detail="ссылки нет")
+
+    try:
+        found = await asyncio.to_thread(probe_url, link.url)
+    except YtDlpError as exc:
+        raise HTTPException(status_code=502, detail=f"не удалось прочитать ссылку: {exc}") from exc
+
+    videos = [
+        {
+            **video,
+            "state": (
+                manager.videos.status(video["videoId"]).state
+                if ytdlp.VIDEO_ID.match(video["videoId"])
+                else "absent"
+            ),
+        }
+        for video in found["videos"]
+    ]
+
+    return {"title": found["title"], "videos": videos}
 
 
 @app.websocket("/v1/ws")
