@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 from collections import deque
 from pathlib import Path
@@ -30,6 +32,16 @@ AUDIO_FORMAT = (
     "ba[format_id^=249][protocol=https]/"
     "ba[format_id^=250][protocol=https]/"
     "ba[protocol=https]/ba"
+)
+
+# Картинка и звук отдельными дорожками, потому что склеенных 1080p у YouTube нет.
+# Сначала mp4 с H.264 — он играет везде; при отсутствии берём любой H.264 (в контейнере
+# webm склейка всё равно уйдёт в mp4 при -c copy); в конце — что угодно, чтобы ролик
+# не пропадал из-за одного редкого кодека.
+VIDEO_FORMAT = (
+    "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/"
+    "bv*[vcodec^=avc1]+ba/"
+    "b[ext=mp4]/b"
 )
 
 # Идентификатор ролика: ровно 11 символов. Проверять обязательно — идентификатор
@@ -637,3 +649,52 @@ def audio_pcm(video_id: str, timeout: float = 900.0, *, cookies: Path | None = N
         )
 
     return np.frombuffer(pcm_bytes, dtype="<f4")
+
+
+def fetch_video(
+    video_id: str, target: Path, timeout: float = 1800.0, *, cookies: Path | None = None
+) -> Path:
+    """Скачать ролик и склеить в mp4 без перекодирования. Возвращает путь к файлу.
+
+    Временный каталог создаётся рядом с целью, а не в /tmp: os.replace атомарен
+    только внутри одной файловой системы. Готовый файл появляется под своим именем
+    целиком — недокачанного mp4 под именем, которое отдают зрителю, не бывает.
+    """
+    _check_id(video_id)
+
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix=f".{video_id}-", dir=target.parent) as work:
+        _run(
+            _ytdlp_cmd(
+                "-f",
+                VIDEO_FORMAT,
+                # Первым делом потолок разрешения, затем родной язык звука и лишь
+                # потом размер: -S lang обязана идти раньше +size, иначе на ролике
+                # с автодубляжом возьмётся самая маленькая дорожка — то есть чужая.
+                "-S",
+                "res:1080,lang,+size",
+                "--merge-output-format",
+                "mp4",
+                # Без faststart индекс лежит в конце файла, и браузер ждёт полной
+                # загрузки, прежде чем показать первый кадр и дать перемотать.
+                "--postprocessor-args",
+                "Merger+ffmpeg:-movflags +faststart",
+                "--no-progress",
+                "-o",
+                str(Path(work) / "video.%(ext)s"),
+                f"https://www.youtube.com/watch?v={video_id}",
+                warnings=True,
+                cookies=cookies,
+            ),
+            timeout,
+        )
+        produced = Path(work) / "video.mp4"
+
+        if not produced.exists():
+            raise YtDlpError("yt-dlp не оставил склеенного файла", permanent=True)
+
+        os.replace(produced, target)
+
+    return target
