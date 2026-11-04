@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import numpy as np
 
 from helper.env import YTDLP_CACHE
+from helper.language import is_bcms
 
 SAMPLE_RATE = 16000
 
@@ -30,9 +31,6 @@ AUDIO_FORMAT = (
     "ba[format_id^=250][protocol=https]/"
     "ba[protocol=https]/ba"
 )
-
-# Сербский континуум. Всё остальное — не наш язык, даже если дорожка существует.
-BCMS_LANG = re.compile(r"^(sr|hr|bs|sh)(-|$)", re.IGNORECASE)
 
 # Идентификатор ролика: ровно 11 символов. Проверять обязательно — идентификатор
 # приходит из расширения, а yt-dlp выкусывает первый похожий кусок из чего угодно
@@ -318,19 +316,35 @@ def probe(video_id: str, timeout: float = 90.0, *, cookies: Path | None = None) 
     )
 
 
-def usable_manual_track(info: VideoInfo) -> CaptionTrack | None:
-    """Ручная дорожка на сербском или соседнем языке, если она есть.
+def usable_manual_track(info: VideoInfo, pin: str | None = None) -> CaptionTrack | None:
+    """Ручная дорожка сербского семейства, если она есть и хозяин её не отменил.
 
-    Guard от чужого языка обязателен. Македонский, болгарский, словацкий, русский
-    и албанский — ASR-языки YouTube и акустические соседи сербского, так что ролик
-    с ошибочной автодетекцией может отдать правдоподобную дорожку не на том языке.
-    Наличие дорожки никогда не равно её пригодности.
+    Годится только ручная дорожка сербского семейства в любой записи метки: sr,
+    sr-Latn, sr-Cyrl, SR, sh, cnr, hr, bs. Сверяется семья через is_bcms, а не строка:
+    точное сравнение не узнавало ни cnr, ни sr_Latn. live_chat (чат повтора эфира)
+    и метки, которых нет среди кодов Whisper, не годятся никогда.
 
-    `automatic_captions` сюда не попадают по построению: для BCMS их не существует —
-    этих языков нет в списке автосубтитров YouTube.
+    Других языков здесь нет намеренно: метку надо сверять с речью, а определителя
+    без карты нет — на диске только large-v3 и turbo, — и зонд на карте отнял бы
+    у дорожки автора её смысл. Без сверки английская дорожка забрала бы ролик, где
+    YouTube назвал сербскую речь английской (Juske).
+
+    pin — закрепление хозяина ([asr] language). Вне сербского семейства оно значит
+    «речь не сербская», и сербская дорожка у такого ролика — перевод, а не оригинал.
+    Метаданные YouTube (audio_language) в выборе не участвуют: именно они однажды
+    и соврали.
+
+    Прежний довод остаётся: македонский, болгарский, словацкий и русский —
+    акустические соседи сербского, и наличие дорожки не равно её пригодности.
+
+    automatic_captions сюда не попадают по построению: probe кладёт в manual_tracks
+    только ключ subtitles.
     """
+    if pin is not None and not is_bcms(pin):
+        return None
+
     for track in info.manual_tracks:
-        if BCMS_LANG.match(track.lang):
+        if is_bcms(track.lang):
             return track
 
     return None

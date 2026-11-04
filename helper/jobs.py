@@ -938,8 +938,10 @@ class JobRunner:
         # клали бы под один ключ, спрашивали под другой, — а с выключенным
         # переключателем демон отдавал бы прежний результат распознавания,
         # и переключатель выглядел бы не работающим вовсе.
+        # Закреп вне сербского семейства дорожку не берёт, см. usable_manual_track.
+        pin, _ = self._declaration(job)
         track = (
-            usable_manual_track(job.info)
+            usable_manual_track(job.info, pin)
             if job.use_author_track and not job.track_failed
             else None
         )
@@ -996,8 +998,10 @@ class JobRunner:
                 )
                 job._set_language(verdict)
                 _log_language(job, verdict, [])
+                # Письменность — по действующему языку решения, а не по сырой метке:
+                # иначе кириллица под sr-Cyrl или SR ушла бы в переводчик.
                 job.cues = self._to_job_cues_from_track(
-                    normalize_cues(segments, track.lang)
+                    normalize_cues(segments, verdict.effective)
                 )
                 job._emit({"type": "segmented", "total": len(job.cues)})
                 await self._finish_translation(job)
