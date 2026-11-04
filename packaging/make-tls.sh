@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Сертификат для демона: свой корневой CA и выписанный им сертификат на адреса
-# этой машины в домашней сети.
+# и имена, по которым открывают страницу.
 #
 # Зачем: браузер считает безопасным только https (и петлю). Без https страницу
 # нельзя поставить как приложение, а в share-диалоге Android её не будет вовсе.
-# Публичный сертификат тут не годен: домашний адрес вида 192.168.* не принадлежит
-# никому, и выписать на него Let's Encrypt нельзя. Свой CA решает это одним
-# действием на планшете — установкой ca.crt.
+# Публичный сертификат тут не годен: домашний адрес вида 192.168.* и имя вида
+# *.local не принадлежат никому, и выписать на них Let's Encrypt нельзя. Свой CA
+# решает это одним действием на планшете — установкой ca.crt.
 #
-# Запуск: packaging/make-tls.sh [адрес ...]
-# Без аргументов берутся все адреса машины, кроме контейнерных.
+# Запуск: packaging/make-tls.sh [адрес или имя ...]
+# Имена попадают в сертификат как DNS, адреса — как IP; и то и другое сверяется
+# браузером буквально, поэтому «yt-trans.local» нельзя подписать как IP.
+# Адреса этой машины добавляются всегда, даже если переданы имена.
 #
 # CA создаётся один раз и при повторных запусках не меняется: сертификат демона
 # можно перевыпускать сколько угодно, а установленный на планшет ca.crt остаётся
@@ -22,25 +24,40 @@ TLS_DIR="$CONFIG_DIR/tls"
 HOSTNAME_NOW="$(hostname)"
 DAYS_CA=3650
 DAYS_CERT=825
+IPV4='^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
 
-addresses() {
-  if [ "$#" -gt 0 ]; then
-    printf '%s\n' "$@"
-    return
-  fi
-
+own_addresses() {
   # scope global — без петли и link-local; контейнерные мосты отбрасываем, их
   # адреса планшету не принадлежат и в сертификате только мешают.
   ip -4 -o addr show scope global |
     awk '$2 !~ /^(docker|br-|veth|virbr|tun|tap|cni|flannel)/ { split($4, a, "/"); print a[1] }'
 }
 
-ADDRS="$(addresses "$@")"
+extra_ips=""
+extra_names=""
 
-if [ -z "$ADDRS" ]; then
+for arg in "$@"; do
+  if [[ "$arg" =~ $IPV4 ]]; then
+    extra_ips="$extra_ips $arg"
+  else
+    extra_names="$extra_names $arg"
+  fi
+done
+
+addresses="$(own_addresses) $extra_ips"
+
+if [ -z "${addresses// /}" ]; then
   echo "не нашёл ни одного адреса в сети: укажи его аргументом" >&2
   exit 1
 fi
+
+SAN="DNS:$HOSTNAME_NOW,DNS:localhost,IP:127.0.0.1"
+for addr in $addresses; do
+  SAN="$SAN,IP:$addr"
+done
+for name in $extra_names; do
+  SAN="$SAN,DNS:$name"
+done
 
 mkdir -p "$TLS_DIR"
 chmod 700 "$TLS_DIR"
@@ -53,11 +70,6 @@ if [ ! -f "$TLS_DIR/ca.key" ] || [ ! -f "$TLS_DIR/ca.crt" ]; then
     -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
   chmod 600 "$TLS_DIR/ca.key"
 fi
-
-SAN="DNS:$HOSTNAME_NOW,DNS:localhost,IP:127.0.0.1"
-for addr in $ADDRS; do
-  SAN="$SAN,IP:$addr"
-done
 
 echo "выпускаю сертификат на: $SAN"
 openssl req -newkey rsa:2048 -sha256 -nodes \
@@ -79,6 +91,8 @@ chmod 600 "$TLS_DIR/server.key"
 rm -f "$TLS_DIR/server.csr" "$TLS_DIR/server.ext"
 
 PORT="${YT_TRANS_PORT:-8756}"
+first_name="$(echo $extra_names | awk '{print $1}')"
+where="${first_name:-<адрес>}"
 
 cat <<EOF
 
@@ -93,6 +107,6 @@ tls_key = "$TLS_DIR/server.key"
 
 на планшет один раз поставить $TLS_DIR/ca.crt
 (Настройки → Безопасность → Шифрование и учётные данные → Установить сертификат
-→ Сертификат CA), после чего открывать страницу по https://<адрес>:$PORT/
+→ Сертификат CA), после чего открывать страницу по https://$where:$PORT/
 и поставить её как приложение.
 EOF
