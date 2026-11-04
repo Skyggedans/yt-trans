@@ -355,3 +355,22 @@ def test_a_browser_without_a_worker_says_so_once():
     assert "workerMissing = true" in source
     assert '"yt-trans-no-worker"' in source
     assert "не сохранит страницу для офлайна" in source
+
+
+def test_the_page_imports_every_helper_it_uses():
+    # Пропущенное имя в импорте видно только в браузере: node --check имён не
+    # знает, а разметка и текст остаются на месте. Поэтому имена сверяются
+    # списком: всё, что страница зовёт из logic.js и cache.js, должно быть
+    # у неё в импорте.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    for module in ("logic.js", "cache.js"):
+        text = (ROOT / "page" / module).read_text(encoding="utf-8")
+        block = re.search(rf'import \{{([^}}]*)\}} from "\./{re.escape(module)}";', source)
+        names = {name.strip() for name in block.group(1).replace("\n", " ").split(",") if name.strip()}
+        exported = set(re.findall(r"export (?:async )?function (\w+)", text))
+        exported |= set(re.findall(r"export const (\w+)", text))
+
+        for name in sorted(exported):
+            if re.search(rf"\b{name}\(", source):
+                assert name in names, f"{module}: {name}"

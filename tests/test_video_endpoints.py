@@ -81,3 +81,17 @@ async def test_the_file_needs_the_token(manager, tmp_path):
                 f"/v1/videos/{VIDEO}/file", params={"token": helper_app.TOKEN}
             )
         ).status_code == 200
+
+
+async def test_the_size_is_asked_for_with_head_and_no_body(client, manager, tmp_path):
+    # Страница узнаёт размер до скачивания: без HEAD она не проверит свободное
+    # место и не покажет проценты, а молча начнёт качать ролик на 400 МБ.
+    manager.videos = VideoStore(tmp_path, fetch=writer())
+    manager.videos.ensure(VIDEO)
+    await manager.videos.settled(VIDEO)
+
+    response = await client.head(f"/v1/videos/{VIDEO}/file")
+
+    assert response.status_code == 200
+    assert response.headers["content-length"] == "10"
+    assert response.content == b""

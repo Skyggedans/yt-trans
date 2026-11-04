@@ -383,13 +383,18 @@ async def video_status(video_id: str) -> dict:
     return manager.videos.status(video_id).wire()
 
 
-@app.get("/v1/videos/{video_id}/file", dependencies=[Depends(auth)])
+@app.api_route(
+    "/v1/videos/{video_id}/file", methods=["GET", "HEAD"], dependencies=[Depends(auth)]
+)
 async def video_file(video_id: str) -> FileResponse:
     """Файл целиком или кусок: Range разбирает FileResponse, он же ставит 206.
 
     Токен принимается и в строке запроса (?token=): <video src> заголовков не шлёт.
     Пока файла нет — 409 с фразой состояния. Страница сначала спрашивает состояние
     и лишь потом ставит src, поэтому <video> не-200 не получает никогда.
+
+    HEAD нужен странице: по Content-Length она решает, влезет ли копия на планшет,
+    и показывает проценты загрузки. Тело на HEAD Starlette не отправляет.
     """
     status = manager.videos.status(video_id)
 

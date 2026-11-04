@@ -2,7 +2,7 @@
 // и слой субтитров. Чистая логика — в logic.js, здесь только DOM и сеть.
 
 import {
-  activeCueIndex, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
+  activeCueIndex, cacheLabel, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
   languageText, parsePositions, pendingAt, positionFor, readFontSize, readSwitches, rememberPosition,
   sharedUrl, SPARE_BYTES, copyState, copyVerdict, formatBytes, mergeCues, percent,
   playSource,
@@ -10,7 +10,8 @@ import {
 } from "./logic.js";
 
 import {
-  askPersist, deleteVideo, downloadVideo, freeBytes, getVideo, listVideos, openDb, putVideo,
+  askPersist, deleteVideo, downloadVideo, freeBytes, getMeta, getVideo, listVideos,
+  openDb, putMeta, putVideo,
 } from "./cache.js";
 
 const TOKEN_KEY = "yt-trans-token";
