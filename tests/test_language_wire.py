@@ -85,7 +85,7 @@ def test_the_language_event_lands_in_the_journal_and_the_snapshot(manager):
     job._set_language(JUSKE)
 
     assert job.language is JUSKE
-    assert job.events[-1] == {"type": "language", "language": JUSKE.wire()}
+    assert job.events[-1] == {"type": "language", "language": JUSKE.wire(), "videoId": VIDEO}
     assert job.snapshot()["language"] == JUSKE.wire()
     # Не через _set_stage: стадия и ожидание карты остаются, надпись бейджа та же.
     assert job.stage is Stage.QUEUED
@@ -98,7 +98,7 @@ def test_the_language_reuses_no_name_the_extension_reads(manager):
     event = job.events[-1]
     snapshot = job.snapshot()
 
-    assert event.keys() == {"type", "language"}
+    assert event.keys() == {"type", "language", "videoId"}
     assert event["type"] not in EXTENSION_TYPES
     # Ключи снимка до плана о языке. pending и translatedThrough добавил план страницы
     # для планшета; расширение не читает ни одного из трёх, поэтому любой четвёртый
@@ -124,7 +124,7 @@ async def test_the_socket_hears_the_language_before_segmented_after_asr(
     assert at < types.index("segmented")
     # Решение приходит сразу за распознаванием: его выносит воркер.
     assert heard[at - 1]["stage"] == "asr"
-    assert heard[at] == {"type": "language", "language": JUSKE.wire()}
+    assert heard[at] == {"type": "language", "language": JUSKE.wire(), "videoId": VIDEO}
     assert heard[at]["language"]["mismatch"] is True
     assert heard[at]["language"]["note"] == "YouTube указал en, по речи sr"
     assert heard[-1]["stage"] == "done"
@@ -167,7 +167,9 @@ async def test_the_socket_hears_the_language_before_segmented_on_the_author_trac
     )
 
     assert types.index("language") < types.index("segmented")
-    assert heard[types.index("language")] == {"type": "language", "language": expected.wire()}
+    assert heard[types.index("language")] == {
+        "type": "language", "language": expected.wire(), "videoId": VIDEO,
+    }
     assert expected.wire()["note"] == "YouTube указал en, дорожка автора sr"
     assert not pipeline.workers
     assert language_lines(caplog) == [

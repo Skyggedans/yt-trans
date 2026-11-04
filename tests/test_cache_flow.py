@@ -182,8 +182,8 @@ async def test_a_second_view_hears_the_verdict_before_the_cues(manager, connecti
     (stored,) = pipeline.cache.variants(VIDEO)
 
     assert [event["type"] for event in heard] == ["state", "language", "cues", "state"]
-    assert heard[1] == {"type": "language", "language": JUSKE.wire()}
-    assert heard[-1] == {"type": "state", "stage": "done", "cached": True, "total": 1}
+    assert heard[1] == {"type": "language", "language": JUSKE.wire(), "videoId": VIDEO}
+    assert heard[-1] == {"type": "state", "stage": "done", "cached": True, "total": 1, "videoId": VIDEO}
     assert job.snapshot()["language"]["note"] == "YouTube указал en, по речи sr"
     assert len(pipeline.workers) == 1
     assert (stored["pin"], stored["language"]) == ("", JUSKE.wire())
@@ -198,7 +198,9 @@ async def test_metadata_does_not_split_the_cache(manager, pipeline):
     await pipeline.run(again)
 
     assert len(pipeline.workers) == 1
-    assert again.events[-1] == {"type": "state", "stage": "done", "cached": True, "total": 1}
+    assert again.events[-1] == {
+        "type": "state", "stage": "done", "cached": True, "total": 1, "videoId": VIDEO,
+    }
     assert again.language == FLOOR
 
 
@@ -235,7 +237,9 @@ async def test_a_result_without_cues_is_not_cached(manager, pipeline):
     await pipeline.run(job)
 
     assert job.stage is Stage.DONE
-    assert job.events[-1] == {"type": "state", "stage": "done", "total": 0, "cached": False}
+    assert job.events[-1] == {
+        "type": "state", "stage": "done", "total": 0, "cached": False, "videoId": VIDEO,
+    }
     assert pipeline.cache.variants(VIDEO) == []
     assert job.snapshot()["language"]["note"] == "речи почти нет, язык принят за sr"
 
@@ -251,7 +255,7 @@ async def test_an_entry_without_cues_is_a_miss_for_the_pipeline_too(manager, pip
     await pipeline.run(again)
 
     assert len(pipeline.workers) == 2
-    assert again.events[-1] == {"type": "state", "stage": "done", "total": 1}
+    assert again.events[-1] == {"type": "state", "stage": "done", "total": 1, "videoId": VIDEO}
     assert len(pipeline.cache.get(key)["cues"]) == 1
 
 
@@ -339,7 +343,7 @@ async def test_restore_brings_the_verdict_back_before_the_cues(client, manager):
     assert body["found"] is True
     assert body["snapshot"]["language"] == JUSKE.wire()
     assert [event["type"] for event in restored.events] == ["language", "cues", "state"]
-    assert restored.events[0] == {"type": "language", "language": JUSKE.wire()}
+    assert restored.events[0] == {"type": "language", "language": JUSKE.wire(), "videoId": video}
 
 
 @pytest.mark.parametrize(

@@ -155,6 +155,19 @@ def test_journal_positions_stay_exact_in_javascript(monkeypatch):
     assert 0 <= job.journal_end <= 2**53 - 1
 
 
+async def test_every_event_names_the_video_it_belongs_to(manager):
+    # Сокет подписан сразу на несколько заданий (сцена и идущая на устройство
+    # копия), а события заданий идут в один поток. Без ролика клиент не может
+    # ни отбросить чужое, ни дописать титры своей копии: событие реплик уходило
+    # безымянным, и сохранённое оставалось с тем, что было в снимке.
+    job = manager.get_or_create("abcdefghijk", "ru", True)
+    job._emit({"type": "cues", "cues": []})
+
+    answer = await job.poll(cursor=job.journal_end - 1, timeout=0.01)
+
+    assert answer["events"][0]["videoId"] == "abcdefghijk"
+
+
 async def test_trimmed_journal_keeps_its_positions_relative_to_the_base(manager):
     from helper.jobs import MAX_EVENT_LOG
 
