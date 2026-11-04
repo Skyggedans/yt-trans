@@ -434,6 +434,43 @@ def test_a_saved_copy_keeps_collecting_cues_while_the_daemon_is_alive():
     assert "daemonAlive" in body
 
 
+def test_opening_a_video_rereads_the_copies_from_the_database():
+    # Копию могли удалить в другом окне (установленное приложение и вкладка
+    # браузера — это два экземпляра страницы). Память этого окна тогда врёт:
+    # строка обещает «на устройстве», а играть нечего, и офлайн остаётся
+    # только сообщение «этого ролика на устройстве нет».
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function play("):source.index("async function createJob")]
+
+    assert "await openCache()" in body
+    assert body.index("await openCache()") < body.index("playSource(")
+
+
+def test_the_copies_list_is_rebuilt_and_not_only_extended():
+    # openCache вызывается при каждом открытии ролика: доливка оставила бы в
+    # памяти то, чего в базе уже нет.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function openCache("):source.index("function drawCacheButton")]
+
+    assert "savedVideos.clear()" in body
+
+
+def test_deleting_a_copy_redraws_the_cache_switch():
+    # Переключатель на сцене живёт своей надписью: без перерисовки он
+    # продолжал бы показывать размер удалённой копии.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function dropCopy"):source.index("async function addLink")]
+
+    assert "drawCacheButton()" in body
+
+
+def test_returning_to_the_window_refreshes_the_copies():
+    # Вкладку прячут и возвращаются к ней: пока её не было, копию могли удалить.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert 'document.addEventListener("visibilitychange"' in source
+
+
 def test_the_page_imports_every_helper_it_uses():
     # Пропущенное имя в импорте видно только в браузере: node --check имён не
     # знает, а разметка и текст остаются на месте. Поэтому имена сверяются

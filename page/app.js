@@ -431,6 +431,9 @@ async function dropCopy(videoId) {
   }
 
   savedVideos.delete(videoId);
+  // Переключатель на сцене живёт своей надписью и без этого продолжал бы
+  // показывать размер удалённой копии.
+  drawCacheButton();
 
   if (currentEpisodes) {
     drawEpisodes(currentEpisodes.title, currentEpisodes.videos, currentEpisodes.linkId);
@@ -588,7 +591,11 @@ function drawEpisodes(title, videos, linkId = "") {
 
 // --- Сцена ----------------------------------------------------------------
 
-function play(video, link = {}) {
+async function play(video, link = {}) {
+  // Устройство — единственный источник правды о копиях: удалённую в другом окне
+  // страница иначе приняла бы за сохранённую и открыла пустую сцену.
+  await openCache();
+
   // Без копии и без демона играть нечего: чёрный экран притворялся бы поломкой,
   // поэтому сцена не открывается, а домашняя страница говорит, в чём дело.
   if (playSource(savedVideos.has(video.videoId), daemonAlive) === "none") {
@@ -897,7 +904,14 @@ async function openCache() {
   }
 
   try {
-    for (const record of await listVideos(db)) {
+    const records = await listVideos(db);
+
+    // Не доливка, а пересборка: копию могли удалить в другом окне, и в памяти
+    // этого окна осталась бы строка, обещающая то, чего на устройстве нет.
+    // Пересобираем только по удавшемуся чтению: иначе сбой стирал бы список.
+    savedVideos.clear();
+
+    for (const record of records) {
       savedVideos.set(record.videoId, record);
     }
   } catch {
@@ -1488,6 +1502,22 @@ function watchFullscreen() {
   });
 }
 
+// Окно прячут и возвращаются к нему: пока его не было, копию могли удалить в
+// соседнем (установленное приложение и вкладка браузера — разные экземпляры
+// страницы). Вернувшись, список спрашивает устройство, а не свою память.
+function watchCopies() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+
+    openCache().then(() => {
+      drawCacheButton();
+      drawLinks(knownLinks, "");
+    });
+  });
+}
+
 function startClock() {
   // Кадровый колбэк точнее timeupdate: тот срабатывает четыре раза в секунду
   // и оставляет субтитр отставать от картинки на четверть секунды.
@@ -1654,6 +1684,7 @@ async function boot() {
   // по нему возвращает к списку.
   window.addEventListener("popstate", leaveStage);
   watchFullscreen();
+  watchCopies();
 
   startClock();
   reportPlayhead();
