@@ -66,3 +66,21 @@ async def test_the_socket_accepts_the_page_the_daemon_serves(manager):
         assert (await socket.hear())["type"] == "snapshot"
     finally:
         await socket.disconnect()
+
+
+async def test_on_the_loop_health_still_diagnoses(client):
+    body = (await client.get("/v1/health")).json()
+
+    assert body["ok"] is True
+    assert "models" in body
+    assert "token_path" in body
+
+
+async def test_in_the_network_health_says_only_that_it_is_alive(client, monkeypatch):
+    # Без ключа и на всех интерфейсах: имена моделей, состояние заданий, размер
+    # кэша и путь к токену с именем пользователя — это карта чужой машины.
+    monkeypatch.setattr(helper_app, "HOST", "0.0.0.0")
+
+    body = (await client.get("/v1/health")).json()
+
+    assert body == {"ok": True}

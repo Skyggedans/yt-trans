@@ -40,7 +40,10 @@
   </section>
 
   <section id="stage" hidden>
-    <video id="video" playsinline preload="metadata"></video>
+    <!-- controls обязательны: браузер не даёт запустить звук вне нажатия, и
+         автозапуск после ответа демона отклоняется молча. Со своими кнопками
+         зритель в любом случае может начать, встать на паузу и перемотать. -->
+    <video id="video" controls playsinline preload="metadata"></video>
     <div id="overlay"></div>
     <div id="status" role="status"></div>
     <div id="title"></div>

@@ -110,6 +110,9 @@ manager = JobManager()
 # Адрес берётся из [server] после того, как появился сам менеджер и его конфиг.
 HOST = manager.config.server.host
 
+# Адреса, на которых демон слышен только хозяину: там /v1/health рассказывает всё.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
 app = FastAPI(title="yt-trans helper", docs_url=None, redoc_url=None)
 
 # Заголовки CORS обязательны даже для петли: запрос из service worker несёт
@@ -172,8 +175,14 @@ async def auth(
 async def health() -> dict:
     """Без токена: расширение по нему находит демон, а человек — диагностирует.
 
-    Секретов не раскрывает: только версии моделей и состояние карты.
+    На петле рассказывает про модели и карту — там его слышит только хозяин. В сети
+    отвечает одно «живой»: этот ответ может получить любой в домашней сети, а имена
+    моделей, состояние заданий, размер кэша и путь к токену с именем пользователя —
+    это карта чужой машины. Секретов тут и раньше не было, но в сети и этого много.
     """
+    if HOST not in LOOPBACK_HOSTS:
+        return {"ok": True}
+
     state = await asyncio.to_thread(manager.lease.state)
 
     return {
@@ -391,6 +400,23 @@ async def video_file(video_id: str) -> FileResponse:
 LINKS_REFUSAL = "нужна ссылка на YouTube"
 
 
+async def probe_with_account(url: str, cookies: Path | None) -> dict:
+    """Разбор ссылки: анонимно, а на возрастное ограничение — ещё раз с аккаунтом.
+
+    То же правило, что у скачивания ролика, и по той же причине: аккаунт
+    подставляется только там, где без него никак. Без этой второй попытки ссылку
+    на ролик 18+ нельзя было бы даже сохранить, хотя скачать его демон умеет.
+    """
+    try:
+        return await asyncio.to_thread(probe_url, url)
+    except YtDlpError as exc:
+        if not (exc.age_restricted and cookies):
+            raise
+
+        return await asyncio.to_thread(probe_url, url, cookies=cookies)
+
+
+
 @app.get("/v1/links", dependencies=[Depends(auth)])
 async def list_links() -> dict:
     return {"links": [link.wire() for link in links.load()]}
@@ -405,7 +431,7 @@ async def add_link(payload: dict) -> dict:
         raise HTTPException(status_code=400, detail=LINKS_REFUSAL)
 
     try:
-        found = await asyncio.to_thread(probe_url, url)
+        found = await probe_with_account(url, manager.config.youtube.cookies_path)
     except YtDlpError as exc:
         raise HTTPException(status_code=502, detail=f"не удалось прочитать ссылку: {exc}") from exc
 
@@ -436,7 +462,7 @@ async def link_videos(link_id: str) -> dict:
         raise HTTPException(status_code=404, detail="ссылки нет")
 
     try:
-        found = await asyncio.to_thread(probe_url, link.url)
+        found = await probe_with_account(link.url, manager.config.youtube.cookies_path)
     except YtDlpError as exc:
         raise HTTPException(status_code=502, detail=f"не удалось прочитать ссылку: {exc}") from exc
 

@@ -2,11 +2,13 @@
 // и слой субтитров. Чистая логика — в logic.js, здесь только DOM и сеть.
 
 import {
-  activeCueIndex, cueLines, formatTime, languageText, pendingAt, stageText,
+  activeCueIndex, cueLines, formatTime, isForVideo, languageText, parsePositions,
+  pendingAt, positionFor, rememberPosition, stageText, unwatchMessage, watchMessages,
 } from "./logic.js";
 
 const TOKEN_KEY = "yt-trans-token";
 const CLIENT_KEY = "yt-trans-client";
+const POSITIONS_KEY = "yt-trans-positions";
 const POLL_VIDEO_MS = 2000;
 const RECONNECT_MS = 1000;
 const PLAYHEAD_MS = 1000;
@@ -59,6 +61,9 @@ let socket = null;
 let videoTimer = null;
 let layer = null;
 let paintedKey = null;
+// Место просмотра — своё на устройство: планшет в другой комнате продолжает
+// с того места, где его оставили, и не тянет за собой вкладки компьютера.
+let positions = parsePositions(store(POSITIONS_KEY));
 
 const clientId = makeClientId();
 
@@ -298,6 +303,8 @@ async function openLink(id) {
 // --- Сцена ----------------------------------------------------------------
 
 function play(videoId, title) {
+  const previous = state.videoId;
+
   Object.assign(state, {
     videoId,
     cues: [],
@@ -322,7 +329,7 @@ function play(videoId, title) {
   render();
 
   createJob(videoId);
-  watch(videoId);
+  watch(videoId, previous);
   prepareVideo();
 }
 
@@ -373,8 +380,19 @@ async function prepareVideo() {
 
     if (current.state === "ready") {
       note("");
+
+      const resume = positionFor(positions, videoId);
+
       els.video.src = `/v1/videos/${encodeURIComponent(videoId)}/file?token=${encodeURIComponent(token)}`;
-      els.video.play().catch(() => {});
+      els.video.addEventListener("loadedmetadata", () => {
+        if (resume > 0) {
+          els.video.currentTime = resume;
+        }
+      }, { once: true });
+      els.video.play().catch(() => {
+        // Браузер вправе отказать: запуск вне нажатия он считает автозапуском.
+        // Кнопки у плеера свои, так что зритель начнёт сам — молчать тут честно.
+      });
 
       return;
     }
@@ -447,23 +465,33 @@ function connectSocket() {
   });
 }
 
-function watch(videoId) {
+function send(message) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
-    // Подписка уйдёт из обработчика open, как только соединение поднимется.
-    return;
+    return false;
   }
 
-  socket.send(JSON.stringify({
-    op: "watch", videoId, targetLang: "ru", authorTrack: true,
-  }));
-  // Нулевая позиция говорит демону, что смотреть будут с начала: перевод пойдёт
-  // от первой реплики, а не от чужой середины.
-  socket.send(JSON.stringify({
-    op: "playhead", videoId, t: 0, clientId,
-  }));
+  socket.send(JSON.stringify(message));
+
+  return true;
+}
+
+function watch(videoId, previous = null) {
+  // Подписка уйдёт из обработчика open, как только соединение поднимется:
+  // сокета ещё нет, а запоминать её тут нечем — он подпишется по state.videoId.
+  for (const message of watchMessages(
+    videoId, positionFor(positions, videoId), clientId, previous,
+  )) {
+    send(message);
+  }
 }
 
 function handleMessage(message) {
+  // События задания не несут videoId, а сокет помнит все подписки: без этой
+  // проверки реплики прежнего эпизода ложились бы на номера новых.
+  if (!isForVideo(message, state.videoId)) {
+    return;
+  }
+
   switch (message.type) {
     case "snapshot":
       takeSnapshot(message);
@@ -492,6 +520,10 @@ function handleMessage(message) {
   }
 
   render();
+  // На паузе кадров нет, timeupdate молчит — новый перевод иначе не дошёл бы
+  // до экрана до самого возобновления. paint() дешёвый: одинаковая строка
+  // не трогает DOM.
+  paint();
 }
 
 function takeSnapshot(snapshot) {
@@ -681,18 +713,31 @@ function startClock() {
 
 function reportPlayhead() {
   setInterval(() => {
-    if (!state.videoId || els.video.paused) {
+    if (!state.videoId) {
       return;
     }
 
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    // Место запоминаем и на паузе: именно тогда зритель уходит, а вернувшись,
+    // должен попасть туда же, а не в начало.
+    savePosition();
+
+    if (els.video.paused) {
       return;
     }
 
-    socket.send(JSON.stringify({
+    send({
       op: "playhead", videoId: state.videoId, t: els.video.currentTime, clientId,
-    }));
+    });
   }, PLAYHEAD_MS);
+}
+
+function savePosition() {
+  if (!state.videoId) {
+    return;
+  }
+
+  positions = rememberPosition(positions, state.videoId, els.video.currentTime);
+  store(POSITIONS_KEY, JSON.stringify(positions));
 }
 
 // --- Кнопки сцены ---------------------------------------------------------
@@ -710,6 +755,14 @@ function fullscreen() {
 }
 
 function back() {
+  // Уходим — запоминаем место и отпускаем ролик: без отписки демон продолжает
+  // слать сюда его реплики, а место пропало бы вместе с закрытым плеером.
+  savePosition();
+
+  if (state.videoId) {
+    send(unwatchMessage(state.videoId));
+  }
+
   els.video.pause();
   els.video.removeAttribute("src");
   els.video.load();

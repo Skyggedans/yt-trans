@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  activeCueIndex, cueLines, formatTime, languageText, pendingAt, stageText,
+  activeCueIndex, cueLines, formatTime, isForVideo, languageText, parsePositions,
+  pendingAt, positionFor, rememberPosition, stageText, unwatchMessage, watchMessages,
 } from "./logic.js";
 
 const CUES = [
@@ -97,4 +98,52 @@ test("time is read the way a player shows it", () => {
   assert.equal(formatTime(0), "0:00");
   assert.equal(formatTime(65), "1:05");
   assert.equal(formatTime(3723), "1:02:03");
+});
+
+test("an event about another video is not this video's event", () => {
+  // У сокета нет поля videoId в событиях задания: он подписан на всё, что
+  // смотрит. Пока страница не отписалась от прежнего эпизода, его реплики
+  // приходят сюда же — и по номерам совпадают с новыми.
+  assert.equal(isForVideo({ type: "cues" }, "abc"), true);
+  assert.equal(isForVideo({ type: "snapshot", videoId: "abc" }, "abc"), true);
+  assert.equal(isForVideo({ type: "cues", videoId: "xyz" }, "abc"), false);
+  assert.equal(isForVideo({ type: "state", videoId: "xyz" }, null), false);
+});
+
+test("subscribing lets go of the previous episode before taking the next", () => {
+  const first = watchMessages("abc", 0, "client-1");
+
+  assert.deepEqual(first, [
+    { op: "watch", videoId: "abc", targetLang: "ru", authorTrack: true },
+    { op: "playhead", videoId: "abc", t: 0, clientId: "client-1" },
+  ]);
+
+  const second = watchMessages("xyz", 40, "client-1", "abc");
+
+  assert.deepEqual(second, [
+    { op: "unwatch", videoId: "abc" },
+    { op: "watch", videoId: "xyz", targetLang: "ru", authorTrack: true },
+    { op: "playhead", videoId: "xyz", t: 40, clientId: "client-1" },
+  ]);
+  // Тот же ролик заново — отписываться не от чего.
+  assert.equal(watchMessages("abc", 0, "c", "abc").length, 2);
+  assert.deepEqual(unwatchMessage("abc"), { op: "unwatch", videoId: "abc" });
+});
+
+test("the place watched is remembered per video, and rubbish is not a place", () => {
+  assert.deepEqual(parsePositions(""), {});
+  assert.deepEqual(parsePositions("{не json"), {});
+  assert.deepEqual(parsePositions("[1,2]"), {});
+  assert.deepEqual(
+    parsePositions('{"abc": 12.7, "xyz": "да", "q": -3}'),
+    { abc: 12.7 },
+  );
+
+  assert.equal(positionFor({ abc: 12.7 }, "abc"), 12.7);
+  assert.equal(positionFor({}, "abc"), 0);
+  assert.equal(positionFor(null, "abc"), 0);
+
+  assert.deepEqual(rememberPosition({}, "abc", 12.7), { abc: 12 });
+  assert.deepEqual(rememberPosition({ abc: 12 }, "abc", 0), {});
+  assert.deepEqual(rememberPosition({ abc: 12 }, "xyz", NaN), { abc: 12 });
 });

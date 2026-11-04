@@ -21,3 +21,23 @@ def test_every_element_the_page_looks_for_exists():
     present = set(re.findall(r'id="([^"]+)"', html))
 
     assert ids_the_page_looks_for() - present == set()
+
+
+def test_the_video_carries_its_own_controls():
+    # Браузер не даёт запустить звук вне нажатия: автозапуск после ответа демона
+    # отклоняется молча, и без встроенных кнопок зритель остаётся с чёрным кадром
+    # и без способа что-либо сделать.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    tag = re.search(r"<video[^>]*>", html)
+
+    assert tag is not None
+    assert "controls" in tag.group(0)
+
+
+def test_the_layer_repaints_when_cues_arrive():
+    # Пауза там, где ждёшь перевода, — главный сценарий страницы. Пока кадры
+    # не идут, timeupdate молчит, поэтому новый перевод сам должен перерисовать слой.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function handleMessage"):source.index("function takeSnapshot")]
+
+    assert "paint()" in body

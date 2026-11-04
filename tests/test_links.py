@@ -190,3 +190,78 @@ async def test_a_link_can_be_removed(client, monkeypatch):
 
     assert (await client.delete(f"/v1/links/{link_id}")).json() == {"removed": True}
     assert (await client.get("/v1/links")).json()["links"] == []
+
+
+async def test_a_restricted_link_is_probed_again_with_the_account(monkeypatch):
+    """Ролик 18+ не читается анонимно — значит, вторая попытка с аккаунтом.
+
+    Такое же правило, как у скачивания: анонимно всегда, аккаунт только там, где
+    без него никак. Без этой попытки ссылку на ролик 18+ нельзя было даже
+    сохранить со страницы планшета.
+    """
+    from pathlib import Path
+
+    from helper import app as helper_app
+    from helper.sources.ytdlp import YtDlpError
+
+    calls = []
+
+    def probe(url, timeout=60.0, *, cookies=None):
+        calls.append(cookies)
+
+        if len(calls) == 1:
+            raise YtDlpError("ролик 18+", age_restricted=True)
+
+        return {
+            "kind": "video",
+            "title": "Ролик",
+            "videos": [{"videoId": "abcdefghijk", "title": "Ролик", "duration": 300}],
+        }
+
+    monkeypatch.setattr(helper_app, "probe_url", probe)
+    account = Path("/tmp/youtube-18.txt")
+
+    found = await helper_app.probe_with_account("https://youtu.be/abcdefghijk", account)
+
+    assert found["title"] == "Ролик"
+    assert calls == [None, account]
+
+
+async def test_without_an_account_the_restriction_is_final(monkeypatch):
+    from helper import app as helper_app
+    from helper.sources.ytdlp import YtDlpError
+
+    calls = []
+
+    def probe(url, timeout=60.0, *, cookies=None):
+        calls.append(cookies)
+        raise YtDlpError("ролик 18+", age_restricted=True)
+
+    monkeypatch.setattr(helper_app, "probe_url", probe)
+
+    with pytest.raises(YtDlpError):
+        await helper_app.probe_with_account("https://youtu.be/abcdefghijk", None)
+
+    assert calls == [None]
+
+
+async def test_another_failure_is_not_retried_with_the_account(monkeypatch):
+    from pathlib import Path
+
+    from helper import app as helper_app
+    from helper.sources.ytdlp import YtDlpError
+
+    calls = []
+
+    def probe(url, timeout=60.0, *, cookies=None):
+        calls.append(cookies)
+        raise YtDlpError("ролик удалён", permanent=True)
+
+    monkeypatch.setattr(helper_app, "probe_url", probe)
+
+    with pytest.raises(YtDlpError):
+        await helper_app.probe_with_account(
+            "https://youtu.be/abcdefghijk", Path("/tmp/youtube-18.txt")
+        )
+
+    assert calls == [None]

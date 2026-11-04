@@ -112,3 +112,81 @@ export function formatTime(seconds) {
 
   return `${minutes}:${rest}`;
 }
+
+/** Событие о другом ролике — не наше: сокет подписан на всё, что смотрит страница. */
+export function isForVideo(message, videoId) {
+  return (
+    message.videoId === undefined
+    || message.videoId === null
+    || message.videoId === videoId
+  );
+}
+
+/** Отписка от ролика: без неё старый эпизод продолжает слать сюда свои реплики. */
+export function unwatchMessage(videoId) {
+  return { op: "unwatch", videoId };
+}
+
+/** Что сказать сокету при подписке: отписка от прежнего, подписка, место просмотра. */
+export function watchMessages(videoId, t, clientId, previous = null) {
+  const messages = [];
+
+  if (previous && previous !== videoId) {
+    messages.push(unwatchMessage(previous));
+  }
+
+  messages.push({ op: "watch", videoId, targetLang: "ru", authorTrack: true });
+  messages.push({
+    op: "playhead",
+    videoId,
+    t: typeof t === "number" && Number.isFinite(t) && t > 0 ? t : 0,
+    clientId,
+  });
+
+  return messages;
+}
+
+/** Карта мест просмотра из строки localStorage; битое и чужие поля — прочь. */
+export function parsePositions(raw) {
+  let data;
+
+  try {
+    data = JSON.parse(raw || "{}");
+  } catch {
+    return {};
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return {};
+  }
+
+  const positions = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      positions[key] = value;
+    }
+  }
+
+  return positions;
+}
+
+/** Где остановились: 0, если ролик ещё не смотрели. */
+export function positionFor(positions, videoId) {
+  const value = positions ? positions[videoId] : undefined;
+
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Запомнить место. Ноль и нечисло местом не считаются и запись стирают. */
+export function rememberPosition(positions, videoId, seconds) {
+  const next = { ...(positions || {}) };
+
+  if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) {
+    next[videoId] = Math.floor(seconds);
+  } else {
+    delete next[videoId];
+  }
+
+  return next;
+}
