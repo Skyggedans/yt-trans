@@ -86,6 +86,8 @@ let positions = parsePositions(store(POSITIONS_KEY));
 // ходить на сервер за тем же списком.
 let knownLinks = [];
 let linksQuery = "";
+// Открытая ссылка: перерисовать её эпизоды можно и не спрашивая демона заново.
+let currentEpisodes = null;
 // Какие строки показывать — тоже своё на устройство: планшет в другой комнате
 // не должен менять то, что настроено на компьютере.
 let switches = readSwitches(store(SWITCHES_KEY));
@@ -153,7 +155,15 @@ async function api(path, options = {}) {
     headers["Content-Type"] = "application/json";
   }
 
-  const response = await fetch(path, { ...options, headers });
+  const response = await fetch(path, { ...options, headers }).catch((error) => {
+    // Запрос не дошёл вовсе — демона нет. 401 ниже — наоборот, живой демон
+    // с чужим токеном, и офлайн тут ни при чём.
+    daemonAlive = false;
+
+    throw error;
+  });
+
+  daemonAlive = true;
 
   if (response.status === 401) {
     showSetup("токен не подошёл");
@@ -197,9 +207,10 @@ function saveToken() {
 
 // --- Дом: сохранённые ссылки и эпизоды -----------------------------------
 
-function start() {
+async function start() {
+  await openCache();
   connectSocket();
-  loadLinks();
+  await loadLinks();
   consumeShare();
 }
 
@@ -226,6 +237,12 @@ async function consumeShare() {
       await openLink(data.link.id);
     }
   } catch (error) {
+    if (!daemonAlive) {
+      drawLinks(knownLinks, "демона нет — ссылку из YouTube добавить нельзя");
+
+      return;
+    }
+
     drawLinks([], `не удалось открыть ссылку из YouTube: ${error.message}`);
   }
 }
@@ -260,8 +277,19 @@ function drawLinks(items, message) {
   }
 
   if (!items.length) {
+    // Ссылок демон не дал, но сохранённое лежит на устройстве: оно и есть
+    // список, искать среди него тоже можно.
+    if (offline && savedVideos.size) {
+      els.links.append(...savedRows([...savedVideos.values()]));
+
+      return;
+    }
+
     if (!message) {
-      els.links.append(row("пока пусто, добавь ссылку", ["empty"]));
+      els.links.append(row(
+        offline ? "демона нет, на устройстве ничего не сохранено" : "пока пусто, добавь ссылку",
+        ["empty"],
+      ));
     }
 
     return;
@@ -279,22 +307,102 @@ function drawLinks(items, message) {
       button(link.title || link.url, () => openLink(link.id)),
       button("Удалить", () => dropLink(link.id)),
     );
+
+    // Сохранённые ролики встают под своей ссылкой: без демона список ссылок
+    // сам по себе ничего не говорит о том, что можно смотреть.
+    if (offline) {
+      const saved = savedForLink(link.id);
+
+      if (saved.length) {
+        const more = document.createElement("ul");
+        more.append(...savedRows(saved));
+        item.append(more);
+      }
+    }
+
     els.links.append(item);
   }
 }
 
 async function loadLinks() {
+  // Прошлый список с устройства важнее скорости ответа: пока демон думает,
+  // экран уже не пустой, а молчащий демон оставляет этот список на месте.
+  const last = db ? await getMeta(db, "links") : null;
+
+  if (last && last.length) {
+    offline = false;
+    drawLinks(last, "");
+  }
+
   let data;
 
   try {
-    data = await api("/v1/links");
+    data = await api("/v1/links", { signal: AbortSignal.timeout(LINKS_TIMEOUT_MS) });
   } catch (error) {
-    drawLinks([], error.message);
+    if (daemonAlive) {
+      offline = false;
+      drawLinks([], error.message);
+
+      return;
+    }
+
+    offline = true;
+    drawLinks(last || [], "");
 
     return;
   }
 
+  offline = false;
+
+  if (db) {
+    await putMeta(db, "links", data.links || []).catch(() => {});
+  }
+
   drawLinks(data.links || [], "");
+}
+
+/** Сохранённые ролики этой ссылки, свежие первыми. */
+function savedForLink(linkId) {
+  return [...savedVideos.values()]
+    .filter((record) => record.linkId === linkId)
+    .sort((left, right) => (right.savedAt || 0) - (left.savedAt || 0));
+}
+
+/** Строки списка для сохранённых роликов: посмотреть и удалить. */
+function savedRows(records) {
+  return records.map((record) => {
+    const item = document.createElement("li");
+    item.className = "saved";
+    item.append(
+      button(
+        `${episodeLabel(record)} · ${cacheLabel(record.size)}`,
+        () => play(record, { id: record.linkId, title: record.linkTitle }),
+      ),
+      button("удалить", () => dropCopy(record.videoId)),
+    );
+
+    return item;
+  });
+}
+
+/** Убрать копию с устройства: место на планшете кончается, и это должно быть можно. */
+async function dropCopy(videoId) {
+  if (follow && follow.videoId === videoId) {
+    clearTimeout(follow.timer);
+    follow = null;
+  }
+
+  if (db) {
+    await deleteVideo(db, videoId).catch(() => {});
+  }
+
+  savedVideos.delete(videoId);
+
+  if (currentEpisodes) {
+    drawEpisodes(currentEpisodes.title, currentEpisodes.videos, currentEpisodes.linkId);
+  }
+
+  drawLinks(knownLinks, "");
 }
 
 async function addLink(event) {
@@ -311,6 +419,12 @@ async function addLink(event) {
     els.linkUrl.value = "";
     await loadLinks();
   } catch (error) {
+    if (!daemonAlive) {
+      drawLinks(knownLinks, "демона нет — ссылку добавить нельзя");
+
+      return;
+    }
+
     drawLinks([], `не удалось добавить: ${error.message}`);
   }
 }
@@ -320,6 +434,12 @@ async function dropLink(id) {
     await api(`/v1/links/${encodeURIComponent(id)}`, { method: "DELETE" });
     await loadLinks();
   } catch (error) {
+    if (!daemonAlive) {
+      drawLinks(knownLinks, "демона нет — ссылку удалить нельзя");
+
+      return;
+    }
+
     drawLinks([], `не удалось удалить: ${error.message}`);
   }
 }
@@ -354,24 +474,37 @@ async function openLink(id) {
   try {
     data = await api(`/v1/links/${encodeURIComponent(id)}/videos`);
   } catch (error) {
+    if (!daemonAlive) {
+      // Список эпизодов пришёл бы от демона, а его нет: зато ролики этой
+      // ссылки могли уже лежать на устройстве.
+      const saved = savedForLink(id);
+      drawLinks(knownLinks, saved.length
+        ? "демона нет — в списке сохранённые ролики этой ссылки"
+        : "демона нет, роликов этой ссылки на устройстве нет");
+
+      return;
+    }
+
     drawLinks([], `не удалось прочитать ссылку: ${error.message}`);
 
     return;
   }
 
-  const title = data.title || "";
-  const videos = data.videos || [];
-
-  els.episodesTitle.textContent = title;
-
   // Одиночный ролик — это не список, а сразу просмотр: кнопка с одним пунктом
   // только заставляла бы нажимать дважды.
-  if (videos.length === 1) {
-    play(videos[0], { id, title });
+  if ((data.videos || []).length === 1) {
+    play(data.videos[0], { id, title: data.title || "" });
 
     return;
   }
 
+  drawEpisodes(data.title || "", data.videos || [], id);
+}
+
+function drawEpisodes(title, videos, linkId = "") {
+  currentEpisodes = { title, videos, linkId };
+
+  els.episodesTitle.textContent = title;
   els.episodeList.replaceChildren();
 
   if (!videos.length) {
@@ -379,8 +512,18 @@ async function openLink(id) {
   }
 
   for (const video of videos) {
+    const saved = savedVideos.get(video.videoId);
     const item = document.createElement("li");
-    item.append(button(episodeLabel(video), () => play(video, { id, title })));
+
+    item.append(button(
+      saved ? `${episodeLabel(video)} · ${cacheLabel(saved.size)}` : episodeLabel(video),
+      () => play(video, { id: linkId, title }),
+    ));
+
+    if (saved) {
+      item.append(button("удалить", () => dropCopy(video.videoId)));
+    }
+
     els.episodeList.append(item);
   }
 
@@ -960,6 +1103,8 @@ function connectSocket() {
   socket = opening;
 
   opening.addEventListener("open", () => {
+    daemonAlive = true;
+
     if (state.videoId) {
       watch(state.videoId);
     }
@@ -982,6 +1127,7 @@ function connectSocket() {
     // снимок вернёт всё состояние целиком, терять нечего.
     if (socket === opening) {
       socket = null;
+      daemonAlive = false;
       setTimeout(connectSocket, RECONNECT_MS);
     }
   });

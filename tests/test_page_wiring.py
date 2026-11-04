@@ -295,3 +295,42 @@ def test_an_evicted_copy_does_not_lie_in_the_list():
 
     assert "savedVideos.delete(" in body
     assert "deleteVideo(" in body
+
+
+def test_the_home_stays_with_the_saved_copy_when_the_daemon_is_gone():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function loadLinks"):source.index("function savedForLink")]
+
+    # Молчащий демон — не отказ: прошлый список рисуется сразу, а запрос
+    # к демону получает короткий срок и заменяет его, когда ответит.
+    assert "AbortSignal.timeout(LINKS_TIMEOUT_MS)" in body
+    assert 'getMeta(db, "links")' in body
+    assert body.index("getMeta") < body.index("api(")
+    assert "offline = true" in body
+    assert "savedForLink(" in source
+    assert "на устройстве" in source
+
+
+def test_a_saved_video_is_marked_in_the_list_and_can_be_deleted():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "cacheLabel(" in source
+    assert "deleteVideo(" in source
+    assert "dropCopy(" in source
+    assert 'button("удалить"' in source
+
+
+def test_a_shared_link_does_not_wipe_the_saved_home():
+    # При мёртвом демоне шаринг из YouTube не должен оставлять пустой экран:
+    # сохранённое с пометками важнее неудавшегося добавления.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function consumeShare"):source.index("function row(")]
+
+    assert "drawLinks(knownLinks" in body
+
+
+def test_saved_episodes_stand_under_their_link():
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    assert re.search(r"#links li \{[^}]*flex-wrap: wrap", css, re.S)
+    assert re.search(r"#links li > ul \{[^}]*flex-basis: 100%", css, re.S)

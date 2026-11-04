@@ -158,6 +158,22 @@ input {
   gap: 8px;
 }
 
+/* Сохранённые эпизоды стоят под своей ссылкой, а не рядом: строка ссылки
+   переносится, и вложенный список занимает её целиком. */
+#links li {
+  flex-wrap: wrap;
+}
+
+#links li > ul {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 #links li button:first-child,
 #episode-list li button:first-child {
   flex: 1;
