@@ -37,9 +37,11 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from helper.jobs import CapacityError, JobManager, Stage, refusal_snapshot
+from helper.sources import ytdlp
 
 log = logging.getLogger(__name__)
 
@@ -345,6 +347,43 @@ async def drop_job(video_id: str, payload: dict | None = Body(default=None)) -> 
     client_id = (payload or {}).get("clientId")
 
     return {"dropped": video_id, "cancelled": manager.drop(video_id, client_id)}
+
+
+@app.post("/v1/videos/{video_id}", dependencies=[Depends(auth)])
+async def prepare_video(video_id: str) -> dict:
+    """Начать готовить mp4. Отвечает сразу; готовность — отдельным GET."""
+    if not ytdlp.VIDEO_ID.match(video_id):
+        raise HTTPException(status_code=400, detail="неправильный идентификатор ролика")
+
+    return manager.videos.ensure(
+        video_id, cookies=manager.config.youtube.cookies_path
+    ).wire()
+
+
+@app.get("/v1/videos/{video_id}", dependencies=[Depends(auth)])
+async def video_status(video_id: str) -> dict:
+    if not ytdlp.VIDEO_ID.match(video_id):
+        raise HTTPException(status_code=400, detail="неправильный идентификатор ролика")
+
+    return manager.videos.status(video_id).wire()
+
+
+@app.get("/v1/videos/{video_id}/file", dependencies=[Depends(auth)])
+async def video_file(video_id: str) -> FileResponse:
+    """Файл целиком или кусок: Range разбирает FileResponse, он же ставит 206.
+
+    Токен принимается и в строке запроса (?token=): <video src> заголовков не шлёт.
+    Пока файла нет — 409 с фразой состояния. Страница сначала спрашивает состояние
+    и лишь потом ставит src, поэтому <video> не-200 не получает никогда.
+    """
+    status = manager.videos.status(video_id)
+
+    if status.state != "ready" or status.path is None:
+        raise HTTPException(
+            status_code=409, detail=status.message or "видео ещё готовится"
+        )
+
+    return FileResponse(status.path, media_type="video/mp4")
 
 
 @app.websocket("/v1/ws")

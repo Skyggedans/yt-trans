@@ -63,6 +63,7 @@ from helper.translate import (
     validate,
     validate_dual,
 )
+from helper.video import VideoStore
 
 log = logging.getLogger(__name__)
 
@@ -1740,6 +1741,7 @@ class JobManager:
         self.config = config or load_config()
         self.lease = GpuLease()
         self.cache = TrackCache()
+        self.videos = VideoStore()
         self.runner = JobRunner(self.lease, self.cache, self.config)
         # Ключ — пара (ролик, дорожка автора), а не один ролик: см. get_or_create.
         # К словарю по одному video_id не обратиться — для этого есть get и jobs_for.
