@@ -471,6 +471,35 @@ def test_returning_to_the_window_refreshes_the_copies():
     assert 'document.addEventListener("visibilitychange"' in source
 
 
+def test_the_token_screen_does_not_wait_for_the_service_worker():
+    # Раздел токена виден в разметке по умолчанию, а приложение — спрятано.
+    # Регистрация воркера без сети может не ответить вовсе: дождавшись её до
+    # решения об экране, страница оставляла зрителя перед экраном ввода токена,
+    # который тот давно сохранил, — и офлайн оттуда не выбраться.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function boot("):source.index("boot();", source.index("async function boot("))]
+
+    assert body.index("els.app.hidden = false") < body.index("await registerWorker()")
+
+
+def test_a_missing_worker_is_reported_over_the_drawn_list():
+    # Регистрация идёт после экрана, поэтому список ссылок мог быть нарисован
+    # раньше её ответа. Предупреждение обязано появиться поверх уже
+    # нарисованного, иначе о нём не узнают никогда.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function boot("):source.index("boot();", source.index("async function boot("))]
+
+    assert "drawLinks(knownLinks, warning)" in body
+    # Список при загрузке тоже несёт это предупреждение: регистрация могла
+    # ответить раньше, чем пришёл ответ демона.
+    links = source[source.index("async function loadLinks"):source.index("function savedForLink")]
+    assert "workerNote()" in links
+    # Упавшая без сети регистрация — не приговор браузеру: оболочка могла уже
+    # стоять, и страница офлайн открылась именно из неё.
+    worker = source[source.index("async function registerWorker"):source.index("function workerNote")]
+    assert "!navigator.serviceWorker.controller" in worker
+
+
 def test_the_page_imports_every_helper_it_uses():
     # Пропущенное имя в импорте видно только в браузере: node --check имён не
     # знает, а разметка и текст остаются на месте. Поэтому имена сверяются

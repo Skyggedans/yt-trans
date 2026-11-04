@@ -119,6 +119,9 @@ let persistAsked = false;
 // Сервис-воркера нет: страница откроется только с живым демоном, и об этом
 // стоит сказать — но один раз, а не при каждом запуске.
 let workerMissing = false;
+// Сказано ли уже в этом запуске, что оболочки не будет: строку списка
+// перерисовка не должна затирать.
+let workerWarning = "";
 // Сохранённая копия, чьи титры ещё дописываются: {videoId, record, timer}.
 let follow = null;
 
@@ -385,14 +388,7 @@ async function loadLinks() {
     await putMeta(db, "links", links).catch(() => {});
   }
 
-  let warning = "";
-
-  if (workerMissing && !store(WORKER_KEY)) {
-    store(WORKER_KEY, "1");
-    warning = "браузер не сохранит страницу для офлайна — нужен https и современный браузер";
-  }
-
-  drawLinks(links, warning);
+  drawLinks(links, workerNote());
 }
 
 /** Сохранённые ролики этой ссылки, свежие первыми. */
@@ -1656,10 +1652,27 @@ async function registerWorker() {
   try {
     await navigator.serviceWorker.register("/sw.js");
   } catch {
-    // Регистрация падает на http без сертификата и в старых браузерах:
-    // страница работает, просто не открывается без демона.
-    workerMissing = true;
+    // Регистрация падает на http без сертификата, в старых браузерах и без сети.
+    // «Без сети» — не приговор браузеру: если оболочка уже стоит, страница
+    // офлайн открылась именно из неё, и обещать, что её не сохранят, нельзя.
+    workerMissing = !navigator.serviceWorker.controller;
   }
+}
+
+/** Предупреждение о пропавшем воркере: один раз за запуск и один раз за устройство. */
+function workerNote() {
+  if (!workerMissing) {
+    return "";
+  }
+
+  if (!workerWarning && !store(WORKER_KEY)) {
+    store(WORKER_KEY, "1");
+    workerWarning = "браузер не сохранит страницу для офлайна — нужен https и современный браузер";
+  }
+
+  // Запоминается до конца запуска: список перерисовывается (ответ демона,
+  // возвращение в окно), и каждый раз терять предупреждение нельзя.
+  return workerWarning;
 }
 
 async function boot() {
@@ -1689,16 +1702,27 @@ async function boot() {
   startClock();
   reportPlayhead();
 
-  // Ждём регистрацию: loadLinks спрашивает workerMissing сразу, и без
-  // ожидания предупреждение о пропавшем воркере не показалось бы вовсе.
-  await registerWorker();
-
+  // Экран решается по токену и сразу. Раздел токена виден в разметке по
+  // умолчанию, а регистрация воркера без сети может не ответить вовсе: дожидаясь
+  // её, страница оставляла зрителя перед экраном ввода давно сохранённого
+  // токена, и офлайн оттуда было не выбраться.
   if (token) {
     els.setup.hidden = true;
     els.app.hidden = false;
     start();
   } else {
     showSetup();
+  }
+
+  // Регистрация идёт следом и не задерживает ни экран, ни сохранённое.
+  await registerWorker();
+
+  // Список ссылок мог быть нарисован раньше её ответа: предупреждение
+  // появляется поверх уже нарисованного, а не пропадает вместе с регистрацией.
+  const warning = workerNote();
+
+  if (warning) {
+    drawLinks(knownLinks, warning);
   }
 }
 
