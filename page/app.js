@@ -708,6 +708,27 @@ function paint() {
   nodes.box.classList.remove("hidden");
 }
 
+// Родная кнопка плеера разворачивает сам <video>, а слой строк — соседний
+// элемент, и в этом режиме его не видно. Перехватить саму кнопку нельзя (её
+// рисует браузер), но момент видно: как только полноэкранным стал ролик,
+// просим полноэкранным всю сцену. Документ уже в полноэкранном режиме, поэтому
+// браузер не требует нового нажатия и просто меняет элемент.
+function watchFullscreen() {
+  document.addEventListener("fullscreenchange", () => {
+    if (document.fullscreenElement !== els.video || !els.stage.requestFullscreen) {
+      return;
+    }
+
+    els.stage.requestFullscreen().catch(() => {
+      // Браузер вправе отказать. Тогда лучше выйти из режима без строк, чем
+      // оставить зрителя без них и без способа вернуться.
+      if (document.fullscreenElement === els.video) {
+        document.exitFullscreen().catch(() => {});
+      }
+    });
+  });
+}
+
 function startClock() {
   // Кадровый колбэк точнее timeupdate: тот срабатывает четыре раза в секунду
   // и оставляет субтитр отставать от картинки на четверть секунды.
@@ -818,6 +839,7 @@ function boot() {
   // ничего не менял бы. Свой шаг истории кладётся при входе в ролик, а возврат
   // по нему возвращает к списку.
   window.addEventListener("popstate", leaveStage);
+  watchFullscreen();
 
   startClock();
   reportPlayhead();

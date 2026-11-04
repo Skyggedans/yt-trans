@@ -67,3 +67,12 @@ def test_the_stage_is_left_by_the_browser_history():
     assert "popstate" in source
     assert 'id="back"' not in html
     assert 'id="fullscreen"' not in html
+
+
+def test_the_players_fullscreen_turns_into_the_whole_stage():
+    # Родной полноэкранный режим разворачивает сам <video>, а слой строк — соседний
+    # элемент: без переключения на сцену титры там не рисуются вовсе.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "fullscreenchange" in source
+    assert "requestFullscreen" in source
