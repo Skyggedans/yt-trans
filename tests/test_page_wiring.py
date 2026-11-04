@@ -41,3 +41,17 @@ def test_the_layer_repaints_when_cues_arrive():
     body = source[source.index("function handleMessage"):source.index("function takeSnapshot")]
 
     assert "paint()" in body
+
+
+def test_the_viewer_can_switch_each_line_off():
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="toggle-target"' in html
+    assert 'id="toggle-study"' in html
+
+
+def test_the_layer_obeys_the_switches():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function paint"):source.index("function startClock")]
+
+    assert "visibleLines" in body

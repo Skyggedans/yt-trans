@@ -258,6 +258,25 @@ input {
   background: rgba(20, 20, 24, .82);
 }
 
+/* Два выключателя строк — над кнопками, чтобы не мешать ползунку плеера. */
+#lines {
+  position: absolute;
+  right: 12px;
+  bottom: 56px;
+  display: flex;
+  gap: 8px;
+}
+
+#lines button {
+  background: rgba(20, 20, 24, .82);
+}
+
+/* Выключенная строка гаснет, но остаётся на месте: иначе кнопка прыгала бы
+   под палец. */
+#lines button[aria-pressed="false"] {
+  opacity: .45;
+}
+
 #back {
   right: 12px;
 }

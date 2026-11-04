@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  activeCueIndex, cueLines, formatTime, isForVideo, languageText, parsePositions,
-  pendingAt, positionFor, rememberPosition, stageText, unwatchMessage, watchMessages,
+  activeCueIndex, cueLines, flipSwitch, formatTime, isForVideo, languageText,
+  parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, stageText,
+  unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
 const CUES = [
@@ -146,4 +147,44 @@ test("the place watched is remembered per video, and rubbish is not a place", ()
   assert.deepEqual(rememberPosition({}, "abc", 12.7), { abc: 12 });
   assert.deepEqual(rememberPosition({ abc: 12 }, "abc", 0), {});
   assert.deepEqual(rememberPosition({ abc: 12 }, "xyz", NaN), { abc: 12 });
+});
+
+test("a switched-off line leaves the other one alone", () => {
+  const lines = { target: "русский", secondary: "crnogorski", failed: false };
+
+  assert.deepEqual(visibleLines(lines, { target: false, study: true }), {
+    target: "", secondary: "crnogorski", failed: false,
+  });
+  assert.deepEqual(visibleLines(lines, { target: true, study: false }), {
+    target: "русский", secondary: "", failed: false,
+  });
+});
+
+test("switching the Russian line off also takes away its failed look", () => {
+  const failed = { target: "перевод не вышел", secondary: "crnogorski", failed: true };
+
+  assert.deepEqual(visibleLines(failed, { target: false, study: true }), {
+    target: "", secondary: "crnogorski", failed: false,
+  });
+});
+
+test("two switched-off lines leave the layer nothing to say", () => {
+  assert.deepEqual(
+    visibleLines({ target: "a", secondary: "b", failed: true }, { target: false, study: false }),
+    { target: "", secondary: "", failed: false },
+  );
+});
+
+test("the switches are remembered, and rubbish means both on", () => {
+  assert.deepEqual(readSwitches(""), { target: true, study: true });
+  assert.deepEqual(readSwitches("не json"), { target: true, study: true });
+  assert.deepEqual(readSwitches("[false]"), { target: true, study: true });
+  assert.deepEqual(readSwitches('{"target":false,"study":true}'), { target: false, study: true });
+  assert.deepEqual(readSwitches('{"target":"нет"}'), { target: true, study: true });
+});
+
+test("a switch flips, and the other one does not move", () => {
+  assert.deepEqual(flipSwitch({ target: true, study: true }, "study"), { target: true, study: false });
+  assert.deepEqual(flipSwitch({ target: true, study: false }, "study"), { target: true, study: true });
+  assert.deepEqual(flipSwitch({ target: true, study: true }, "target"), { target: false, study: true });
 });

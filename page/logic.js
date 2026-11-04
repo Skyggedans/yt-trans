@@ -190,3 +190,44 @@ export function rememberPosition(positions, videoId, seconds) {
 
   return next;
 }
+
+/** Строки реплики с учётом выключателей: зритель решает, что видеть. */
+export function visibleLines(lines, show) {
+  const switches = show || {};
+  const target = switches.target === false ? "" : lines.target;
+  const secondary = switches.study === false ? "" : lines.secondary;
+
+  // Пометка «перевод не вышел» относится к русской строке: без неё ей нечего
+  // подсвечивать.
+  return { target, secondary, failed: target ? lines.failed : false };
+}
+
+/** Выключатели из localStorage. Всё непонятное — «оба включены». */
+export function readSwitches(raw) {
+  const both = { target: true, study: true };
+  let data;
+
+  try {
+    data = JSON.parse(raw || "{}");
+  } catch {
+    return both;
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return both;
+  }
+
+  return { target: data.target !== false, study: data.study !== false };
+}
+
+/** Переключить одну строку, не трогая вторую. */
+export function flipSwitch(switches, name) {
+  const next = {
+    target: (switches || {}).target !== false,
+    study: (switches || {}).study !== false,
+  };
+
+  next[name] = !next[name];
+
+  return next;
+}

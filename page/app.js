@@ -2,13 +2,15 @@
 // и слой субтитров. Чистая логика — в logic.js, здесь только DOM и сеть.
 
 import {
-  activeCueIndex, cueLines, formatTime, isForVideo, languageText, parsePositions,
-  pendingAt, positionFor, rememberPosition, stageText, unwatchMessage, watchMessages,
+  activeCueIndex, cueLines, flipSwitch, formatTime, isForVideo, languageText,
+  parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, stageText,
+  unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
 const TOKEN_KEY = "yt-trans-token";
 const CLIENT_KEY = "yt-trans-client";
 const POSITIONS_KEY = "yt-trans-positions";
+const SWITCHES_KEY = "yt-trans-switches";
 const POLL_VIDEO_MS = 2000;
 const RECONNECT_MS = 1000;
 const PLAYHEAD_MS = 1000;
@@ -33,6 +35,8 @@ const els = {
   overlay: document.getElementById("overlay"),
   status: document.getElementById("status"),
   title: document.getElementById("title"),
+  toggleTarget: document.getElementById("toggle-target"),
+  toggleStudy: document.getElementById("toggle-study"),
   fullscreen: document.getElementById("fullscreen"),
   back: document.getElementById("back"),
 };
@@ -64,6 +68,9 @@ let paintedKey = null;
 // Место просмотра — своё на устройство: планшет в другой комнате продолжает
 // с того места, где его оставили, и не тянет за собой вкладки компьютера.
 let positions = parsePositions(store(POSITIONS_KEY));
+// Какие строки показывать — тоже своё на устройство: планшет в другой комнате
+// не должен менять то, что настроено на компьютере.
+let switches = readSwitches(store(SWITCHES_KEY));
 
 const clientId = makeClientId();
 
@@ -666,11 +673,18 @@ function paint() {
     }
   }
 
-  if (!lines && pendingAt(state.pending, els.video.currentTime)) {
+  // «Перевод ещё не готов…» стоит на месте русской строки: выключил её — значит
+  // и ждать нечего показывать, черногорская приходит вместе с ней.
+  if (!lines && switches.target && pendingAt(state.pending, els.video.currentTime)) {
     lines = { target: "перевод ещё не готов…", secondary: "", failed: true };
   }
 
-  if (!lines) {
+  if (lines) {
+    lines = visibleLines(lines, switches);
+  }
+
+  // Обе строки выключены — слой молчит целиком, вместе с надписью об ожидании.
+  if (!lines || (!lines.target && !lines.secondary)) {
     paintedKey = null;
     nodes.box.classList.add("hidden");
 
@@ -740,6 +754,23 @@ function savePosition() {
   store(POSITIONS_KEY, JSON.stringify(positions));
 }
 
+// --- Выключатели строк ----------------------------------------------------
+
+function drawSwitches() {
+  els.toggleTarget.setAttribute("aria-pressed", String(switches.target));
+  els.toggleStudy.setAttribute("aria-pressed", String(switches.study));
+}
+
+function flipLine(name) {
+  switches = flipSwitch(switches, name);
+  store(SWITCHES_KEY, JSON.stringify(switches));
+  drawSwitches();
+  // Перерисовываем сразу: на паузе кадров нет, и слой сам не обновился бы до
+  // возобновления.
+  paintedKey = null;
+  paint();
+}
+
 // --- Кнопки сцены ---------------------------------------------------------
 
 function fullscreen() {
@@ -788,6 +819,9 @@ function boot() {
   els.linkForm.addEventListener("submit", addLink);
   els.fullscreen.addEventListener("click", fullscreen);
   els.back.addEventListener("click", back);
+  els.toggleTarget.addEventListener("click", () => flipLine("target"));
+  els.toggleStudy.addEventListener("click", () => flipLine("study"));
+  drawSwitches();
 
   startClock();
   reportPlayhead();
