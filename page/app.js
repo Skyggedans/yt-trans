@@ -22,6 +22,7 @@ const POLL_VIDEO_MS = 2000;
 const RECONNECT_MS = 1000;
 const PLAYHEAD_MS = 1000;
 const LINKS_TIMEOUT_MS = 3000;
+const WORKER_KEY = "yt-trans-no-worker";
 
 // Разметка не меняется за время жизни страницы, поэтому каждый элемент ищется
 // один раз: в кадровом цикле слоя обращение к DOM не должно стоить поиска.
@@ -114,6 +115,9 @@ let offline = false;
 let daemonAlive = true;
 // Постоянное хранилище просим один раз за жизнь страницы, а не на каждую копию.
 let persistAsked = false;
+// Сервис-воркера нет: страница откроется только с живым демоном, и об этом
+// стоит сказать — но один раз, а не при каждом запуске.
+let workerMissing = false;
 // Сохранённая копия, чьи титры ещё дописываются: {videoId, record, timer}.
 let follow = null;
 
@@ -358,7 +362,14 @@ async function loadLinks() {
     await putMeta(db, "links", data.links || []).catch(() => {});
   }
 
-  drawLinks(data.links || [], "");
+  let warning = "";
+
+  if (workerMissing && !store(WORKER_KEY)) {
+    store(WORKER_KEY, "1");
+    warning = "браузер не сохранит страницу для офлайна — нужен https и современный браузер";
+  }
+
+  drawLinks(data.links || [], warning);
 }
 
 /** Сохранённые ролики этой ссылки, свежие первыми. */
@@ -1530,7 +1541,24 @@ function leaveStage() {
 
 // --- Запуск ---------------------------------------------------------------
 
-function boot() {
+/** Оболочка на устройстве: без неё страница открывается только с живым демоном. */
+async function registerWorker() {
+  if (!("serviceWorker" in navigator)) {
+    workerMissing = true;
+
+    return;
+  }
+
+  try {
+    await navigator.serviceWorker.register("/sw.js");
+  } catch {
+    // Регистрация падает на http без сертификата и в старых браузерах:
+    // страница работает, просто не открывается без демона.
+    workerMissing = true;
+  }
+}
+
+async function boot() {
   token = store(TOKEN_KEY);
 
   els.tokenSave.addEventListener("click", saveToken);
@@ -1555,6 +1583,10 @@ function boot() {
 
   startClock();
   reportPlayhead();
+
+  // Ждём регистрацию: loadLinks спрашивает workerMissing сразу, и без
+  // ожидания предупреждение о пропавшем воркере не показалось бы вовсе.
+  await registerWorker();
 
   if (token) {
     els.setup.hidden = true;

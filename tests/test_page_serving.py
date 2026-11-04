@@ -61,3 +61,12 @@ async def test_without_a_certificate_there_is_nothing_to_install(client, monkeyp
     monkeypatch.setattr(helper_app, "CA_PATH", tmp_path / "absent.crt")
 
     assert (await client.get("/ca.crt")).status_code == 404
+
+
+async def test_the_service_worker_is_served_from_the_root(client):
+    # Воркер лежит в корне области видимости, поэтому Service-Worker-Allowed
+    # не нужен, а тип должен быть javascript: иначе браузер откажется.
+    response = await client.get("/sw.js")
+
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]

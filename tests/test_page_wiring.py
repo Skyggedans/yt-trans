@@ -334,3 +334,24 @@ def test_saved_episodes_stand_under_their_link():
 
     assert re.search(r"#links li \{[^}]*flex-wrap: wrap", css, re.S)
     assert re.search(r"#links li > ul \{[^}]*flex-basis: 100%", css, re.S)
+
+
+def test_the_shell_is_kept_for_the_day_the_computer_is_off():
+    worker = (ROOT / "page" / "sw.js").read_text(encoding="utf-8")
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert 'serviceWorker.register("/sw.js")' in source
+    assert "registerWorker()" in source
+    for name in ("/app.js", "/logic.js", "/cache.js", "/style.css", "/manifest.json"):
+        assert name in worker
+    # Живые данные демона и сертификат — не оболочка.
+    assert 'startsWith("/v1/")' in worker
+    assert "/ca.crt" in worker
+
+
+def test_a_browser_without_a_worker_says_so_once():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "workerMissing = true" in source
+    assert '"yt-trans-no-worker"' in source
+    assert "не сохранит страницу для офлайна" in source
