@@ -327,12 +327,17 @@ input {
   --overlay-scale: 1.3;
 }
 
-/* Своя кнопка «во весь экран» — слева сверху, чтобы не спорить с выключателями
-   строк справа и не лезть под контролы плеера снизу. */
-#fullscreen {
+/* Полоса слева сверху: ⛶ и «кеш». Она не спорит с выключателями строк справа
+   и не лезет под контролы плеера снизу. */
+#stage-bar {
   position: absolute;
   left: 12px;
   top: calc(12px + env(safe-area-inset-top, 0px));
+  display: flex;
+  gap: 8px;
+}
+
+#stage-bar button {
   padding: 8px 10px;
   font-size: 15px;
   line-height: 1;

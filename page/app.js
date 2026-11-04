@@ -4,9 +4,13 @@
 import {
   activeCueIndex, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
   languageText, parsePositions, pendingAt, positionFor, readFontSize, readSwitches, rememberPosition,
-  sharedUrl,
+  sharedUrl, SPARE_BYTES, copyState, copyVerdict, formatBytes, mergeCues, percent,
   stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
+
+import {
+  askPersist, downloadVideo, freeBytes, listVideos, openDb, putVideo,
+} from "./cache.js";
 
 const TOKEN_KEY = "yt-trans-token";
 const CLIENT_KEY = "yt-trans-client";
@@ -16,6 +20,7 @@ const FONT_KEY = "yt-trans-font";
 const POLL_VIDEO_MS = 2000;
 const RECONNECT_MS = 1000;
 const PLAYHEAD_MS = 1000;
+const LINKS_TIMEOUT_MS = 3000;
 
 // Разметка не меняется за время жизни страницы, поэтому каждый элемент ищется
 // один раз: в кадровом цикле слоя обращение к DOM не должно стоить поиска.
@@ -42,6 +47,7 @@ const els = {
   toggleStudy: document.getElementById("toggle-study"),
   fontSize: document.getElementById("font-size"),
   fullscreen: document.getElementById("fullscreen"),
+  cache: document.getElementById("cache"),
 };
 
 const state = {
@@ -57,6 +63,10 @@ const state = {
   translated: 0,
   title: "",
   notice: "",
+  // Из какой ссылки ролик и какой он длины: копия записывает это в базу, а
+  // заполняет play(). Пока сцена не открыта, там пусто.
+  link: { id: "", title: "" },
+  duration: 0,
 };
 
 // Реплики приходят пачками и не по порядку: их вливают по номеру, а на экран
@@ -83,6 +93,26 @@ let switches = readSwitches(store(SWITCHES_KEY));
 let fontSize = readFontSize(store(FONT_KEY));
 
 const clientId = makeClientId();
+
+// Кеш на устройстве. База открывается один раз; savedVideos — то, что по ней
+// уже известно, без самих mp4, чтобы список отвечал без чтения сотен мегабайт.
+let db = null;
+const savedVideos = new Map();
+// Копия, которая сейчас качается: {videoId, controller, waiting, seen, total,
+// cues, linkId, linkTitle, title, duration, language}. Одна за раз.
+let copy = null;
+// Ролик, чья копия не сохранилась: кнопка говорит об этом до следующей попытки.
+let copyFailure = null;
+// Адрес копии для <video>; отзывается при уходе со сцены и смене ролика.
+let objectUrl = null;
+// Офлайн — признак страницы, а не сети: ставится неудачей запроса к демону,
+// снимается любым успешным ответом. navigator.onLine не спрашивается.
+let offline = false;
+let daemonAlive = true;
+// Постоянное хранилище просим один раз за жизнь страницы, а не на каждую копию.
+let persistAsked = false;
+// Сохранённая копия, чьи титры ещё дописываются: {videoId, record, timer}.
+let follow = null;
 
 function store(key, value) {
   try {
@@ -382,6 +412,7 @@ function play(videoId, title) {
   els.title.textContent = state.title;
   els.home.hidden = true;
   els.stage.hidden = false;
+  drawCacheButton();
   render();
 
   history.pushState({ videoId }, "");
@@ -474,6 +505,333 @@ async function prepareVideo() {
   step(status);
 }
 
+// --- Кеш роликов на устройстве -------------------------------------------
+
+// Запись сохранённых титров стоит дорого (целый mp4 поверх), поэтому копим их
+// и пишем не чаще раза в пять секунд — к концу перевода в базе всё равно всё.
+const FOLLOW_MS = 5000;
+
+const filePath = (videoId) =>
+  `/v1/videos/${encodeURIComponent(videoId)}/file?token=${encodeURIComponent(token)}`;
+
+/** Размер готового mp4: HEAD не отдаёт тело, но Content-Length у него есть. */
+async function fileSize(path) {
+  try {
+    const response = await fetch(path, { method: "HEAD" });
+
+    return Number(response.headers.get("Content-Length") || 0);
+  } catch {
+    // Размер не спросили — не повод отказывать: приговор будет «unknown».
+    return 0;
+  }
+}
+
+/** Ждёт готовый mp4, как ждёт его сцена; -1 — демон сказал, что не будет. */
+async function waitForFile(videoId) {
+  const mine = copy;
+
+  for (;;) {
+    if (!copy || copy !== mine) {
+      return 0;
+    }
+
+    const status = await api(`/v1/videos/${encodeURIComponent(videoId)}`, { method: "POST" })
+      .catch(() => null);
+
+    if (copy !== mine) {
+      return 0;
+    }
+
+    if (status && status.state === "error") {
+      note(status.message || "видео не скачалось");
+
+      return -1;
+    }
+
+    if (status && status.state === "ready") {
+      return fileSize(filePath(videoId));
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_VIDEO_MS));
+  }
+}
+
+/** Открыть базу и вспомнить, что на устройстве уже лежит. Зовётся и из start(). */
+async function openCache() {
+  if (!db) {
+    try {
+      db = await openDb();
+    } catch {
+      db = null;
+    }
+  }
+
+  if (!db) {
+    return;
+  }
+
+  try {
+    for (const record of await listVideos(db)) {
+      savedVideos.set(record.videoId, record);
+    }
+  } catch {
+    // Список не прочитался — копия всё равно попробует сохраниться.
+  }
+}
+
+/** Надпись на переключателе: он же и рассказывает, что с копией. */
+function drawCacheButton() {
+  const mine = copy && copy.videoId === state.videoId ? copy : null;
+  const saved = savedVideos.get(state.videoId);
+
+  els.cache.textContent = copyState({
+    waiting: Boolean(mine && mine.waiting),
+    active: Boolean(mine),
+    percent: mine ? percent(mine.seen, mine.total) : 0,
+    size: saved ? saved.size : 0,
+    failed: copyFailure === state.videoId,
+  });
+  els.cache.setAttribute("aria-pressed", mine || saved ? "true" : "false");
+}
+
+function toggleCache() {
+  const videoId = state.videoId;
+
+  if (!videoId) {
+    return;
+  }
+
+  if (copy && copy.videoId === videoId) {
+    cancelCopy();
+
+    return;
+  }
+
+  // «Кеш ✓» само ничего не удаляет: дорогую копию нельзя снести неверным
+  // касанием, для этого есть кнопка в списке.
+  if (savedVideos.has(videoId)) {
+    return;
+  }
+
+  if (copy) {
+    cancelCopy();
+  }
+
+  startCopy();
+}
+
+async function startCopy() {
+  const videoId = state.videoId;
+
+  if (!db) {
+    await openCache();
+  }
+
+  if (!db) {
+    note("браузер не дал хранилище");
+
+    return;
+  }
+
+  const mine = {
+    videoId,
+    controller: new AbortController(),
+    waiting: true,
+    seen: 0,
+    total: 0,
+    // Титры, пришедшие до начала копирования, уже лежат в памяти страницы —
+    // сохраняется всё, что есть на этот момент.
+    cues: new Map(cuesByIndex),
+    linkId: state.link.id,
+    linkTitle: state.link.title,
+    title: state.title,
+    duration: state.duration,
+    language: state.language,
+  };
+
+  copy = mine;
+  copyFailure = null;
+  drawCacheButton();
+
+  if (!persistAsked) {
+    persistAsked = true;
+    askPersist().catch(() => {});
+  }
+
+  const size = await waitForFile(videoId);
+
+  if (copy !== mine) {
+    return;
+  }
+
+  if (size < 0) {
+    copy = null;
+    drawCacheButton();
+
+    return;
+  }
+
+  const free = await freeBytes();
+
+  if (copy !== mine) {
+    return;
+  }
+
+  if (copyVerdict(size, free) === "tight") {
+    note(`не хватает места: нужно ещё ${formatBytes(size + SPARE_BYTES - free)}, свободно ${formatBytes(free)}`);
+    copy = null;
+    drawCacheButton();
+
+    return;
+  }
+
+  mine.waiting = false;
+  mine.total = size;
+  drawCacheButton();
+
+  let drawn = 0;
+
+  try {
+    const { blob } = await downloadVideo(filePath(videoId), {
+      signal: mine.controller.signal,
+      onProgress: (seen, total) => {
+        mine.seen = seen;
+
+        if (total > 0) {
+          mine.total = total;
+        }
+
+        // Перерисовываем только когда процент сменился: иначе кнопка дёргалась
+        // бы на каждом куске потока.
+        const now = percent(mine.seen, mine.total);
+
+        if (now !== drawn) {
+          drawn = now;
+          drawCacheButton();
+        }
+      },
+    });
+
+    await finishCopy(blob);
+  } catch (error) {
+    const cancelled = error.name === "AbortError";
+
+    if (copy === mine) {
+      copy = null;
+    }
+
+    if (!cancelled) {
+      copyFailure = videoId;
+      note(`копия не сохранилась: ${error.message}`);
+    }
+
+    drawCacheButton();
+
+    if (state.videoId !== videoId) {
+      send(unwatchMessage(videoId));
+    }
+  }
+}
+
+function cancelCopy() {
+  const mine = copy;
+
+  if (!mine) {
+    return;
+  }
+
+  copy = null;
+  mine.controller.abort();
+
+  if (state.videoId !== mine.videoId) {
+    send(unwatchMessage(mine.videoId));
+  }
+
+  drawCacheButton();
+}
+
+async function finishCopy(blob) {
+  const mine = copy;
+
+  if (!mine) {
+    return;
+  }
+
+  const record = {
+    videoId: mine.videoId,
+    linkId: mine.linkId,
+    linkTitle: mine.linkTitle,
+    title: mine.title,
+    duration: mine.duration,
+    // Размер — у самого файла: HEAD мог не ответить, а blob уже весь здесь.
+    size: blob.size,
+    savedAt: Date.now(),
+    language: mine.language,
+    cues: mergeCues([], [...mine.cues.values()]),
+    blob,
+  };
+
+  try {
+    await putVideo(db, record);
+  } catch (error) {
+    copy = null;
+    copyFailure = mine.videoId;
+    note(`копия не сохранилась: ${error.message}`);
+    drawCacheButton();
+
+    return;
+  }
+
+  copy = null;
+  savedVideos.set(record.videoId, record);
+  drawCacheButton();
+  drawLinks(knownLinks, "");
+
+  if (state.videoId === record.videoId) {
+    note("сохранено на устройстве");
+    // Перевод идёт дальше: сохранённые титры дописываем, пока зритель тут.
+    follow = { videoId: record.videoId, record, timer: null };
+  } else {
+    send(unwatchMessage(record.videoId));
+  }
+}
+
+/** Реплики ложатся и в недокачанную копию, и в уже сохранённую. */
+function rememberCues(message) {
+  if (message.videoId === undefined || message.videoId === null) {
+    return;   // событие задания: к ролику не относится
+  }
+
+  const list = message.type === "snapshot" || message.type === "cues" ? message.cues || [] : [];
+
+  if (copy && message.videoId === copy.videoId) {
+    for (const cue of list) {
+      copy.cues.set(cue.i, cue);
+    }
+
+    copy.language = message.language || copy.language;
+  }
+
+  if (follow && message.videoId === follow.videoId) {
+    follow.record.cues = mergeCues(follow.record.cues, list);
+    follow.record.language = message.language || follow.record.language;
+    followSoon();
+  }
+}
+
+function followSoon() {
+  if (!follow || follow.timer !== null) {
+    return;
+  }
+
+  const mine = follow;
+
+  mine.timer = setTimeout(() => {
+    mine.timer = null;
+    putVideo(db, mine.record).catch(() => {});
+  }, FOLLOW_MS);
+}
+
 // --- Сокет ----------------------------------------------------------------
 
 function connectSocket() {
@@ -544,6 +902,10 @@ function watch(videoId, previous = null) {
 }
 
 function handleMessage(message) {
+  // Копия ловит реплики раньше проверки на свой ролик: равенство по videoId
+  // честнее, потому что событие без videoId к копии не относится вовсе.
+  rememberCues(message);
+
   // События задания не несут videoId, а сокет помнит все подписки: без этой
   // проверки реплики прежнего эпизода ложились бы на номера новых.
   if (!isForVideo(message, state.videoId)) {
@@ -875,11 +1237,21 @@ function leaveStage() {
     return;
   }
 
-  // Уходим — запоминаем место и отпускаем ролик: без отписки демон продолжает
-  // слать сюда его реплики, а место пропало бы вместе с закрытым плеером.
+  // Уходим — запоминаем место и отпускаем ролик. Исключение — идущее на нём
+  // копирование: без подписки сохранённые титры оборвались бы на моменте
+  // ухода, поэтому их сбор продолжается до конца копии.
   savePosition();
 
-  if (state.videoId) {
+  const copying = Boolean(copy && copy.videoId === state.videoId);
+
+  if (follow && follow.videoId === state.videoId) {
+    clearTimeout(follow.timer);
+    follow.timer = null;
+    putVideo(db, follow.record).catch(() => {});
+    follow = null;
+  }
+
+  if (state.videoId && !copying) {
     send(unwatchMessage(state.videoId));
   }
 
@@ -913,6 +1285,7 @@ function boot() {
   els.toggleTarget.addEventListener("click", () => flipLine("target"));
   els.toggleStudy.addEventListener("click", () => flipLine("study"));
   els.fullscreen.addEventListener("click", toggleFullscreen);
+  els.cache.addEventListener("click", toggleCache);
   els.fontSize.addEventListener("change", pickFontSize);
   drawSwitches();
   drawFontSize();

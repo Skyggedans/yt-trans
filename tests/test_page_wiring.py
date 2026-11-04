@@ -187,3 +187,74 @@ def test_the_chosen_size_survives_a_reload_and_shapes_the_layer():
     layer = source[source.index("const LAYER_CSS"):source.index("function layerNodes")]
     assert "var(--font" in layer
     assert "--overlay-scale" in layer
+
+
+def test_the_stage_has_a_cache_switch_next_to_fullscreen():
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    bar = re.search(r'<div id="stage-bar">(.*?)</div>', html, re.S)
+
+    assert bar is not None
+    assert 'id="cache"' in bar.group(1)
+    assert 'id="fullscreen"' in bar.group(1)
+    # По умолчанию кеш выключен: без нажатия на устройстве не оседает ничего.
+    assert 'aria-pressed="false"' in bar.group(1)
+
+
+def test_the_cache_switch_copies_the_rolled_video():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    logic = (ROOT / "page" / "logic.js").read_text(encoding="utf-8")
+
+    assert 'els.cache.addEventListener("click"' in source
+    for name in (
+        "copyState(", "copyVerdict(", "formatBytes(", "percent(", "mergeCues(",
+        "SPARE_BYTES", "downloadVideo(", "putVideo(", "freeBytes(", "askPersist(",
+    ):
+        assert name in source, name
+    assert "кеш ✓ · " in logic
+    # Повторное нажатие во время копирования отменяет его и убирает недокачанное.
+    assert "controller.abort()" in source
+    assert "copy = null" in source
+
+
+def test_the_base_is_named_in_one_place():
+    # Имя базы и таблиц живёт в cache.js; страница их не повторяет, иначе одно
+    # переименование пришлось бы искать в двух файлах.
+    cache = (ROOT / "page" / "cache.js").read_text(encoding="utf-8")
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert 'DB_NAME = "yt-trans"' in cache
+    assert '"yt-trans"' not in source
+    assert "openDb(" in source
+
+
+def test_the_copy_keeps_the_rolled_video_subscribed():
+    # Ушёл со сцены с идущим копированием — титры должны дописываться дальше,
+    # иначе сохранённое оборвётся на моменте ухода.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function leaveStage"):source.index("// --- Запуск")]
+
+    assert body.index("copy") < body.index("unwatchMessage")
+
+
+def test_the_copy_catches_cues_its_own_video():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function handleMessage"):source.index("function takeSnapshot")]
+
+    assert "rememberCues(" in body
+    assert body.index("rememberCues(") < body.index("isForVideo(")
+
+
+def test_the_saved_cues_keep_arriving_after_the_picture_is_stored():
+    # Перевод идёт дольше скачивания: к концу перевода на устройстве должны
+    # лежать и картинка, и все строки, а не те, что успели к концу загрузки.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "let follow = null" in source
+    assert "followSoon(" in source
+    assert "FOLLOW_MS" in source
+
+
+def test_the_stage_bar_holds_both_buttons():
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    assert re.search(r"#stage-bar \{[^}]*display: flex", css, re.S)

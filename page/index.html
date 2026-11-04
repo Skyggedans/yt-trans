@@ -82,8 +82,16 @@
         <option value="large">крупный</option>
       </select>
     </div>
-    <button id="fullscreen" type="button" aria-label="во весь экран"
-      title="во весь экран">⛶</button>
+    <!-- Слева сверху: ⛶ и кеш. Оба — про весь кадр, а не про строки, которые
+         идут справа. «Кеш» по умолчанию выключен: без нажатия на устройстве
+         не оседает ничего. -->
+    <div id="stage-bar">
+      <button id="fullscreen" type="button" aria-label="во весь экран"
+        title="во весь экран">⛶</button>
+      <button id="cache" type="button" aria-pressed="false"
+        aria-label="копировать ролик на устройство"
+        title="копировать ролик на устройство">кеш</button>
+    </div>
     <div id="status" role="status"></div>
     <div id="title"></div>
   </section>
