@@ -42,7 +42,9 @@ class VideoStore:
         self.directory = Path(directory)
         self.max_bytes = max_bytes
         self._fetch = fetch
-        self.directory.mkdir(parents=True, exist_ok=True)
+        # 0o700, а не по umask: каталог может лежать в /tmp, где рядом чужие
+        # процессы, а имена файлов — это id ролика, то есть предсказуемы.
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._states: dict[str, str] = {}
         self._errors: dict[str, str] = {}
         self._tasks: dict[str, asyncio.Task] = {}

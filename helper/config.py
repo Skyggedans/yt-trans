@@ -155,11 +155,35 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class VideoConfig:
+    # Каталог готовых mp4. Пусто — общий кэш проекта (CACHE_DIR/video). Отдельная
+    # настройка нужна ради /tmp: это tmpfs, то есть оперативная память, и там
+    # потолок кэша меряют уже не диском.
+    dir: str = ""
+    # Потолок в гибибайтах. Двадцать — примерно пятьдесят часовых роликов в 1080p;
+    # на диске это лишь защита от бесконечного роста, в памяти — ещё и от давления
+    # на систему, поэтому там его ставят меньше.
+    max_gib: float = 20.0
+
+    @property
+    def directory(self) -> Path | None:
+        return Path(self.dir).expanduser() if self.dir else None
+
+    @property
+    def max_bytes(self) -> int:
+        # float() до умножения: если в max_gib попало что-то нечисловое, это
+        # должна быть быстрая ошибка, а не «строка × гигабайт», то есть
+        # многогигабайтная строка в памяти.
+        return int(float(self.max_gib) * 1024**3)
+
+
+@dataclass(frozen=True)
 class Config:
     asr: AsrConfig
     translator: TranslatorConfig
     youtube: YoutubeConfig = YoutubeConfig()
     server: ServerConfig = ServerConfig()
+    video: VideoConfig = VideoConfig()
 
     @property
     def asr_vram_mib(self) -> int:
@@ -214,7 +238,18 @@ def load(path: Path = CONFIG_PATH) -> Config:
     translator = TranslatorConfig(**_section(raw, "translator", TranslatorConfig))
     youtube = YoutubeConfig(**_section(raw, "youtube", YoutubeConfig))
     server = ServerConfig(**_section(raw, "server", ServerConfig))
-    config = Config(asr=asr, translator=translator, youtube=youtube, server=server)
+    video = VideoConfig(**_section(raw, "video", VideoConfig))
+    config = Config(
+        asr=asr, translator=translator, youtube=youtube, server=server, video=video
+    )
+
+    # Потолок кэша читается при каждом решении о вытеснении, поэтому мусор здесь
+    # всплыл бы только через час работы, посреди просмотра. Пусть падает при старте.
+    try:
+        if config.video.max_bytes <= 0:
+            raise ConfigError(f"[video] max_gib должен быть больше нуля: {video.max_gib!r}")
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"[video] max_gib не число: {video.max_gib!r}") from exc
 
     # Не ошибка запуска: без файла не откроются только ролики 18+, а остальное
     # работает. Зритель такого ролика получит ту же причину в отказе.

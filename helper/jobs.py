@@ -63,7 +63,7 @@ from helper.translate import (
     validate,
     validate_dual,
 )
-from helper.video import VideoStore
+from helper.video import VIDEO_DIR, VideoStore
 
 log = logging.getLogger(__name__)
 
@@ -1768,7 +1768,12 @@ class JobManager:
         self.config = config or load_config()
         self.lease = GpuLease()
         self.cache = TrackCache()
-        self.videos = VideoStore()
+        # Каталог и потолок — из конфига: кэш можно держать и в /tmp (tmpfs),
+        # но тогда потолок меряют уже не диском.
+        self.videos = VideoStore(
+            self.config.video.directory or VIDEO_DIR,
+            max_bytes=self.config.video.max_bytes,
+        )
         self.runner = JobRunner(self.lease, self.cache, self.config)
         # Ключ — пара (ролик, дорожка автора), а не один ролик: см. get_or_create.
         # К словарю по одному video_id не обратиться — для этого есть get и jobs_for.

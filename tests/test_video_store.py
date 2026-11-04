@@ -150,3 +150,33 @@ async def test_a_video_bigger_than_the_whole_cache_is_not_thrown_away(tmp_path):
 
     assert status.state == "ready"
     assert (tmp_path / f"{VIDEO}.mp4").exists()
+
+
+def test_the_registry_puts_the_cache_where_the_config_says(tmp_path):
+    from helper.config import AsrConfig, Config, TranslatorConfig, VideoConfig
+    from helper.jobs import JobManager
+
+    registry = JobManager(
+        config=Config(
+            asr=AsrConfig(),
+            translator=TranslatorConfig(),
+            video=VideoConfig(dir=str(tmp_path), max_gib=4),
+        )
+    )
+
+    try:
+        assert registry.videos.directory == tmp_path
+        assert registry.videos.max_bytes == 4 * 1024**3
+    finally:
+        # У TrackCache нет close(); без этого сборщик мусора ругается на sqlite.
+        registry.cache._db.close()
+
+
+def test_the_cache_directory_is_closed_to_other_users(tmp_path):
+    # В /tmp каталог лежит рядом с чужими: предсказуемое имя ролика и открытый
+    # на запись каталог дали бы соседнему процессу место для подмены файла.
+    target = tmp_path / "video"
+
+    VideoStore(target)
+
+    assert target.stat().st_mode & 0o777 == 0o700
