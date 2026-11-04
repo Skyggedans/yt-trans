@@ -204,7 +204,7 @@ def test_result_carries_the_verdict_and_the_windows(whisper, monkeypatch):
 
     result = worker.transcribe(AUDIO, language="auto")
 
-    assert set(result) == {"language", "verdict", "detection", "duration", "model", "cues"}
+    assert set(result) == {"language", "verdict", "detection", "duration", "model", "prompt", "cues"}
     assert result["detection"] == {
         "bcmsShare": 0.97,
         "votes": 8,
@@ -230,7 +230,7 @@ def test_parser_keeps_the_cli_contract():
     assert args.language == "sr"
     assert args.hint is None
     assert (args.model, args.compute_type, args.batch_size) == (worker.DEFAULT_MODEL, "float16", 16)
-    assert (args.no_vad, args.initial_prompt, args.hotwords, args.pcm) == (False, None, None, None)
+    assert (args.no_vad, args.prompt_names, args.hotwords, args.pcm) == (False, None, None, None)
 
 
 def test_main_refuses_an_unknown_pin_before_reading_audio(monkeypatch, capsys):

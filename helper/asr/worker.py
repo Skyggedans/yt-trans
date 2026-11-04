@@ -23,10 +23,13 @@ import argparse
 import json
 import math
 import sys
+from collections.abc import Sequence
 
 import numpy as np
 
 import helper.env  # noqa: F401  — уводит кэш весов с ramdisk, обязателен до faster_whisper
+
+from helper.asr.prompt import initial_prompt
 
 # Под именем lang, а не language: параметры transcribe называются language и hint
 # и затенили бы внутри неё и сам модуль, и его функцию hint.
@@ -109,6 +112,22 @@ def _detect(model, audio: np.ndarray) -> lang.Detection:
     return lang.summarize(records)
 
 
+def _cue(segment) -> dict:
+    """Сегмент Whisper в реплику ответа: текст, слова и метрики, по которым судит демон."""
+    return {
+        "start": segment.start,
+        "end": segment.end,
+        "text": segment.text.strip(),
+        "words": [
+            {"start": w.start, "end": w.end, "word": w.word}
+            for w in (segment.words or [])
+        ],
+        "no_speech_prob": segment.no_speech_prob,
+        "avg_logprob": segment.avg_logprob,
+        "compression_ratio": segment.compression_ratio,
+    }
+
+
 def transcribe(
     audio: np.ndarray,
     *,
@@ -116,7 +135,7 @@ def transcribe(
     compute_type: str = "float16",
     language: str = "sr",
     hint: str | None = None,
-    initial_prompt: str | None = None,
+    prompt_names: Sequence[str] | None = None,
     hotwords: str | None = None,
     batch_size: int = 16,
     # Выключается только для замера расхода памяти: с фильтром тишина отсеивается
@@ -133,6 +152,9 @@ def transcribe(
     # закрепление, и расхождение уходит демону в решении.
     detection = _detect(model, audio)
     verdict = lang.decide(pin, lang.hint(hint), detection)
+    # Затравка — по решённому языку, а не по объявленному: сербской речи под меткой en
+    # (Juske) нужна сербская фраза, английской речи никакая. None — флага не было.
+    prompt = initial_prompt(verdict.effective, prompt_names) if prompt_names is not None else None
     pipeline = BatchedInferencePipeline(model=model)
 
     segments, info = pipeline.transcribe(
@@ -145,17 +167,10 @@ def transcribe(
         # подменила бы язык источника для всего пайплайна ниже.
         task="transcribe",
         beam_size=5,
-        # Лестницу оставляем: на языке с WER 16–29% откат по температуре — это то,
-        # что спасает схлопнувшиеся сегменты.
-        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-        compression_ratio_threshold=2.4,
-        log_prob_threshold=-1.0,
-        no_speech_threshold=0.6,
-        # Ключевой флаг. Обусловливание на предыдущий текст раскручивает циклы
-        # повторов, распространяет флип письменности на весь остаток транскрипта
-        # и вытесняет initial_prompt после первого окна.
-        condition_on_previous_text=False,
-        hallucination_silence_threshold=2.0,
+        # Пороги не передаются: пакетный режим их принимает и не применяет. Тишину демон
+        # отсекает целым сегментом по его метрикам (helper.asr.prompt.segment_verdict),
+        # а в сегменте с «повтором» — только зациклившиеся предложения
+        # (helper.jobs.asr_cues); каждый выброс виден в журнале.
         word_timestamps=True,
         vad_filter=vad_filter,
         vad_parameters=dict(
@@ -168,23 +183,12 @@ def transcribe(
             # и переводчик потом уверенно выдаёт гладкую, но неверную фразу.
             speech_pad_ms=200,
         ),
-        initial_prompt=initial_prompt,
+        initial_prompt=prompt,
         hotwords=hotwords,
         batch_size=batch_size,
     )
 
-    cues = [
-        {
-            "start": segment.start,
-            "end": segment.end,
-            "text": segment.text.strip(),
-            "words": [
-                {"start": w.start, "end": w.end, "word": w.word}
-                for w in (segment.words or [])
-            ],
-        }
-        for segment in segments
-    ]
+    cues = [_cue(segment) for segment in segments]
 
     return {
         # Язык, с которым распознавали: демон латинизирует по нему реплики.
@@ -203,8 +207,19 @@ def transcribe(
         },
         "duration": info.duration,
         "model": model_name,
+        "prompt": prompt,
         "cues": [c for c in cues if c["text"]],
     }
+
+
+def _prompt_names(raw: str) -> list[str]:
+    """JSON-список имён из командной строки; всё прочее — ошибка разбора."""
+    names = json.loads(raw)
+
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise argparse.ArgumentTypeError("нужен JSON-список строк")
+
+    return names
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -215,7 +230,12 @@ def build_parser() -> argparse.ArgumentParser:
     # который язык не передаёт.
     parser.add_argument("--language", default="sr")
     parser.add_argument("--hint", default=None, help="метка языка от YouTube, только подсказка")
-    parser.add_argument("--initial-prompt", default=None)
+    parser.add_argument(
+        "--prompt-names",
+        type=_prompt_names,
+        default=None,
+        help="JSON-список имён из заголовка и тегов; затравку по решённому языку составит воркер",
+    )
     parser.add_argument("--hotwords", default=None)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument(
@@ -257,7 +277,7 @@ def main() -> int:
         compute_type=args.compute_type,
         language=args.language,
         hint=args.hint,
-        initial_prompt=args.initial_prompt,
+        prompt_names=args.prompt_names,
         hotwords=args.hotwords,
         batch_size=args.batch_size,
         vad_filter=not args.no_vad,

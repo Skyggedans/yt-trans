@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 MAX_CHARS_PER_LINE = 42
@@ -174,11 +175,16 @@ def _allocate(chunks: list[str], start: float, end: float) -> list[Cue]:
     return cues
 
 
-def build_cues(segments: list[dict]) -> list[Cue]:
+def build_cues(
+    segments: list[dict], drop: Callable[[str, dict], bool] | None = None
+) -> list[Cue]:
     """Собрать реплики из сегментов ASR (start, end, text, words).
 
     Пословные тайминги используются, чтобы посадить границу предложения на реальную
     паузу между словами, а не на пропорциональную оценку внутри сегмента.
+
+    drop зовётся как drop(предложение, сегмент); True — предложение в реплики не идёт.
+    Без drop поведение прежнее: на этом держится spikes/asr_real.py.
     """
     cues: list[Cue] = []
 
@@ -193,6 +199,14 @@ def build_cues(segments: list[dict]) -> list[Cue]:
         spans = _sentence_spans(sentences, words, segment["start"], segment["end"])
 
         for sentence, (start, end) in zip(sentences, spans):
+            # Интервалы сопоставлены со словами по всем предложениям сегмента, до отсева:
+            # выбрось предложение раньше, и каждое следующее легло бы на чужие слова.
+            # Отсев идёт по предложению целиком, до _split_balanced и _enforce_min_duration:
+            # длинное эхо иначе резалось бы на куски, порознь на эхо не похожие, а короткое
+            # склеивалось бы с соседней настоящей репликой («Da. Pominju se na srpskom jeziku.»).
+            if drop is not None and drop(sentence, segment):
+                continue
+
             fits = len(sentence) <= MAX_CHARS
             readable = len(sentence) / max(end - start, 1e-6) <= MAX_CPS
 

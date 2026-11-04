@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import secrets
 import shutil
 import subprocess
@@ -31,6 +32,13 @@ import httpx
 import numpy as np
 
 from helper import language
+from helper.asr.prompt import (
+    COMPRESSION_RATIO_THRESHOLD,
+    compression_ratio,
+    harvest_names,
+    is_echo,
+    segment_verdict,
+)
 from helper.asr.worker import SAMPLE_RATE
 from helper.cache import CacheKey, TrackCache
 from helper.config import Config, load as load_config
@@ -1256,9 +1264,20 @@ class JobRunner:
 
         job._set_language(verdict)
         _log_language(job, verdict, (result.get("detection") or {}).get("windows") or [])
-        job.cues = self._to_job_cues(
-            build_cues(normalize_cues(result["cues"], verdict.effective))
-        )
+        # Затравку составляет воркер, а его stderr при успехе выбрасывается: без этой
+        # строки эхо на экране не с чем сопоставить. Строка на каждый выброс — потому
+        # что «тишина» это до 30 секунд звука, а проверить пороги на этом корпусе нечем:
+        # в кэше метрик нет. Журнал — единственная проверка в поле.
+        prompt = result.get("prompt")
+        log.info("затравка %s: %s", job.video_id, prompt or "нет")
+        cues, dropped = asr_cues(result["cues"], verdict.effective, prompt)
+
+        for reason, text in dropped:
+            log.info("выброшено %s (%s): %s", job.video_id, reason, text)
+
+        # Индексы JobCue остаются сплошными: отсев идёт до _to_job_cues, а на index
+        # опираются _next_batch и _context_for.
+        job.cues = self._to_job_cues(cues)
         job._emit({"type": "segmented", "total": len(job.cues)})
 
     async def _finish_translation(self, job: Job) -> None:
@@ -1328,7 +1347,6 @@ class JobRunner:
 
     def _run_asr(self, audio, job: Job) -> dict:
         """Распознавание отдельным процессом — выход процесса гарантирует возврат VRAM."""
-        prompt = _initial_prompt(job.info)
         pin, hint = self._declaration(job)
         args = [
             sys.executable,
@@ -1345,8 +1363,14 @@ class JobRunner:
         if hint:
             args += ["--hint", hint]
 
-        if prompt:
-            args += ["--initial-prompt", prompt]
+        # Имена, а не готовая затравка: язык решает воркер после определителя, и только
+        # он знает, есть ли для этого языка фраза. Описание не передаётся (см.
+        # harvest_names). ensure_ascii=False — имена читаемы в ps и в журнале. Флаг идёт
+        # в каждом запуске, даже со списком [].
+        args += [
+            "--prompt-names",
+            json.dumps(harvest_names(job.info.title, job.info.tags), ensure_ascii=False),
+        ]
 
         proc = subprocess.Popen(
             args,
@@ -1650,42 +1674,55 @@ class JobRunner:
         return context
 
 
-def _initial_prompt(info: VideoInfo | None) -> str:
-    """Затравка на латинице: она же фиксирует письменность вывода.
+def asr_cues(
+    segments: list[dict], language: str, prompt: str | None
+) -> tuple[list[Cue], list[tuple[str, str]]]:
+    """Реплики из сегментов распознавания и то, что выброшено по дороге: (причина, текст).
 
-    Whisper обусловливается на предыдущий текст, поэтому связная фраза работает
-    лучше списка через запятую. Держим короткой: затравка режется примерно на
-    половине 224-токенного контекста, а переполнение — известный триггер галлюцинаций.
+    «Тишина» выбрасывает сегмент целиком. В сегменте с «повтором» уходят только
+    зациклившиеся предложения: память своя у каждого сегмента, петля живёт внутри одного
+    куска, и речь перед ней остаётся. В сегментах без пометки повторы не выбрасываются
+    никогда: «Da. Ne. Da.» — обычная речь. Эхо проверяется после повтора и после
+    normalize_cues: кириллический вывод сравнивается с латинской затравкой уже латиницей.
+
+    Фильтры только для распознавания — ветка дорожки автора в _pipeline не меняется.
+    Выбросы возвращаются, а не пишутся здесь, потому что журнал ведёт задание.
     """
-    if not info:
-        return ""
+    dropped: list[tuple[str, str]] = []
+    kept = []
 
-    names = _proper_nouns(info)
+    for segment in segments:
+        if segment_verdict(segment) == "тишина":
+            dropped.append(("тишина", segment["text"]))
+        else:
+            kept.append(segment)
 
-    if not names:
-        return "Ovo je transkript video snimka na srpskom jeziku."
+    # Уже сказанное в сегменте: своё у каждого, петля живёт внутри одного куска.
+    heard: dict[int, set[tuple[str, ...]]] = {}
 
-    return "Ovo je transkript video snimka na srpskom jeziku. Pominju se: " + ", ".join(names[:12]) + "."
+    def drop(sentence: str, segment: dict) -> bool:
+        if segment_verdict(segment) == "повтор":
+            # Слова без регистра и знаков: «Idemo dalje» без точки — тот же повтор.
+            words = tuple(re.findall(r"\w+", sentence.casefold()))
+            seen = heard.setdefault(id(segment), set())
+            looped = words in seen or compression_ratio(sentence) > COMPRESSION_RATIO_THRESHOLD
+            seen.add(words)
 
+            if looped:
+                dropped.append(("повтор", sentence))
 
-def _proper_nouns(info: VideoInfo) -> list[str]:
-    """Имена собственные из метаданных — бесплатная подсказка для ASR.
+                return True
 
-    Регексом, а не моделью: это происходит до захвата GPU, и платить за него
-    ещё одним свопом модели нельзя.
-    """
-    import re
+        # Эхо проверяется после normalize_cues: кириллический вывод сравнивается
+        # с латинской затравкой уже латиницей.
+        if is_echo(sentence, prompt):
+            dropped.append(("эхо затравки", sentence))
 
-    from helper.script import to_latin
+            return True
 
-    text = " ".join([info.title, info.description[:1500], " ".join(info.tags[:20])])
-    words = re.findall(r"\b[A-ZČĆŽŠĐ][\wčćžšđ]{2,}", to_latin(text))
-    seen: dict[str, None] = {}
+        return False
 
-    for word in words:
-        seen.setdefault(word, None)
-
-    return list(seen)[:20]
+    return build_cues(normalize_cues(kept, language), drop=drop), dropped
 
 
 class JobManager:
