@@ -226,7 +226,8 @@ input {
   position: absolute;
   left: 16px;
   right: 16px;
-  top: 16px;
+  /* Ниже выключателей строк: длинная строка о языке иначе ушла бы под них. */
+  top: calc(56px + env(safe-area-inset-top, 0px));
   text-align: center;
   color: var(--muted);
   font-size: 15px;
@@ -258,11 +259,12 @@ input {
   background: rgba(20, 20, 24, .82);
 }
 
-/* Два выключателя строк — над кнопками, чтобы не мешать ползунку плеера. */
+/* Два выключателя строк — в правом верхнем углу: снизу их перекрывают
+   собственные контролы плеера. */
 #lines {
   position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
   right: 12px;
-  bottom: 56px;
   display: flex;
   gap: 8px;
 }
