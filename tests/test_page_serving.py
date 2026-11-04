@@ -26,3 +26,15 @@ async def test_the_page_does_not_swallow_the_api(client):
 
 async def test_an_unknown_page_is_a_plain_404(client):
     assert (await client.get("/no-such-file")).status_code == 404
+
+
+async def test_the_page_brings_its_styles_and_scripts(client):
+    assert (await client.get("/style.css")).status_code == 200
+    assert (await client.get("/app.js")).status_code == 200
+
+
+async def test_the_page_has_the_screen_for_asking_the_token(client):
+    text = (await client.get("/")).text
+
+    assert 'id="token-input"' in text
+    assert 'id="setup"' in text

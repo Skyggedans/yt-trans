@@ -2,10 +2,54 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>yt-trans — субтитры на планшете</title>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<p id="boot">yt-trans</p>
+
+<section id="setup">
+  <h1>yt-trans</h1>
+  <p>Субтитры делает демон на компьютере. Вставь сюда токен установки —
+    он лежит в <code>~/.config/yt-trans/token</code> на том компьютере.</p>
+  <input id="token-input" type="password" autocomplete="off" autocapitalize="off"
+    spellcheck="false" placeholder="токен">
+  <button id="token-save" type="button">Сохранить</button>
+  <p id="setup-message" role="status"></p>
+</section>
+
+<div id="app" hidden>
+
+  <section id="home">
+    <header>
+      <h1>yt-trans</h1>
+    </header>
+
+    <form id="link-form">
+      <input id="link-url" type="url" inputmode="url" autocomplete="off"
+        placeholder="Ссылка на ролик или плейлист YouTube">
+      <button type="submit">Добавить</button>
+    </form>
+
+    <ul id="links"></ul>
+
+    <section id="episodes" hidden>
+      <h2 id="episodes-title"></h2>
+      <ul id="episode-list"></ul>
+    </section>
+  </section>
+
+  <section id="stage" hidden>
+    <video id="video" playsinline preload="metadata"></video>
+    <div id="overlay"></div>
+    <div id="status" role="status"></div>
+    <div id="title"></div>
+    <button id="back" type="button">Назад</button>
+    <button id="fullscreen" type="button">Во весь экран</button>
+  </section>
+
+</div>
+
+<script type="module" src="/app.js"></script>
 </body>
 </html>
