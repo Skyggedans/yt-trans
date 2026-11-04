@@ -262,6 +262,8 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8756/v1/jobs/<id>/res
 journalctl --user -u yt-trans --since today | grep <id>
 ```
 
+Страница для планшета и сеть: [`docs/tablet.md`](tablet.md).
+
 ### После обновления
 
 Сразу после слияния в рабочую копию, из которой запущен демон (`~/Work/yt-trans`), —
