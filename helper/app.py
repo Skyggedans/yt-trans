@@ -20,6 +20,7 @@ import contextlib
 import logging
 import os
 import secrets
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from helper.env import CONFIG_DIR  # импортируется первым: раскладывает кэши и подключает CUDA
@@ -36,6 +37,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from helper.jobs import CapacityError, JobManager, Stage, refusal_snapshot
 
@@ -43,6 +45,7 @@ log = logging.getLogger(__name__)
 
 PORT = int(os.environ.get("YT_TRANS_PORT", "8756"))
 TOKEN_PATH = CONFIG_DIR / "token"
+PAGE_DIR = Path(__file__).resolve().parent.parent / "page"
 
 # Пинг раз в 15 секунд: он не даёт service worker'у в Chrome уснуть по таймауту
 # простоя и заодно быстро вскрывает разрыв соединения.
@@ -490,6 +493,12 @@ async def websocket(socket: WebSocket) -> None:
         for video_id in watched:
             for job in manager.jobs_for(video_id):
                 job.unsubscribe(events)
+
+
+# Монтируется последним: маршруты выше добавлены раньше и выигрывают у монтирования,
+# так что /v1/* остаётся API, а всё прочее ищется файлом. Страница публичная —
+# секретов в ней нет, а токен она спрашивает у человека сама.
+app.mount("/", StaticFiles(directory=PAGE_DIR, html=True), name="page")
 
 
 def main() -> None:
