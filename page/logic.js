@@ -232,6 +232,22 @@ export function flipSwitch(switches, name) {
   return next;
 }
 
+// --- Поиск по сохранённым ссылкам -------------------------------------
+
+/** Ссылки, в названии или адресе которых есть кусок запроса. */
+export function filterLinks(items, query) {
+  const needle = String(query || "").trim().toLocaleLowerCase();
+
+  if (!needle) {
+    return items;
+  }
+
+  return items.filter((link) => (
+    String(link.title || "").toLocaleLowerCase().includes(needle)
+    || String(link.url || "").toLocaleLowerCase().includes(needle)
+  ));
+}
+
 // --- Ссылка, пришедшая из share-диалога -------------------------------
 
 // Android кладёт адрес во text (поля url у него в share-системе нет), иногда

@@ -2,8 +2,8 @@
 // и слой субтитров. Чистая логика — в logic.js, здесь только DOM и сеть.
 
 import {
-  activeCueIndex, cueLines, flipSwitch, formatTime, isForVideo, languageText,
-  parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
+  activeCueIndex, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
+  languageText, parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
   stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
@@ -25,6 +25,7 @@ const els = {
   app: document.getElementById("app"),
   home: document.getElementById("home"),
   links: document.getElementById("links"),
+  linksFilter: document.getElementById("links-filter"),
   linkForm: document.getElementById("link-form"),
   linkUrl: document.getElementById("link-url"),
   episodes: document.getElementById("episodes"),
@@ -67,6 +68,10 @@ let paintedKey = null;
 // Место просмотра — своё на устройство: планшет в другой комнате продолжает
 // с того места, где его оставили, и не тянет за собой вкладки компьютера.
 let positions = parsePositions(store(POSITIONS_KEY));
+// Что сейчас в списке и что набрано в поиске: перерисовка по вводу не должна
+// ходить на сервер за тем же списком.
+let knownLinks = [];
+let linksQuery = "";
 // Какие строки показывать — тоже своё на устройство: планшет в другой комнате
 // не должен менять то, что настроено на компьютере.
 let switches = readSwitches(store(SWITCHES_KEY));
@@ -206,7 +211,12 @@ function button(text, onClick) {
 }
 
 function drawLinks(items, message) {
+  knownLinks = items;
   els.links.replaceChildren();
+
+  // Искать нечего, пока нечего показывать: пустое поле над «пока пусто» —
+  // только лишний вопрос.
+  els.linksFilter.hidden = items.length === 0;
 
   if (message) {
     els.links.append(row(message, ["empty"]));
@@ -220,7 +230,13 @@ function drawLinks(items, message) {
     return;
   }
 
-  for (const link of items) {
+  const visible = filterLinks(items, linksQuery);
+
+  if (!visible.length) {
+    els.links.append(row("ничего не нашлось", ["empty"]));
+  }
+
+  for (const link of visible) {
     const item = document.createElement("li");
     item.append(
       button(link.title || link.url, () => openLink(link.id)),
@@ -867,6 +883,10 @@ function boot() {
 
   els.tokenSave.addEventListener("click", saveToken);
   els.linkForm.addEventListener("submit", addLink);
+  els.linksFilter.addEventListener("input", () => {
+    linksQuery = els.linksFilter.value;
+    drawLinks(knownLinks, "");
+  });
   els.toggleTarget.addEventListener("click", () => flipLine("target"));
   els.toggleStudy.addEventListener("click", () => flipLine("study"));
   els.fullscreen.addEventListener("click", toggleFullscreen);

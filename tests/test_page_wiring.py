@@ -131,3 +131,12 @@ def test_a_shared_link_is_added_like_a_typed_one():
     assert 'api("/v1/links", { method: "POST"' in source
     # Иначе перезагрузка страницы добавила бы ту же ссылку второй раз.
     assert "history.replaceState" in source
+
+
+def test_the_saved_links_can_be_searched_by_name():
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="links-filter"' in html
+    assert "filterLinks(" in source
+    assert 'els.linksFilter.addEventListener("input"' in source

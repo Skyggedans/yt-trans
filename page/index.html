@@ -39,6 +39,12 @@
       <button type="submit">Добавить</button>
     </form>
 
+    <!-- Поиск по сохранённым: список растёт, и найти в нём нужный ролик
+         прокруткой со временем становится дольше, чем набрать пару букв.
+         Пока ссылок нет, поле спрятано. -->
+    <input id="links-filter" type="search" autocomplete="off" hidden
+      placeholder="Поиск по названию">
+
     <ul id="links"></ul>
 
     <section id="episodes" hidden>

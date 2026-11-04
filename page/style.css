@@ -121,6 +121,11 @@ input {
   flex: 1;
 }
 
+/* Поле поиска — во всю ширину списка, как и поле ссылки над ним. */
+#links-filter {
+  width: 100%;
+}
+
 #links,
 #episode-list {
   list-style: none;

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  activeCueIndex, cueLines, flipSwitch, formatTime, isForVideo, languageText,
-  parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
+  activeCueIndex, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
+  languageText, parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
   stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
@@ -226,4 +226,32 @@ test("punctuation right after the link does not stick to it", () => {
     sharedUrl(new URLSearchParams("text=(https%3A%2F%2Fyoutu.be%2Fddd).")),
     "https://youtu.be/ddd",
   );
+});
+
+const LINKS = [
+  { id: "1", title: "Kako se pravi rakija", url: "https://youtu.be/aaa" },
+  { id: "2", title: "Историја Црне Горе", url: "https://youtu.be/bbb" },
+  { id: "3", title: "Без названия", url: "https://www.youtube.com/playlist?list=ccc" },
+];
+
+test("an empty search leaves the whole list", () => {
+  assert.equal(filterLinks(LINKS, "").length, 3);
+  assert.equal(filterLinks(LINKS, "   ").length, 3);
+});
+
+test("the search finds a title by part of a word, regardless of case", () => {
+  assert.deepEqual(filterLinks(LINKS, "RAKI").map((link) => link.id), ["1"]);
+  assert.deepEqual(filterLinks(LINKS, "горе").map((link) => link.id), ["2"]);
+});
+
+test("the address is searched too", () => {
+  assert.deepEqual(filterLinks(LINKS, "playlist").map((link) => link.id), ["3"]);
+});
+
+test("nothing found is an empty list, not the whole one", () => {
+  assert.deepEqual(filterLinks(LINKS, "ничего такого"), []);
+});
+
+test("a link without a title does not break the search", () => {
+  assert.deepEqual(filterLinks([{ id: "4", url: "https://youtu.be/ddd" }], "ddd"), [{ id: "4", url: "https://youtu.be/ddd" }]);
 });
