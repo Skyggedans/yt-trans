@@ -106,6 +106,22 @@ input {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Экран ограничен его высотой: прокрутка живёт внутри #library, а не в
+     странице, иначе поле ссылки и поиск уезжали бы вместе со списком. */
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+#library {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* Прокрутка не должна обрывать тень/рамку последнего пункта о край. */
+  padding-bottom: 4px;
 }
 
 #home[hidden] {

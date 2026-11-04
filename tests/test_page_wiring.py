@@ -140,3 +140,19 @@ def test_the_saved_links_can_be_searched_by_name():
     assert 'id="links-filter"' in html
     assert "filterLinks(" in source
     assert 'els.linksFilter.addEventListener("input"' in source
+
+
+def test_the_saved_links_scroll_while_the_fields_stay_in_place():
+    # Поле ссылки и поиск должны стоять на месте: на планшете с сотней
+    # сохранённых прокрутка страницы уносила бы их с экрана.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    library = re.search(r'<div id="library">(.*?)</div>', html, re.S)
+
+    assert library is not None
+    assert 'id="links"' in library.group(1)
+    assert 'id="episodes"' in library.group(1)
+    assert 'id="links-filter"' not in library.group(1)
+    assert re.search(r"#home \{[^}]*height: 100dvh", css, re.S)
+    assert re.search(r"#library \{[^}]*overflow-y: auto", css, re.S)

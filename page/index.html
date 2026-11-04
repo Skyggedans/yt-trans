@@ -45,12 +45,16 @@
     <input id="links-filter" type="search" autocomplete="off" hidden
       placeholder="Поиск по названию">
 
-    <ul id="links"></ul>
+    <!-- Прокручивается только эта часть: поле ссылки и поиск выше остаются
+         на экране, сколько бы ссылок ни накопилось. -->
+    <div id="library">
+      <ul id="links"></ul>
 
-    <section id="episodes" hidden>
-      <h2 id="episodes-title"></h2>
-      <ul id="episode-list"></ul>
-    </section>
+      <section id="episodes" hidden>
+        <h2 id="episodes-title"></h2>
+        <ul id="episode-list"></ul>
+      </section>
+    </div>
   </section>
 
   <section id="stage" hidden>
