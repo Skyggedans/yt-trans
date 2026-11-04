@@ -242,21 +242,14 @@ input {
 #title {
   position: absolute;
   left: 16px;
-  bottom: 16px;
-  right: 120px;
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  right: 16px;
   color: var(--muted);
   font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
-}
-
-#back,
-#fullscreen {
-  position: absolute;
-  bottom: 12px;
-  background: rgba(20, 20, 24, .82);
 }
 
 /* Два выключателя строк — в правом верхнем углу: снизу их перекрывают
@@ -277,14 +270,6 @@ input {
    под палец. */
 #lines button[aria-pressed="false"] {
   opacity: .45;
-}
-
-#back {
-  right: 12px;
-}
-
-#fullscreen {
-  left: 12px;
 }
 
 @media (min-width: 900px) {

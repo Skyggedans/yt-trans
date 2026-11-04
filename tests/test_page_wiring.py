@@ -55,3 +55,15 @@ def test_the_layer_obeys_the_switches():
     body = source[source.index("function paint"):source.index("function startClock")]
 
     assert "visibleLines" in body
+
+
+def test_the_stage_is_left_by_the_browser_history():
+    # Своей кнопки «назад» больше нет, а список эпизодов — тот же адрес: без
+    # pushState и popstate браузерная история уводила бы со страницы целиком.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+
+    assert "history.pushState" in source
+    assert "popstate" in source
+    assert 'id="back"' not in html
+    assert 'id="fullscreen"' not in html

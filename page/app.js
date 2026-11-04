@@ -37,8 +37,6 @@ const els = {
   title: document.getElementById("title"),
   toggleTarget: document.getElementById("toggle-target"),
   toggleStudy: document.getElementById("toggle-study"),
-  fullscreen: document.getElementById("fullscreen"),
-  back: document.getElementById("back"),
 };
 
 const state = {
@@ -334,6 +332,8 @@ function play(videoId, title) {
   els.home.hidden = true;
   els.stage.hidden = false;
   render();
+
+  history.pushState({ videoId }, "");
 
   createJob(videoId);
   watch(videoId, previous);
@@ -771,21 +771,14 @@ function flipLine(name) {
   paint();
 }
 
-// --- Кнопки сцены ---------------------------------------------------------
+// --- Уход со сцены --------------------------------------------------------
 
-function fullscreen() {
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
-
+/** Вернуться к списку: браузерная кнопка «назад» зовёт то же самое. */
+function leaveStage() {
+  if (!state.videoId) {
     return;
   }
 
-  if (els.stage.requestFullscreen) {
-    els.stage.requestFullscreen().catch(() => {});
-  }
-}
-
-function back() {
   // Уходим — запоминаем место и отпускаем ролик: без отписки демон продолжает
   // слать сюда его реплики, а место пропало бы вместе с закрытым плеером.
   savePosition();
@@ -817,11 +810,14 @@ function boot() {
 
   els.tokenSave.addEventListener("click", saveToken);
   els.linkForm.addEventListener("submit", addLink);
-  els.fullscreen.addEventListener("click", fullscreen);
-  els.back.addEventListener("click", back);
   els.toggleTarget.addEventListener("click", () => flipLine("target"));
   els.toggleStudy.addEventListener("click", () => flipLine("study"));
   drawSwitches();
+
+  // Список эпизодов и сцена — один адрес, поэтому «назад» в браузере сам по себе
+  // ничего не менял бы. Свой шаг истории кладётся при входе в ролик, а возврат
+  // по нему возвращает к списку.
+  window.addEventListener("popstate", leaveStage);
 
   startClock();
   reportPlayhead();
