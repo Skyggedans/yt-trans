@@ -3,8 +3,8 @@ import { test } from "node:test";
 
 import {
   activeCueIndex, cueLines, flipSwitch, formatTime, isForVideo, languageText,
-  parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, stageText,
-  unwatchMessage, visibleLines, watchMessages,
+  parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
+  stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
 const CUES = [
@@ -187,4 +187,43 @@ test("a switch flips, and the other one does not move", () => {
   assert.deepEqual(flipSwitch({ target: true, study: true }, "study"), { target: true, study: false });
   assert.deepEqual(flipSwitch({ target: true, study: false }, "study"), { target: true, study: true });
   assert.deepEqual(flipSwitch({ target: true, study: true }, "target"), { target: false, study: true });
+});
+
+test("a shared link is found in the text Android puts it in", () => {
+  const params = new URLSearchParams(
+    "title=Neki+snimak&text=Neki+snimak+https%3A%2F%2Fyoutu.be%2FdQw4w9WgXcQ%3Fsi%3Dabc&url=",
+  );
+
+  assert.equal(sharedUrl(params), "https://youtu.be/dQw4w9WgXcQ?si=abc");
+});
+
+test("the separate url field wins over the text", () => {
+  const params = new URLSearchParams(
+    "url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Daaa&text=https%3A%2F%2Fyoutu.be%2Fbbb",
+  );
+
+  assert.equal(sharedUrl(params), "https://www.youtube.com/watch?v=aaa");
+});
+
+test("a title alone can carry the link", () => {
+  assert.equal(
+    sharedUrl(new URLSearchParams("title=https%3A%2F%2Fyoutu.be%2Fccc")),
+    "https://youtu.be/ccc",
+  );
+});
+
+test("a stranger's link is not taken for a video", () => {
+  assert.equal(sharedUrl(new URLSearchParams("text=смотри+https%3A%2F%2Fexample.com%2Fvideo")), "");
+});
+
+test("nothing shared means nothing to open", () => {
+  assert.equal(sharedUrl(new URLSearchParams("")), "");
+  assert.equal(sharedUrl(new URLSearchParams("text=просто+текст")), "");
+});
+
+test("punctuation right after the link does not stick to it", () => {
+  assert.equal(
+    sharedUrl(new URLSearchParams("text=(https%3A%2F%2Fyoutu.be%2Fddd).")),
+    "https://youtu.be/ddd",
+  );
 });

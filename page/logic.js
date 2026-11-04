@@ -231,3 +231,47 @@ export function flipSwitch(switches, name) {
 
   return next;
 }
+
+// --- Ссылка, пришедшая из share-диалога -------------------------------
+
+// Android кладёт адрес во text (поля url у него в share-системе нет), иногда
+// вместе с заголовком ролика, и обрамляет его знаками препинания, если ссылка
+// стоит в скобках или в конце предложения. Берём адрес, а не всё поле: демон
+// принимает только YouTube и по адресу строит ссылку.
+const YOUTUBE_HOSTS = /^(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)$/i;
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'«»]+/g;
+const TRAILING = /[.,;:!?)\]»"']+$/;
+
+export function youTubeUrlIn(text) {
+  if (typeof text !== "string") {
+    return "";
+  }
+
+  for (const found of text.match(URL_IN_TEXT) || []) {
+    const candidate = found.replace(TRAILING, "");
+
+    try {
+      if (YOUTUBE_HOSTS.test(new URL(candidate).hostname)) {
+        return candidate;
+      }
+    } catch {
+      // Не адрес — например, «http://» без хоста.
+    }
+  }
+
+  return "";
+}
+
+/** Первая ссылка YouTube среди полей, которые прислал share-диалог. */
+export function sharedUrl(params) {
+  for (const name of ["url", "text", "title"]) {
+    const value = params.get ? params.get(name) : params[name];
+    const found = youTubeUrlIn(value);
+
+    if (found) {
+      return found;
+    }
+  }
+
+  return "";
+}

@@ -3,8 +3,8 @@
 
 import {
   activeCueIndex, cueLines, flipSwitch, formatTime, isForVideo, languageText,
-  parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, stageText,
-  unwatchMessage, visibleLines, watchMessages,
+  parsePositions, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
+  stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
 const TOKEN_KEY = "yt-trans-token";
@@ -158,6 +158,34 @@ function saveToken() {
 function start() {
   connectSocket();
   loadLinks();
+  consumeShare();
+}
+
+// Приложение зарегистрировано в share-диалоге Android, поэтому из YouTube его
+// открывают адресом вида /?text=<ссылка>. Ссылка добавляется тем же путём, что
+// и набранная руками: демон сам проверит её у YouTube и, если это один ролик,
+// страница сразу откроет его.
+async function consumeShare() {
+  const shared = sharedUrl(new URLSearchParams(location.search));
+
+  if (!shared) {
+    return;
+  }
+
+  // Сначала чистим адрес, потом работаем с сетью: иначе перезагрузка страницы
+  // повторила бы добавление, а «назад» из ролика вернул бы на тот же шаринг.
+  history.replaceState(null, "", location.pathname);
+
+  try {
+    const data = await api("/v1/links", { method: "POST", body: JSON.stringify({ url: shared }) });
+    await loadLinks();
+
+    if (data.link && data.link.id) {
+      await openLink(data.link.id);
+    }
+  } catch (error) {
+    drawLinks([], `не удалось открыть ссылку из YouTube: ${error.message}`);
+  }
 }
 
 function row(text, classes = []) {

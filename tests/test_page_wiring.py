@@ -1,5 +1,6 @@
 """Проводка страницы: каждый элемент, который ищет app.js, есть в разметке."""
 
+import json
 import re
 from pathlib import Path
 
@@ -93,3 +94,40 @@ def test_the_stage_goes_fullscreen_by_the_pages_own_button():
 
     assert 'id="fullscreen"' in html
     assert "els.stage.requestFullscreen" in source
+
+
+def test_the_page_is_installable_as_an_app():
+    # Android показывает приложение в share-диалоге только установленным, а
+    # установка требует манифеста с именем, экраном запуска и иконками.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    manifest = json.loads((ROOT / "page" / "manifest.json").read_text(encoding="utf-8"))
+
+    assert 'rel="manifest"' in html
+    assert manifest["start_url"] == "/"
+    assert manifest["display"] == "standalone"
+    assert {"192x192", "512x512"} <= {icon["sizes"] for icon in manifest["icons"]}
+
+
+def test_the_manifest_icons_are_really_there():
+    manifest = json.loads((ROOT / "page" / "manifest.json").read_text(encoding="utf-8"))
+
+    for icon in manifest["icons"]:
+        assert (ROOT / "page" / icon["src"].lstrip("/")).is_file(), icon["src"]
+
+
+def test_the_share_sheet_opens_the_page_itself():
+    manifest = json.loads((ROOT / "page" / "manifest.json").read_text(encoding="utf-8"))
+    target = manifest["share_target"]
+
+    assert target["action"] == "/"
+    assert target["method"] == "GET"
+    assert target["params"] == {"title": "title", "text": "text", "url": "url"}
+
+
+def test_a_shared_link_is_added_like_a_typed_one():
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "sharedUrl(new URLSearchParams(location.search))" in source
+    assert 'api("/v1/links", { method: "POST"' in source
+    # Иначе перезагрузка страницы добавила бы ту же ссылку второй раз.
+    assert "history.replaceState" in source

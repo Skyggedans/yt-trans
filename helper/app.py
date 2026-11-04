@@ -49,6 +49,10 @@ log = logging.getLogger(__name__)
 
 PORT = int(os.environ.get("YT_TRANS_PORT", "8756"))
 TOKEN_PATH = CONFIG_DIR / "token"
+# Корневой сертификат того же каталога, что выпускает packaging/make-tls.sh.
+# Путь не из конфига намеренно: файл нужен ДО включения https, когда в
+# config.toml ещё ничего про tls не написано.
+CA_PATH = CONFIG_DIR / "tls" / "ca.crt"
 PAGE_DIR = Path(__file__).resolve().parent.parent / "page"
 
 # Пинг раз в 15 секунд: он не даёт service worker'у в Chrome уснуть по таймауту
@@ -629,6 +633,20 @@ async def websocket(socket: WebSocket) -> None:
                 job.unsubscribe(events)
 
 
+@app.get("/ca.crt")
+async def root_certificate() -> FileResponse:
+    """Свой корневой сертификат — чтобы поставить его на планшет.
+
+    Публичный, как и страница: это сертификат, а не ключ. Отдаётся без токена и
+    до того, как демон переключится на https: установить его на планшет больше
+    неоткуда — по http страница открывается, а по https браузер ещё не доверяет.
+    """
+    if not CA_PATH.is_file():
+        raise HTTPException(status_code=404, detail="сертификата нет: packaging/make-tls.sh")
+
+    return FileResponse(CA_PATH, media_type="application/x-x509-ca-cert")
+
+
 # Монтируется последним: маршруты выше добавлены раньше и выигрывают у монтирования,
 # так что /v1/* остаётся API, а всё прочее ищется файлом. Страница публичная —
 # секретов в ней нет, а токен она спрашивает у человека сама.
@@ -646,7 +664,20 @@ def main() -> None:
     # сначала отфильтровать, чтобы увидеть единственную важную строку.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     log.info("токен установки лежит в %s", TOKEN_PATH)
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning", proxy_headers=False)
+
+    # HTTPS нужен не ради шифрования домашнего Wi-Fi, а ради планшета: браузер
+    # считает безопасным только https, и без этого страницу не поставить как
+    # приложение — а значит и не зарегистрировать в share-диалоге Android.
+    tls = manager.config.server.tls_files
+    ssl_args = {}
+
+    if tls is not None:
+        ssl_args = {"ssl_certfile": str(tls[0]), "ssl_keyfile": str(tls[1])}
+        log.info("слушаю https, сертификат %s", tls[0])
+
+    uvicorn.run(
+        app, host=HOST, port=PORT, log_level="warning", proxy_headers=False, **ssl_args
+    )
 
 
 if __name__ == "__main__":

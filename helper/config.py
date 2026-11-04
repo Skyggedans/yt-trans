@@ -152,6 +152,19 @@ class ServerConfig:
     # случай» нельзя. Планшет в другой комнате — это host = "0.0.0.0"
     # и токен из ~/.config/yt-trans/token как единственная защита.
     host: str = "127.0.0.1"
+    # Сертификат и ключ для HTTPS. Нужны ради планшета: браузер считает
+    # безопасным только https (или петлю), а без этого страницу нельзя поставить
+    # как приложение, и значит нельзя зарегистрировать её в share-диалоге
+    # Android. Пусто — демон работает по http, как раньше.
+    tls_cert: str = ""
+    tls_key: str = ""
+
+    @property
+    def tls_files(self) -> tuple[Path, Path] | None:
+        if not (self.tls_cert or self.tls_key):
+            return None
+
+        return Path(self.tls_cert).expanduser(), Path(self.tls_key).expanduser()
 
 
 @dataclass(frozen=True)
@@ -250,6 +263,22 @@ def load(path: Path = CONFIG_PATH) -> Config:
             raise ConfigError(f"[video] max_gib должен быть больше нуля: {video.max_gib!r}")
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"[video] max_gib не число: {video.max_gib!r}") from exc
+
+    # Половина пары — не «почти https»: uvicorn поднял бы обычный http, и зритель
+    # искал бы причину в планшете. Отсутствие файла тоже лучше увидеть при старте,
+    # а не при первом открытии страницы.
+    tls = config.server.tls_files
+
+    if tls is not None:
+        cert, key = tls
+
+        if not (config.server.tls_cert and config.server.tls_key):
+            missing = "tls_key" if config.server.tls_cert else "tls_cert"
+            raise ConfigError(f"[server] {missing} не задан: для https нужны оба файла")
+
+        for path, name in ((cert, "tls_cert"), (key, "tls_key")):
+            if not path.is_file():
+                raise ConfigError(f"[server] {name}: файла {path} нет")
 
     # Не ошибка запуска: без файла не откроются только ролики 18+, а остальное
     # работает. Зритель такого ролика получит ту же причину в отказе.

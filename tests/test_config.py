@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from helper import language
-from helper.config import load
+from helper.config import ConfigError, load
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "config.example.toml"
 
@@ -85,3 +85,38 @@ def test_a_nonsense_video_ceiling_stops_the_daemon_at_start(tmp_path):
 
     with pytest.raises(ConfigError):
         load(written(tmp_path, '[video]\nmax_gib = "много"\n'))
+
+
+def test_the_daemon_can_serve_https(tmp_path):
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("cert", encoding="utf-8")
+    key.write_text("key", encoding="utf-8")
+
+    config = load(written(
+        tmp_path, f'[server]\ntls_cert = "{cert}"\ntls_key = "{key}"\n'
+    ))
+
+    assert config.server.tls_files == (cert, key)
+
+
+def test_plain_http_stays_the_default(tmp_path):
+    assert load(tmp_path / "absent.toml").server.tls_files is None
+
+
+def test_half_a_certificate_stops_the_daemon(tmp_path):
+    # Один файл без другого — не «почти https»: uvicorn поднял бы обычный http,
+    # и зритель искал бы причину в планшете.
+    cert = tmp_path / "cert.pem"
+    cert.write_text("cert", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="tls_key"):
+        load(written(tmp_path, f'[server]\ntls_cert = "{cert}"\n'))
+
+
+def test_a_missing_certificate_file_stops_the_daemon(tmp_path):
+    with pytest.raises(ConfigError, match="tls_cert"):
+        load(written(
+            tmp_path,
+            f'[server]\ntls_cert = "{tmp_path / "cert.pem"}"\ntls_key = "{tmp_path / "key.pem"}"\n',
+        ))

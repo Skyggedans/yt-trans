@@ -38,3 +38,26 @@ async def test_the_page_has_the_screen_for_asking_the_token(client):
 
     assert 'id="token-input"' in text
     assert 'id="setup"' in text
+
+
+async def test_the_root_certificate_is_offered_before_https_starts(client, monkeypatch, tmp_path):
+    # Порядок важен: сертификат ставят на планшет, пока демон ещё по http, иначе
+    # браузер не откроет страницу и файл взять неоткуда.
+    from helper import app as helper_app
+
+    ca = tmp_path / "ca.crt"
+    ca.write_text("сертификат", encoding="utf-8")
+    monkeypatch.setattr(helper_app, "CA_PATH", ca)
+
+    response = await client.get("/ca.crt")
+
+    assert response.status_code == 200
+    assert response.text == "сертификат"
+
+
+async def test_without_a_certificate_there_is_nothing_to_install(client, monkeypatch, tmp_path):
+    from helper import app as helper_app
+
+    monkeypatch.setattr(helper_app, "CA_PATH", tmp_path / "absent.crt")
+
+    assert (await client.get("/ca.crt")).status_code == 404
