@@ -1,6 +1,6 @@
 """Сборка реплик из сегментов распознавания: helper.segment."""
 
-from helper.segment import build_cues
+from helper.segment import build_cues, split_sentences
 
 FILM_ECHO = (
     "Pominju se, Terminus, Full, Movie, Johnny, Hallyday, Karen, Allen, Jürgen, "
@@ -44,3 +44,39 @@ def test_a_long_sentence_is_dropped_whole_not_piece_by_piece():
 
 def test_a_predicate_that_drops_nothing_changes_nothing():
     assert build_cues([GREETING], drop=lambda sentence, segment: False) == build_cues([GREETING])
+
+
+def test_abbreviations_do_not_end_a_sentence():
+    assert split_sentences("Today we test the U.S. market, e.g. tech stocks.") == [
+        "Today we test the U.S. market, e.g. tech stocks."
+    ]
+
+
+def test_ordinals_and_years_do_not_end_a_sentence():
+    assert split_sentences("Rođen je 5. maja 1980. godine.") == ["Rođen je 5. maja 1980. godine."]
+
+
+def test_ordinary_sentences_still_split():
+    assert split_sentences("Prva rečenica. Druga rečenica! Treća?") == [
+        "Prva rečenica.", "Druga rečenica!", "Treća?",
+    ]
+    assert split_sentences("Bilo je 1948. Tada je počelo.") == ["Bilo je 1948.", "Tada je počelo."]
+
+
+def test_a_date_reaches_the_translator_as_one_cue():
+    segment = {
+        "start": 0.0,
+        "end": 5.0,
+        "text": "Rođen je 5. maja 1980. godine. Živio je u Beogradu.",
+        "words": [
+            word(0.0, 0.4, " Rođen"), word(0.5, 0.6, " je"), word(0.7, 0.9, " 5."),
+            word(1.0, 1.3, " maja"), word(1.4, 1.9, " 1980."), word(2.0, 2.6, " godine."),
+            word(3.5, 3.9, " Živio"), word(4.0, 4.1, " je"), word(4.2, 4.3, " u"),
+            word(4.4, 5.0, " Beogradu."),
+        ],
+    }
+
+    assert timeline(build_cues([segment])) == [
+        ("Rođen je 5. maja 1980. godine.", 0.0, 2.6),
+        ("Živio je u Beogradu.", 3.5, 5.0),
+    ]
