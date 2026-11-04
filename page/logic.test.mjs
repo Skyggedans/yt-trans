@@ -267,3 +267,88 @@ test("the subtitle size is remembered, and rubbish means the usual one", () => {
   assert.equal(readFontSize("громадный"), "normal");
   assert.equal(readFontSize("[large]"), "normal");
 });
+
+// --- Кеш роликов на устройстве -----------------------------------------
+
+import {
+  cacheLabel, copyState, copyVerdict, formatBytes, mergeCues, percent, playSource,
+} from "./logic.js";
+
+test("bytes are shown the way a person reads them", () => {
+  assert.equal(formatBytes(0), "0 Б");
+  assert.equal(formatBytes(999), "999 Б");
+  assert.equal(formatBytes(1024), "1 КБ");
+  assert.equal(formatBytes(1536), "1.5 КБ");
+  assert.equal(formatBytes(419430400), "400 МБ");
+  assert.equal(formatBytes(1288490188), "1.2 ГБ");
+  // Мусор и отрицательные — не «-1 Б» и не «NaN МБ».
+  assert.equal(formatBytes(-1), "—");
+  assert.equal(formatBytes(null), "—");
+  assert.equal(formatBytes("400"), "—");
+});
+
+test("the progress bar never divides by zero and never passes a hundred", () => {
+  assert.equal(percent(0, 100), 0);
+  assert.equal(percent(50, 100), 50);
+  assert.equal(percent(120, 100), 100);
+  assert.equal(percent(1, 0), 0);
+  assert.equal(percent(-5, 100), 0);
+});
+
+test("a copy is refused only when the space is really short", () => {
+  const fourHundred = 419430400;
+  const gib = 1073741824;
+
+  assert.equal(copyVerdict(fourHundred, gib), "ok");
+  // 500 МиБ минус запас в 200 МиБ — меньше 400 МиБ: запись кончилась бы на половине.
+  assert.equal(copyVerdict(fourHundred, 524288000), "tight");
+  // Размер не спросили или места не знают: судить не о чем, но и запрещать нечем.
+  assert.equal(copyVerdict(0, gib), "unknown");
+  assert.equal(copyVerdict(fourHundred, 0), "unknown");
+  assert.equal(copyVerdict(fourHundred, 524288000, 0), "ok");
+});
+
+test("the cache switch says what it is doing", () => {
+  assert.equal(copyState({}), "кеш");
+  assert.equal(copyState({ waiting: true }), "кеш…");
+  assert.equal(copyState({ active: true, percent: 37 }), "кеш 37%");
+  assert.equal(copyState({ size: 419430400 }), "кеш ✓ · 400 МБ");
+  assert.equal(copyState({ failed: true }), "кеш: ошибка");
+  // Идёт копирование — проценты важнее старого размера; ошибка важнее всего.
+  assert.equal(copyState({ active: true, percent: 5, size: 1000 }), "кеш 5%");
+  assert.equal(copyState({ failed: true, size: 1000 }), "кеш: ошибка");
+});
+
+test("a saved episode is marked with its size", () => {
+  assert.equal(cacheLabel(419430400), "на устройстве · 400 МБ");
+  assert.equal(cacheLabel(0), "на устройстве");
+});
+
+test("saved and arrived cues are merged by their number", () => {
+  const saved = [
+    { i: 2, start: 4, lines: ["b"] },
+    { i: 1, start: 0, lines: ["a"] },
+  ];
+  const incoming = [
+    { i: 2, start: 4, lines: ["b", "c"] },
+    { i: 3, start: 8, lines: ["d"] },
+  ];
+
+  assert.deepEqual(mergeCues([], incoming), [
+    { i: 2, start: 4, lines: ["b", "c"] },
+    { i: 3, start: 8, lines: ["d"] },
+  ]);
+  assert.deepEqual(mergeCues(saved, incoming), [
+    { i: 1, start: 0, lines: ["a"] },
+    { i: 2, start: 4, lines: ["b", "c"] },
+    { i: 3, start: 8, lines: ["d"] },
+  ]);
+  assert.deepEqual(mergeCues(undefined, []), []);
+});
+
+test("the copy wins over the daemon, and without either there is nothing", () => {
+  assert.equal(playSource(true, true), "copy");
+  assert.equal(playSource(true, false), "copy");
+  assert.equal(playSource(false, true), "daemon");
+  assert.equal(playSource(false, false), "none");
+});

@@ -299,3 +299,120 @@ export const FONT_SIZES = ["tiny", "small", "normal", "large"];
 export function readFontSize(raw) {
   return FONT_SIZES.includes(raw) ? raw : "normal";
 }
+
+// --- Кеш роликов на устройстве -----------------------------------------
+//
+// Числа копии — размер, проценты, приговор по свободному месту — считаются
+// здесь, а не в app.js: их видит хозяин, их стоит проверять в node --test.
+
+const BYTE_UNITS = ["КБ", "МБ", "ГБ", "ТБ"];
+
+/** Байты так, как их читает человек: «400 МБ», «1.2 ГБ». */
+export function formatBytes(bytes) {
+  // Мусор и отрицательные — прочерк, а не «NaN МБ»: такое число не значит
+  // ничего, и показывать его как размер нельзя.
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
+    return "—";
+  }
+
+  if (bytes < 1024) {
+    return `${Math.round(bytes)} Б`;
+  }
+
+  let value = bytes;
+  let unit = "Б";
+
+  for (const next of BYTE_UNITS) {
+    value /= 1024;
+    unit = next;
+
+    if (value < 1024 || next === "ТБ") {
+      break;
+    }
+  }
+
+  // У мелких чисел оставляем десятые («1.5 ГБ»): целыми они были бы слишком
+  // грубы. У крупных они уже шум, и там округление до целого.
+  const shown = value < 10
+    ? Math.round(value * 10) / 10
+    : Math.round(value);
+
+  return `${shown} ${unit}`;
+}
+
+/** Проценты скачанного: без деления на ноль и без выхода за сотню. */
+export function percent(seen, total) {
+  if (!(total > 0) || !(seen > 0)) {
+    return 0;
+  }
+
+  return Math.min(100, Math.floor((seen / total) * 100));
+}
+
+// Запас на запись: базе и самому браузеру тоже нужно место, а квота, забитая
+// под ноль, обрывает копирование на середине файла. 200 МиБ — около половины
+// эпизода, который ещё и не влезает целиком.
+export const SPARE_BYTES = 200 * 1024 * 1024;
+
+/**
+ * Начинать ли копирование: «ok» — да, «tight» — места меньше, чем нужно с
+ * запасом, «unknown» — судить не по чему (размер или место неизвестны).
+ * Неизвестность копирование не запрещает: пусть решит сама запись.
+ */
+export function copyVerdict(need, free, reserve = SPARE_BYTES) {
+  if (!(need > 0) || !(free > 0)) {
+    return "unknown";
+  }
+
+  return need + reserve <= free ? "ok" : "tight";
+}
+
+/** Надпись на переключателе кеша: он же и показывает, что с копией. */
+export function copyState({ waiting, active, percent: done = 0, size = 0, failed } = {}) {
+  if (failed) {
+    return "кеш: ошибка";
+  }
+
+  if (waiting) {
+    return "кеш…";
+  }
+
+  if (active) {
+    return `кеш ${done}%`;
+  }
+
+  return size > 0 ? `кеш ✓ · ${formatBytes(size)}` : "кеш";
+}
+
+/** Пометка сохранённого ролика в списке ссылок. */
+export function cacheLabel(size) {
+  return size > 0 ? `на устройстве · ${formatBytes(size)}` : "на устройстве";
+}
+
+/**
+ * Слияние реплик по номеру: сохранённое лежит в базе, пришедшее приходит
+ * сокетом и полнее, поэтому оно побеждает. Порядок — по времени, как рисует
+ * слой.
+ */
+export function mergeCues(saved, incoming) {
+  const byNumber = new Map();
+
+  for (const cue of saved || []) {
+    byNumber.set(cue.i, cue);
+  }
+
+  for (const cue of incoming || []) {
+    byNumber.set(cue.i, cue);
+  }
+
+  return [...byNumber.values()].sort((a, b) => a.start - b.start);
+}
+
+/** Откуда играть: копия предпочтительнее демона и переживает его смерть. */
+export function playSource(hasCopy, daemonAlive) {
+  if (hasCopy) {
+    return "copy";
+  }
+
+  return daemonAlive ? "daemon" : "none";
+}
