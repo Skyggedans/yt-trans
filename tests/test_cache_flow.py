@@ -13,7 +13,7 @@ from helper.cache import CacheKey, TrackCache
 from helper.config import AsrConfig, Config, TranslatorConfig
 from helper.jobs import Stage
 from helper.language import LanguageVerdict
-from helper.sources.ytdlp import CaptionTrack
+from helper.sources.ytdlp import CaptionTrack, YtDlpError
 
 # Ролик тестов конвейера: кэш фикстуры pipeline свой у каждого теста. Тесты
 # восстановления пишут в общий на прогон manager.cache, и у каждого свой ролик.
@@ -305,6 +305,27 @@ async def test_an_author_track_entry_keeps_its_verdict(manager, pipeline):
     )
 
 
+async def test_a_failed_author_track_serves_the_cached_asr_verdict_once(manager, pipeline):
+    # Сначала в кэш ложится распознавание: без дорожки автора ответ воркера идёт под ключом asr.
+    pipeline.asr_result = answer(JUSKE)
+    await pipeline.run(jobs.Job(VIDEO))
+
+    pipeline.info = metadata(
+        manual_tracks=[CaptionTrack(lang="sr", url="", ext="json3", name="")]
+    )
+    pipeline.track = YtDlpError("дорожка не скачалась", permanent=True)
+    again = jobs.Job(VIDEO)
+
+    await pipeline.run(again)
+
+    types = [event["type"] for event in again.events]
+
+    assert again.track_failed is True
+    assert again.language == JUSKE
+    assert types.count("language") == 1
+    assert types.index("language") < types.index("cues")
+
+
 # ── восстановление ───────────────────────────────────────────────────────
 
 
@@ -380,5 +401,23 @@ def test_restore_prefers_the_newest_author_track(manager):
 
     restored = manager.restore(video, "ru", True, 10.0)
 
+    assert restored.source == "manual:sr-Latn"
+    assert [cue.src for cue in restored.cues] == ["Nova"]
+
+
+def test_restore_survives_a_string_created_at_on_an_author_track(manager):
+    # Правленная руками запись может нести строку вместо времени: max() сравнил бы
+    # её с числом и уронил бы TypeError на каждом восстановлении и опросе ролика.
+    video = "reststamp01"
+    older = manager._key_for(video, "manual:sr")
+    newer = manager._key_for(video, "manual:sr-Latn")
+    manager.cache.put(older, [{**STORED[0], "src": "Stara"}], 10.0)
+    manager.cache.put(newer, [{**STORED[0], "src": "Nova"}], 10.0)
+    rewrite(manager.cache, older, created_at="вчера")
+    rewrite(manager.cache, newer, created_at=2000.0)
+
+    restored = manager.restore(video, "ru", True, 10.0)
+
+    assert restored is not None
     assert restored.source == "manual:sr-Latn"
     assert [cue.src for cue in restored.cues] == ["Nova"]

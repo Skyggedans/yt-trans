@@ -2025,7 +2025,9 @@ class JobManager:
             # по created_at, последняя сделанная, а не первая по порядку строк индекса.
             manual = max(
                 (v for k, v in found.items() if k.startswith("manual:")),
-                key=lambda v: v.get("created_at") or 0.0,
+                key=lambda v: v["created_at"]
+                if isinstance(v.get("created_at"), (int, float))
+                else 0.0,
                 default=None,
             )
 

@@ -1,7 +1,9 @@
 """Воркер распознавания без карты: окна определителя, решение о языке, разбор аргументов."""
 
+import io
 import json
 import sys
+import types
 
 import numpy as np
 import pytest
@@ -242,3 +244,23 @@ def test_main_refuses_an_unknown_pin_before_reading_audio(monkeypatch, capsys):
         "error": "неизвестный язык «serbian»: [asr] language в config.toml",
         "permanent": True,
     }
+
+
+def test_main_forwards_the_youtube_hint_to_transcribe(monkeypatch):
+    seen: dict = {}
+
+    def transcribe(audio, **kwargs):
+        seen.update(kwargs)
+
+        return {"prompt": None, "cues": []}
+
+    monkeypatch.setattr(sys, "argv", ["helper.asr.worker", "--hint", "sr"])
+    monkeypatch.setattr(worker, "transcribe", transcribe)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        types.SimpleNamespace(buffer=io.BytesIO(np.zeros(2 * SR, dtype="<f4").tobytes())),
+    )
+
+    assert worker.main() == 0
+    assert seen["hint"] == "sr"

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -363,9 +364,13 @@ class LanguageVerdict:
         # bool — подкласс int, но не доля.
         if isinstance(raw, int | float) and not isinstance(raw, bool):
             try:
-                confidence = float(raw)
+                value = float(raw)
             except OverflowError:
                 pass  # целое больше любого float: доли такой не бывает
+            else:
+                # NaN и бесконечность в JSON не годятся: JSONResponse на проводе падал
+                # бы на каждом ответе этого ролика, а запись кэша их несёт.
+                confidence = value if math.isfinite(value) else None
 
         reason = data.get("reason")
         verified = data.get("verified")

@@ -1,6 +1,7 @@
 """helper/language.py: коды языков, правило определителя и решение о языке."""
 
 import ast
+import json
 import sys
 from pathlib import Path
 
@@ -409,3 +410,13 @@ def test_from_wire_ignores_derived_and_broken_fields():
         effective="en", declared=None, declared_by=None, detected=None, confidence=None, reason="detector"
     )
     assert verdict.mismatch is False
+
+
+@pytest.mark.parametrize("confidence", [float("nan"), float("inf"), float("-inf"), 10**400])
+def test_from_wire_drops_a_confidence_that_is_not_a_finite_share(confidence):
+    # json.dumps пишет NaN и Infinity, json.loads их читает: правленная руками запись
+    # кэша донесла бы их до JSONResponse, а тот на них падает (allow_nan=False).
+    verdict = language.LanguageVerdict.from_wire({"effective": "sr", "confidence": confidence})
+
+    assert verdict.confidence is None
+    json.dumps(verdict.wire(), allow_nan=False)
