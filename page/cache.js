@@ -11,6 +11,13 @@ const abortError = () => new DOMException("копирование отменен
 
 // --- Скачивание --------------------------------------------------------
 
+/** Тело ответа целиком. Оборванное тело — ошибка, а не пустой ответ. */
+export async function readJson(response) {
+  const text = await response.text();
+
+  return text ? JSON.parse(text) : {};
+}
+
 /** Чтение куска, которое не зависает после отмены: гонка чтения и сигнала. */
 function readOrAbort(reader, signal) {
   if (!signal) {
@@ -28,8 +35,39 @@ function readOrAbort(reader, signal) {
 }
 
 /**
- * Скачать ролик в память целиком. Копия попадает в базу только по возврату
- * отсюда: прерванное скачивание не оставляет на устройстве ничего.
+ * Тело как поток: куски уходят дальше по мере чтения, а не копятся в массиве.
+ * Свой mp4 страница в памяти не держит — его забирает Blob.
+ */
+export function collectBody(reader, { onProgress = () => {}, signal = null, total = 0 } = {}) {
+  let seen = 0;
+
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await readOrAbort(reader, signal);
+
+        if (done) {
+          controller.close();
+
+          return;
+        }
+
+        seen += value.length;
+        onProgress(seen, total);
+        controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel() {
+      return reader.cancel().catch(() => {});
+    },
+  });
+}
+
+/**
+ * Скачать ролик. Копия попадает в базу только по возврату отсюда: прерванное
+ * скачивание не оставляет на устройстве ничего.
  */
 export async function downloadVideo(url, { onProgress = () => {}, signal = null } = {}) {
   const response = await fetch(url, { signal });
@@ -39,29 +77,10 @@ export async function downloadVideo(url, { onProgress = () => {}, signal = null 
   }
 
   const total = Number(response.headers.get("Content-Length") || 0);
-  const reader = response.body.getReader();
-  const chunks = [];
-  let seen = 0;
-
-  try {
-    for (;;) {
-      // Поток читается вручную, а не `new Response(stream).blob()`: отмена
-      // должна срабатывать, пока чтение висит, а не после конца файла.
-      const { done, value } = await readOrAbort(reader, signal);
-
-      if (done) {
-        break;
-      }
-
-      chunks.push(value);
-      seen += value.length;
-      onProgress(seen, total);
-    }
-  } finally {
-    reader.cancel().catch(() => {});
-  }
-
-  const blob = new Blob(chunks, { type: "video/mp4" });
+  const body = collectBody(response.body.getReader(), { onProgress, signal, total });
+  const blob = await new Response(body, {
+    headers: { "Content-Type": "video/mp4" },
+  }).blob();
 
   return { blob, size: blob.size };
 }

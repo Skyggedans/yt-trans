@@ -357,6 +357,73 @@ def test_a_browser_without_a_worker_says_so_once():
     assert "не сохранит страницу для офлайна" in source
 
 
+def test_a_broken_answer_is_not_taken_for_an_empty_daemon():
+    # Тело ответа может оборваться (демон умер, вышел срок), и тогда страница
+    # не должна принять обрыв за «ничего нет»: пустой список затёр бы
+    # сохранённые ссылки на устройстве.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    cache = (ROOT / "page" / "cache.js").read_text(encoding="utf-8")
+
+    assert ".json().catch" not in source
+    assert "readJson(" in source
+    assert "export async function readJson" in cache
+
+    body = source[source.index("async function loadLinks"):source.index("function savedForLink")]
+
+    assert "Array.isArray(data.links)" in body
+
+
+def test_an_offline_home_does_not_wait_for_a_sleeping_daemon():
+    # Уснувший компьютер не отвечает минутами: действие с известным мёртвым
+    # демоном должно сразу говорить, что демона нет, а не висеть.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    for name in ("addLink", "dropLink", "openLink", "consumeShare"):
+        start = source.index(f"async function {name}(")
+        body = source[start:source.index("await api(", start)]
+
+        assert "!daemonAlive" in body, name
+
+
+def test_the_copy_stays_subscribed_after_a_reconnect():
+    # Копия и её титры переживают уход со сцены: после переподключения
+    # подписка нужна и им, иначе запись оборвётся на переподключении.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[
+        source.index('opening.addEventListener("open"'):source.index('opening.addEventListener("message"')
+    ]
+
+    assert "copy && copy.videoId" in body
+    assert "follow && follow.videoId" in body
+
+
+def test_an_evicted_copy_disappears_from_the_list():
+    # Запись есть, а Blob браузер вытеснил: строка списка не должна больше
+    # обещать «на устройстве».
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function playLocal"):source.index("function switchToCopy")]
+
+    assert "drawLinks(knownLinks" in body
+
+
+def test_a_video_with_nothing_to_play_closes_the_stage():
+    # Копию вытеснили, демона нет: сцена открылась бы пустой, поэтому
+    # сообщение остаётся на домашней странице.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function prepareVideo"):source.index("// --- Кеш роликов")]
+
+    assert "leaveStage()" in body
+
+
+def test_the_saved_copy_is_marked_while_the_daemon_is_alive():
+    # Иначе копию нельзя ни увидеть, ни удалить, пока компьютер работает.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function drawLinks"):source.index("async function loadLinks")]
+
+    assert "if (offline)" not in body
+    assert "savedForLink(link.id)" in body
+
+
 def test_the_page_imports_every_helper_it_uses():
     # Пропущенное имя в импорте видно только в браузере: node --check имён не
     # знает, а разметка и текст остаются на месте. Поэтому имена сверяются

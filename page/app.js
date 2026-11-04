@@ -11,7 +11,7 @@ import {
 
 import {
   askPersist, deleteVideo, downloadVideo, freeBytes, getMeta, getVideo, listVideos,
-  openDb, putMeta, putVideo,
+  openDb, putMeta, putVideo, readJson,
 } from "./cache.js";
 
 const TOKEN_KEY = "yt-trans-token";
@@ -176,7 +176,21 @@ async function api(path, options = {}) {
     throw new Error("токен не подошёл");
   }
 
-  const data = await response.json().catch(() => ({}));
+  let data = {};
+
+  try {
+    data = await readJson(response);
+  } catch (error) {
+    if (!response.ok) {
+      throw new Error(`демон ответил ${response.status}`);
+    }
+
+    // Тело оборвалось посреди ответа — демон умер или вышел срок. Это отказ,
+    // а не пустой ответ: иначе сохранённый список затёрся бы пустым.
+    daemonAlive = false;
+
+    throw error;
+  }
 
   if (!response.ok) {
     throw new Error(data.detail || `демон ответил ${response.status}`);
@@ -234,6 +248,12 @@ async function consumeShare() {
   // повторила бы добавление, а «назад» из ролика вернул бы на тот же шаринг.
   history.replaceState(null, "", location.pathname);
 
+  if (!daemonAlive) {
+    drawLinks(knownLinks, "демона нет — ссылку из YouTube добавить нельзя");
+
+    return;
+  }
+
   try {
     const data = await api("/v1/links", { method: "POST", body: JSON.stringify({ url: shared }) });
     await loadLinks();
@@ -284,7 +304,7 @@ function drawLinks(items, message) {
   if (!items.length) {
     // Ссылок демон не дал, но сохранённое лежит на устройстве: оно и есть
     // список, искать среди него тоже можно.
-    if (offline && savedVideos.size) {
+    if (savedVideos.size) {
       els.links.append(...savedRows([...savedVideos.values()]));
 
       return;
@@ -313,16 +333,14 @@ function drawLinks(items, message) {
       button("Удалить", () => dropLink(link.id)),
     );
 
-    // Сохранённые ролики встают под своей ссылкой: без демона список ссылок
-    // сам по себе ничего не говорит о том, что можно смотреть.
-    if (offline) {
-      const saved = savedForLink(link.id);
+    // Сохранённые ролики встают под своей ссылкой и при живом демоне: иначе
+    // копию нельзя было бы ни увидеть, ни удалить, пока компьютер работает.
+    const saved = savedForLink(link.id);
 
-      if (saved.length) {
-        const more = document.createElement("ul");
-        more.append(...savedRows(saved));
-        item.append(more);
-      }
+    if (saved.length) {
+      const more = document.createElement("ul");
+      more.append(...savedRows(saved));
+      item.append(more);
     }
 
     els.links.append(item);
@@ -359,8 +377,12 @@ async function loadLinks() {
 
   offline = false;
 
+  // Список ссылок — массив. Ответ без него (демон ответил не тем) не должен
+  // ни затирать сохранённое, ни притворяться пустым списком.
+  const links = Array.isArray(data.links) ? data.links : [];
+
   if (db) {
-    await putMeta(db, "links", data.links || []).catch(() => {});
+    await putMeta(db, "links", links).catch(() => {});
   }
 
   let warning = "";
@@ -370,7 +392,7 @@ async function loadLinks() {
     warning = "браузер не сохранит страницу для офлайна — нужен https и современный браузер";
   }
 
-  drawLinks(data.links || [], warning);
+  drawLinks(links, warning);
 }
 
 /** Сохранённые ролики этой ссылки, свежие первыми. */
@@ -426,6 +448,12 @@ async function addLink(event) {
     return;
   }
 
+  if (!daemonAlive) {
+    drawLinks(knownLinks, "демона нет — ссылку добавить нельзя");
+
+    return;
+  }
+
   try {
     await api("/v1/links", { method: "POST", body: JSON.stringify({ url }) });
     els.linkUrl.value = "";
@@ -442,6 +470,12 @@ async function addLink(event) {
 }
 
 async function dropLink(id) {
+  if (!daemonAlive) {
+    drawLinks(knownLinks, "демона нет — ссылку удалить нельзя");
+
+    return;
+  }
+
   try {
     await api(`/v1/links/${encodeURIComponent(id)}`, { method: "DELETE" });
     await loadLinks();
@@ -481,14 +515,24 @@ function episodeLabel(video) {
 }
 
 async function openLink(id) {
+  if (!daemonAlive) {
+    // Список эпизодов пришёл бы от демона, а его нет: зато ролики этой
+    // ссылки могли уже лежать на устройстве.
+    const saved = savedForLink(id);
+
+    drawLinks(knownLinks, saved.length
+      ? "демона нет — в списке сохранённые ролики этой ссылки"
+      : "демона нет, роликов этой ссылки на устройстве нет");
+
+    return;
+  }
+
   let data;
 
   try {
     data = await api(`/v1/links/${encodeURIComponent(id)}/videos`);
   } catch (error) {
     if (!daemonAlive) {
-      // Список эпизодов пришёл бы от демона, а его нет: зато ролики этой
-      // ссылки могли уже лежать на устройстве.
       const saved = savedForLink(id);
       drawLinks(knownLinks, saved.length
         ? "демона нет — в списке сохранённые ролики этой ссылки"
@@ -631,9 +675,16 @@ async function prepareVideo() {
   try {
     status = await api(`/v1/videos/${encodeURIComponent(videoId)}`, { method: "POST" });
   } catch (error) {
-    note(playSource(false, daemonAlive) === "none"
-      ? "демона нет, этого ролика на устройстве нет"
-      : error.message);
+    if (playSource(false, daemonAlive) === "none") {
+      // Копия числилась, но её вытеснил браузер, а демона нет: сцена
+      // открылась бы пустой, поэтому сообщение остаётся на домашней.
+      leaveStage();
+      drawLinks(knownLinks, "демона нет, этого ролика на устройстве нет");
+
+      return;
+    }
+
+    note(error.message);
 
     return;
   }
@@ -722,6 +773,8 @@ async function playLocal(videoId) {
     savedVideos.delete(videoId);
     deleteVideo(db, videoId).catch(() => {});
     drawCacheButton();
+    // Строка списка обещала «на устройстве» — теперь это уже неправда.
+    drawLinks(knownLinks, "");
 
     return false;
   }
@@ -1117,8 +1170,12 @@ function connectSocket() {
   opening.addEventListener("open", () => {
     daemonAlive = true;
 
-    if (state.videoId) {
-      watch(state.videoId);
+    // Копия и её титры переживают уход со сцены: после переподключения
+    // подписка нужна и им, иначе запись оборвётся на переподключении.
+    for (const videoId of new Set([state.videoId, copy && copy.videoId, follow && follow.videoId])) {
+      if (videoId) {
+        watch(videoId);
+      }
     }
   });
 

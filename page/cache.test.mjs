@@ -3,9 +3,54 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { downloadVideo } from "./cache.js";
+import { collectBody, downloadVideo, readJson } from "./cache.js";
 
 const bytes = (text) => new TextEncoder().encode(text);
+
+test("an interrupted body is an error, not an empty answer", async () => {
+  // Тело оборвалось посреди ответа: демон умер или вышел срок. Пустой ответ
+  // здесь — это ошибка, иначе страница приняла бы обрыв за «ничего нет».
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes('{"links"'));
+      controller.error(new Error("обрыв"));
+    },
+  });
+
+  await assert.rejects(() => readJson(new Response(stream)), /обрыв/);
+});
+
+test("an empty body is an empty answer", async () => {
+  assert.deepEqual(await readJson(new Response("")), {});
+});
+
+test("the body is handed on as a stream, not a pile of chunks", async () => {
+  // Свой массив кусков держал бы весь mp4 в памяти страницы. Тело уходит
+  // дальше по мере чтения, и до первого чтения потока оно не тронуто.
+  let pulls = 0;
+  const body = new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+
+      if (pulls > 100) {
+        controller.close();
+
+        return;
+      }
+
+      controller.enqueue(bytes("ab"));
+    },
+  });
+
+  const out = collectBody(body.getReader(), {});
+
+  assert.equal(pulls, 0);
+
+  const reader = out.getReader();
+
+  assert.deepEqual([...(await reader.read()).value], [97, 98]);
+  assert.ok(pulls < 100, `прочитано ${pulls} кусков из 101`);
+});
 
 test("a finished copy is the whole file and its size", async () => {
   globalThis.fetch = async () => new Response(bytes("0123456789"), {
