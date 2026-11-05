@@ -49,9 +49,29 @@ const els = {
   toggleTarget: document.getElementById("toggle-target"),
   toggleStudy: document.getElementById("toggle-study"),
   fontSize: document.getElementById("font-size"),
+  back: document.getElementById("back"),
   fullscreen: document.getElementById("fullscreen"),
   cache: document.getElementById("cache"),
 };
+
+// Иконки рисуются вместе с кнопкой: страница не тянет шрифтов и картинок из
+// сети, а без сети они и не пришли бы. Контур наследует цвет кнопки.
+const ICONS = {
+  back: '<path d="M15 5l-7 7 7 7"/>',
+  download: '<path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14"/>',
+  check: '<path d="M4 12.5l5 5.5L20 6.5"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
+};
+
+function iconMarkup(name) {
+  return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+    stroke="currentColor" stroke-width="2" stroke-linecap="round"
+    stroke-linejoin="round">${ICONS[name]}</svg>`;
+}
+
+const ICON_DOWNLOAD = iconMarkup("download");
+const ICON_CHECK = iconMarkup("check");
+const ICON_TRASH = iconMarkup("trash");
 
 const state = {
   videoId: null,
@@ -292,6 +312,17 @@ function button(text, onClick) {
   return node;
 }
 
+/** Кнопка-иконка: подписи на экране нет, поэтому имя нужно для пальца и для слуха. */
+function iconButton(markup, label, onClick) {
+  const node = button("", onClick);
+  node.classList.add("icon-only");
+  node.innerHTML = markup;
+  node.setAttribute("aria-label", label);
+  node.title = label;
+
+  return node;
+}
+
 function drawLinks(items, message) {
   knownLinks = items;
   els.links.replaceChildren();
@@ -405,14 +436,31 @@ function savedRows(records) {
     item.className = "saved";
     item.append(
       button(
-        `${episodeLabel(record)} · ${cacheLabel(record.size)}`,
+        savedLabel(record),
         () => play(record, { id: record.linkId, title: record.linkTitle }),
       ),
-      button("удалить", () => dropCopy(record.videoId)),
+      iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record.videoId)),
     );
 
     return item;
   });
+}
+
+/**
+ * Подпись копии под её ссылкой. Заголовок здесь не повторяется — он уже
+ * нарисован строкой выше; остаётся то, чего там нет: метраж, состояние и место
+ * на устройстве.
+ */
+function savedLabel(record) {
+  const parts = [];
+
+  if (typeof record.duration === "number" && record.duration > 0) {
+    parts.push(formatTime(record.duration));
+  }
+
+  parts.push(cacheLabel(record.size));
+
+  return parts.join(" · ");
 }
 
 /** Убрать копию с устройства: место на планшете кончается, и это должно быть можно. */
@@ -915,18 +963,36 @@ async function openCache() {
   }
 }
 
-/** Надпись на переключателе: он же и рассказывает, что с копией. */
+/**
+ * Кнопка кеша: иконка скачивания, а у готовой копии — галочка и размер.
+ * Слово «кеш» здесь больше не пишется: на сцене оно спорило с кадром.
+ */
 function drawCacheButton() {
   const mine = copy && copy.videoId === state.videoId ? copy : null;
   const saved = savedVideos.get(state.videoId);
 
-  els.cache.textContent = copyState({
+  const label = copyState({
     waiting: Boolean(mine && mine.waiting),
     active: Boolean(mine),
     percent: mine ? percent(mine.seen, mine.total) : 0,
     size: saved ? saved.size : 0,
     failed: copyFailure === state.videoId,
   });
+
+  els.cache.innerHTML = `${saved ? ICON_CHECK : ICON_DOWNLOAD}<span class="cache-label"></span>`;
+
+  // Подпись отдельным узлом, а не innerHTML: пустая строка не должна оставлять
+  // после себя пробелов и лишних отступов на кнопке.
+  if (label) {
+    els.cache.querySelector(".cache-label").textContent = label;
+  }
+
+  // Иконка без слова: что произойдёт по нажатию, должно быть слышно и видно
+  // при наведении. У готовой копии нажатие ничего не делает — так и говорим.
+  const hint = mine ? "отменить копирование" : saved ? "копия на устройстве" : "копировать ролик на устройство";
+
+  els.cache.setAttribute("aria-label", hint);
+  els.cache.title = hint;
   els.cache.setAttribute("aria-pressed", mine || saved ? "true" : "false");
 }
 
@@ -1686,6 +1752,10 @@ async function boot() {
   });
   els.toggleTarget.addEventListener("click", () => flipLine("target"));
   els.toggleStudy.addEventListener("click", () => flipLine("study"));
+  els.back.innerHTML = iconMarkup("back");
+  // Тем же путём, что и браузерная кнопка: шаг истории, положенный при входе
+  // в ролик, снимается, а не остаётся висеть за спиной.
+  els.back.addEventListener("click", () => history.back());
   els.fullscreen.addEventListener("click", toggleFullscreen);
   els.cache.addEventListener("click", toggleCache);
   els.fontSize.addEventListener("change", pickFontSize);

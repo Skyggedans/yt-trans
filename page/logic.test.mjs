@@ -309,14 +309,16 @@ test("a copy is refused only when the space is really short", () => {
 });
 
 test("the cache switch says what it is doing", () => {
-  assert.equal(copyState({}), "кеш");
-  assert.equal(copyState({ waiting: true }), "кеш…");
-  assert.equal(copyState({ active: true, percent: 37 }), "кеш 37%");
-  assert.equal(copyState({ size: 419430400 }), "кеш ✓ · 400 МБ");
-  assert.equal(copyState({ failed: true }), "кеш: ошибка");
+  // Кнопка стала иконкой: слово «кеш» ушло в неё, на кнопке остаётся только
+  // то, что меняется, — проценты, размер, отказ.
+  assert.equal(copyState({}), "");
+  assert.equal(copyState({ waiting: true }), "ждёт");
+  assert.equal(copyState({ active: true, percent: 37 }), "37%");
+  assert.equal(copyState({ size: 419430400 }), "400 МБ");
+  assert.equal(copyState({ failed: true }), "ошибка");
   // Идёт копирование — проценты важнее старого размера; ошибка важнее всего.
-  assert.equal(copyState({ active: true, percent: 5, size: 1000 }), "кеш 5%");
-  assert.equal(copyState({ failed: true, size: 1000 }), "кеш: ошибка");
+  assert.equal(copyState({ active: true, percent: 5, size: 1000 }), "5%");
+  assert.equal(copyState({ failed: true, size: 1000 }), "ошибка");
 });
 
 test("a saved episode is marked with its size", () => {

@@ -59,14 +59,30 @@ def test_the_layer_obeys_the_switches():
 
 
 def test_the_stage_is_left_by_the_browser_history():
-    # Своей кнопки «назад» больше нет, а список эпизодов — тот же адрес: без
-    # pushState и popstate браузерная история уводила бы со страницы целиком.
+    # Список эпизодов — тот же адрес: без pushState и popstate браузерная
+    # история уводила бы со страницы целиком.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
-    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
 
     assert "history.pushState" in source
     assert "popstate" in source
-    assert 'id="back"' not in html
+
+
+def test_the_stage_goes_back_to_the_list_by_its_own_arrow():
+    # С планшета браузерную кнопку «назад» искать негде, а уход со сцены — самое
+    # частое действие. Стрелка стоит первой в полосе, перед «во весь экран».
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    bar = re.search(r'<div id="stage-bar">(.*?)</div>', html, re.S)
+
+    assert bar is not None
+    assert 'id="back"' in bar.group(1)
+    assert bar.group(1).index('id="back"') < bar.group(1).index('id="fullscreen"')
+
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    # Возврат идёт той же дорогой, что и браузерная кнопка: шаг истории,
+    # положенный при входе в ролик, снимается, а не остаётся висеть.
+    assert 'els.back.addEventListener("click"' in source
+    assert "history.back()" in source
 
 
 def test_the_players_fullscreen_turns_into_the_whole_stage():
@@ -200,6 +216,23 @@ def test_the_stage_has_a_cache_switch_next_to_fullscreen():
     assert 'aria-pressed="false"' in bar.group(1)
 
 
+def test_the_cache_switch_is_an_icon_that_says_only_what_changes():
+    # На сцене надпись «кеш» спорила с кадром. Скачивание — иконка; когда копия
+    # лежит на устройстве, рядом остаются только галочка и размер.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function drawCacheButton"):source.index("function toggleCache")]
+
+    assert "ICON_DOWNLOAD" in body
+    assert "ICON_CHECK" in body
+    # Готовая копия — галочка, иначе — скачивание; слов на кнопке нет.
+    assert "saved ? ICON_CHECK : ICON_DOWNLOAD" in body
+    # Надпись по-прежнему приходит из logic.js: проценты, размер, ожидание.
+    assert "copyState(" in body
+    # Иконка без слова: имя для пальца и подсказки меняется вместе с копией.
+    assert "копия на устройстве" in body
+    assert "отменить копирование" in body
+
+
 def test_the_cache_switch_copies_the_rolled_video():
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     logic = (ROOT / "page" / "logic.js").read_text(encoding="utf-8")
@@ -210,7 +243,8 @@ def test_the_cache_switch_copies_the_rolled_video():
         "SPARE_BYTES", "downloadVideo(", "putVideo(", "freeBytes(", "askPersist(",
     ):
         assert name in source, name
-    assert "кеш ✓ · " in logic
+    # Иконку рисует страница, а подпись к ней — по-прежнему logic.js.
+    assert "export function copyState" in logic
     # Повторное нажатие во время копирования отменяет его и убирает недокачанное.
     assert "controller.abort()" in source
     assert "copy = null" in source
@@ -317,7 +351,24 @@ def test_a_saved_video_is_marked_in_the_list_and_can_be_deleted():
     assert "cacheLabel(" in source
     assert "deleteVideo(" in source
     assert "dropCopy(" in source
-    assert 'button("удалить"' in source
+    # Удаление — корзина: слово на каждой строке отнимало место у того, ради
+    # чего строку читают (метраж, статус, размер).
+    assert "ICON_TRASH" in source
+    assert 'iconButton(ICON_TRASH, "удалить копию", () => dropCopy(' in source
+
+
+def test_a_saved_row_does_not_repeat_the_title():
+    # Строка копии стоит под своей ссылкой, и заголовок уже нарисован выше.
+    # Повторять его — значит отнимать место у метража, статуса и размера.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    rows = source[source.index("function savedRows"):source.index("async function dropCopy")]
+    label = source[source.index("function savedLabel"):source.index("async function dropCopy")]
+
+    assert "episodeLabel(" not in rows
+    assert "savedLabel(" in rows
+    assert "formatTime(" in label
+    assert "cacheLabel(" in label
+    assert "title" not in label
 
 
 def test_a_shared_link_does_not_wipe_the_saved_home():

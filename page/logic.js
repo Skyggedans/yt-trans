@@ -367,21 +367,24 @@ export function copyVerdict(need, free, reserve = SPARE_BYTES) {
   return need + reserve <= free ? "ok" : "tight";
 }
 
-/** Надпись на переключателе кеша: он же и показывает, что с копией. */
+/**
+ * Подпись к иконке кеша. Само действие называет иконка (скачать или галочка),
+ * поэтому здесь остаётся только то, что меняется: ожидание, проценты, размер.
+ */
 export function copyState({ waiting, active, percent: done = 0, size = 0, failed } = {}) {
   if (failed) {
-    return "кеш: ошибка";
+    return "ошибка";
   }
 
   if (waiting) {
-    return "кеш…";
+    return "ждёт";
   }
 
   if (active) {
-    return `кеш ${done}%`;
+    return `${done}%`;
   }
 
-  return size > 0 ? `кеш ✓ · ${formatBytes(size)}` : "кеш";
+  return size > 0 ? formatBytes(size) : "";
 }
 
 /** Пометка сохранённого ролика в списке ссылок. */
