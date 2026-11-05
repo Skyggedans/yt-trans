@@ -291,7 +291,7 @@ async function consumeShare() {
       return;
     }
 
-    drawLinks([], `не удалось открыть ссылку из YouTube: ${error.message}`);
+    drawLinks(knownLinks, `не удалось открыть ссылку из YouTube: ${error.message}`);
   }
 }
 
@@ -396,15 +396,13 @@ async function loadLinks() {
   try {
     data = await api("/v1/links", { signal: AbortSignal.timeout(LINKS_TIMEOUT_MS) });
   } catch (error) {
-    if (daemonAlive) {
-      offline = false;
-      drawLinks([], error.message);
+    offline = !daemonAlive;
 
-      return;
-    }
-
-    offline = true;
-    drawLinks(last || [], "");
+    // Сбой запроса не стирает то, что уже на экране. Ссылки пришли с устройства
+    // или прошлым ответом, и строка об ошибке встаёт над ними; иначе один
+    // неудавшийся запрос оставлял от дома одни сохранённые копии, и строки
+    // роликов пропадали, хотя сами ссылки никуда не делись.
+    drawLinks(last && last.length ? last : knownLinks, daemonAlive ? error.message : "");
 
     return;
   }
@@ -413,7 +411,13 @@ async function loadLinks() {
 
   // Список ссылок — массив. Ответ без него (демон ответил не тем) не должен
   // ни затирать сохранённое, ни притворяться пустым списком.
-  const links = Array.isArray(data.links) ? data.links : [];
+  if (!Array.isArray(data.links)) {
+    drawLinks(last && last.length ? last : knownLinks, "демон ответил без списка ссылок");
+
+    return;
+  }
+
+  const links = data.links;
 
   if (db) {
     await putMeta(db, "links", links).catch(() => {});
@@ -512,7 +516,7 @@ async function addLink(event) {
       return;
     }
 
-    drawLinks([], `не удалось добавить: ${error.message}`);
+    drawLinks(knownLinks, `не удалось добавить: ${error.message}`);
   }
 }
 
@@ -533,7 +537,7 @@ async function dropLink(id) {
       return;
     }
 
-    drawLinks([], `не удалось удалить: ${error.message}`);
+    drawLinks(knownLinks, `не удалось удалить: ${error.message}`);
   }
 }
 
@@ -588,7 +592,7 @@ async function openLink(id) {
       return;
     }
 
-    drawLinks([], `не удалось прочитать ссылку: ${error.message}`);
+    drawLinks(knownLinks, `не удалось прочитать ссылку: ${error.message}`);
 
     return;
   }

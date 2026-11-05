@@ -340,7 +340,9 @@ def test_the_home_stays_with_the_saved_copy_when_the_daemon_is_gone():
     assert "AbortSignal.timeout(LINKS_TIMEOUT_MS)" in body
     assert 'getMeta(db, "links")' in body
     assert body.index("getMeta") < body.index("api(")
-    assert "offline = true" in body
+    # Офлайн — это «демон не ответил вовсе», а не всякий сбой ответа: разницу
+    # решает api(), поставив daemonAlive.
+    assert "offline = !daemonAlive" in body
     assert "savedForLink(" in source
     assert "на устройстве" in source
 
@@ -422,6 +424,20 @@ def test_a_broken_answer_is_not_taken_for_an_empty_daemon():
     body = source[source.index("async function loadLinks"):source.index("function savedForLink")]
 
     assert "Array.isArray(data.links)" in body
+    # Ответ без списка уходит в отказ раньше, чем список лёг бы на устройство:
+    # иначе однажды кривой ответ заменил бы сохранённые ссылки пустотой.
+    assert body.index("if (!Array.isArray(data.links))") < body.index('putMeta(db, "links"')
+
+
+def test_a_failed_request_does_not_wipe_the_rows_already_drawn():
+    # Сбой запроса — не повод стирать дом: ссылки уже нарисованы (с устройства
+    # или прошлым ответом), и строка об ошибке встаёт над ними. Рисуя вместо
+    # них пустой список, страница оставляла на экране одни сохранённые копии,
+    # и строки роликов пропадали, хотя сами ссылки никуда не делись.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert re.search(r"drawLinks\(\s*\[\s*\]", source) is None
+    assert "drawLinks(last && last.length ? last : knownLinks" in source
 
 
 def test_an_offline_home_does_not_wait_for_a_sleeping_daemon():
