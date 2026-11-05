@@ -158,26 +158,50 @@ input {
   gap: 8px;
 }
 
-/* Сохранённые эпизоды стоят под своей ссылкой, а не рядом: строка ссылки
-   переносится, и вложенный список занимает её целиком. */
-#links li {
-  flex-wrap: wrap;
-}
-
-#links li > ul {
-  flex-basis: 100%;
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0 12px;
-  display: flex;
+/* Ссылка и её копия — одна карточка: заголовок сверху, строка копии под ним
+   через тонкую черту. Отдельными плашками они читались как два разных пункта
+   списка, и было непонятно, что копия относится к строке выше. */
+#links li.card {
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid #2b2b31;
+  border-radius: 10px;
 }
 
-#links li button:first-child,
+#links .link-line,
+#links .saved-line {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Черта отделяет копию от ссылки, не разрывая карточку на две. */
+#links .saved-line {
+  border-top: 1px solid #26262c;
+}
+
+/* Внутри карточки кнопки не рисуют своих рамок и фона: рамка одна — у карточки. */
+#links .link-line button,
+#links .saved-line button {
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+}
+
+#links .link-line > button:first-child,
+#links .saved-line > button:first-child,
 #episode-list li button:first-child {
   flex: 1;
   text-align: left;
+}
+
+/* Корзина тише открывающей кнопки: она рядом, но не главная, и нажимают её
+   реже — промах по ней не должен стоить ссылки. */
+#links .link-line .icon-only,
+#links .saved-line .icon-only {
+  color: var(--muted);
 }
 
 #links .empty {

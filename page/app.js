@@ -3,7 +3,8 @@
 
 import {
   activeCueIndex, cacheLabel, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
-  languageText, parsePositions, pendingAt, positionFor, readFontSize, readSwitches, rememberPosition,
+  languageText, linkTitle, parsePositions, pendingAt, positionFor, readFontSize, readSwitches,
+  rememberPosition,
   sharedUrl, SPARE_BYTES, copyState, copyVerdict, formatBytes, mergeCues, percent,
   playSource,
   stageText, unwatchMessage, visibleLines, watchMessages,
@@ -337,7 +338,8 @@ function drawLinks(items, message) {
 
   if (!items.length) {
     // Ссылок демон не дал, но сохранённое лежит на устройстве: оно и есть
-    // список, искать среди него тоже можно.
+    // список, искать среди него тоже можно. Карточки здесь одинокие — своей
+    // ссылки у них на экране нет, поэтому метраж остаётся при копии.
     if (savedVideos.size) {
       els.links.append(...savedRows([...savedVideos.values()]));
 
@@ -361,24 +363,54 @@ function drawLinks(items, message) {
   }
 
   for (const link of visible) {
-    const item = document.createElement("li");
-    item.append(
-      button(link.title || link.url, () => openLink(link.id)),
-      button("Удалить", () => dropLink(link.id)),
-    );
-
-    // Сохранённые ролики встают под своей ссылкой и при живом демоне: иначе
-    // копию нельзя было бы ни увидеть, ни удалить, пока компьютер работает.
-    const saved = savedForLink(link.id);
-
-    if (saved.length) {
-      const more = document.createElement("ul");
-      more.append(...savedRows(saved));
-      item.append(more);
-    }
-
-    els.links.append(item);
+    els.links.append(linkCard(link));
   }
+}
+
+/**
+ * Одна ссылка — одна карточка: название, под ним копия, если она есть.
+ * Отдельными плашками они читались как два разных пункта списка, и было
+ * непонятно, что нижняя строка относится к строке выше.
+ */
+function linkCard(link) {
+  const item = document.createElement("li");
+  item.className = "card";
+
+  // Копии этой ссылки живут под ней и при живом демоне: иначе их нельзя было
+  // бы ни увидеть, ни удалить, пока компьютер работает.
+  const saved = savedForLink(link.id);
+  // Метраж переезжает в заголовок, только если копия одна: у плейлиста за
+  // одной ссылкой их много, и одна цифра соврала бы про остальные.
+  const only = saved.length === 1 ? saved[0] : null;
+
+  const line = document.createElement("div");
+  line.className = "link-line";
+  line.append(
+    button(linkTitle(link, only), () => openLink(link.id)),
+    iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(link.id)),
+  );
+  item.append(line);
+
+  for (const record of saved) {
+    item.append(copyLine(record, only ? false : true));
+  }
+
+  return item;
+}
+
+/** Строка копии в карточке: открыть с устройства и убрать её. */
+function copyLine(record, withDuration) {
+  const line = document.createElement("div");
+  line.className = "saved-line";
+  line.append(
+    button(
+      withDuration ? savedLabel(record) : cacheLabel(record.size),
+      () => play(record, { id: record.linkId, title: record.linkTitle }),
+    ),
+    iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record.videoId)),
+  );
+
+  return line;
 }
 
 async function loadLinks() {
@@ -433,18 +465,15 @@ function savedForLink(linkId) {
     .sort((left, right) => (right.savedAt || 0) - (left.savedAt || 0));
 }
 
-/** Строки списка для сохранённых роликов: посмотреть и удалить. */
+/**
+ * Копии без своих ссылок: карточка на каждую, метраж внутри — снаружи его
+ * взять неоткуда.
+ */
 function savedRows(records) {
   return records.map((record) => {
     const item = document.createElement("li");
-    item.className = "saved";
-    item.append(
-      button(
-        savedLabel(record),
-        () => play(record, { id: record.linkId, title: record.linkTitle }),
-      ),
-      iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record.videoId)),
-    );
+    item.className = "card saved";
+    item.append(copyLine(record, true));
 
     return item;
   });

@@ -360,8 +360,9 @@ def test_a_saved_video_is_marked_in_the_list_and_can_be_deleted():
 
 
 def test_a_saved_row_does_not_repeat_the_title():
-    # Строка копии стоит под своей ссылкой, и заголовок уже нарисован выше.
-    # Повторять его — значит отнимать место у метража, статуса и размера.
+    # Строка копии стоит в карточке своей ссылки, и заголовок уже нарисован
+    # выше. Повторять его — значит отнимать место у того, ради чего строку
+    # читают: сколько лежит на устройстве и сколько там ещё места.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     rows = source[source.index("function savedRows"):source.index("async function dropCopy")]
     label = source[source.index("function savedLabel"):source.index("async function dropCopy")]
@@ -373,6 +374,39 @@ def test_a_saved_row_does_not_repeat_the_title():
     assert "title" not in label
 
 
+def test_the_link_row_carries_the_length_of_its_only_copy():
+    # Метраж переехал из строки копии в заголовок: у одной копии он и есть
+    # метраж ролика, и повторять его дважды незачем. У нескольких копий
+    # заголовок ссылки общий, и метраж остаётся при каждой копии.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    logic = (ROOT / "page" / "logic.js").read_text(encoding="utf-8")
+
+    assert "export function linkTitle(" in logic
+    assert "linkTitle(" in source
+    body = source[source.index("function drawLinks"):source.index("async function loadLinks")]
+    assert "saved.length === 1" in body
+
+
+def test_the_link_and_its_copy_are_one_card():
+    # Отдельные плашки читались как два разных пункта списка: непонятно было,
+    # что нижняя копия относится к строке выше. Одна карточка — одна ссылка.
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    assert re.search(r"#links li\.card \{[^}]*flex-direction: column", css, re.S)
+    assert re.search(r"#links \.saved-line \{[^}]*border-top", css, re.S)
+    assert re.search(r"#links \.link-line button[^}]*background: transparent", css, re.S)
+
+
+def test_every_row_in_the_list_deletes_with_a_trash_icon():
+    # «Удалить» словом занимало половину строки, а корзина уже была у копии:
+    # две разные кнопки одного вида — залог того, что нажмут не ту.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert 'button("Удалить"' not in source
+    assert 'iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(' in source
+    assert 'iconButton(ICON_TRASH, "удалить копию", () => dropCopy(' in source
+
+
 def test_a_shared_link_does_not_wipe_the_saved_home():
     # При мёртвом демоне шаринг из YouTube не должен оставлять пустой экран:
     # сохранённое с пометками важнее неудавшегося добавления.
@@ -380,13 +414,6 @@ def test_a_shared_link_does_not_wipe_the_saved_home():
     body = source[source.index("async function consumeShare"):source.index("function row(")]
 
     assert "drawLinks(knownLinks" in body
-
-
-def test_saved_episodes_stand_under_their_link():
-    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
-
-    assert re.search(r"#links li \{[^}]*flex-wrap: wrap", css, re.S)
-    assert re.search(r"#links li > ul \{[^}]*flex-basis: 100%", css, re.S)
 
 
 def test_the_shell_is_kept_for_the_day_the_computer_is_off():

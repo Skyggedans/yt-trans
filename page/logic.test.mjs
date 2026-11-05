@@ -271,7 +271,8 @@ test("the subtitle size is remembered, and rubbish means the usual one", () => {
 // --- Кеш роликов на устройстве -----------------------------------------
 
 import {
-  cacheLabel, copyState, copyVerdict, formatBytes, mergeCues, percent, playSource,
+  cacheLabel, copyState, copyVerdict, formatBytes, linkTitle, mergeCues, percent,
+  playSource,
 } from "./logic.js";
 
 test("bytes are shown the way a person reads them", () => {
@@ -324,6 +325,17 @@ test("the cache switch says what it is doing", () => {
 test("a saved episode is marked with its size", () => {
   assert.equal(cacheLabel(419430400), "на устройстве · 400 МБ");
   assert.equal(cacheLabel(0), "на устройстве");
+});
+
+test("a link row carries the length of its only copy", () => {
+  // Метраж единственной копии — это метраж ролика, и стоять он должен рядом с
+  // названием, а не отдельной строкой.
+  assert.equal(linkTitle({ title: "Ролик" }, { duration: 960 }), "Ролик · 16:00");
+  // Копии нет — строка остаётся одной, без выдуманного метража.
+  assert.equal(linkTitle({ title: "Ролик" }), "Ролик");
+  assert.equal(linkTitle({ title: "Ролик" }, { duration: 0 }), "Ролик");
+  // Название не пришло — показываем адрес, а не пустую строку.
+  assert.equal(linkTitle({ url: "https://youtu.be/x" }), "https://youtu.be/x");
 });
 
 test("saved and arrived cues are merged by their number", () => {
