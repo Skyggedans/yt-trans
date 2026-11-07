@@ -21,8 +21,8 @@ HF_HOME = CACHE_DIR / "hf"
 YTDLP_CACHE = CACHE_DIR / "yt-dlp"
 TRACKS_DIR = CACHE_DIR / "tracks"
 
-# Настройки и токен. Живут отдельно от кэша: кэш можно удалять безболезненно,
-# а конфигурацию с токеном — нет.
+# Настройки. Живут отдельно от кэша: кэш можно удалять безболезненно,
+# а конфигурацию — нет.
 CONFIG_DIR = Path(os.environ.get("YT_TRANS_CONFIG", Path.home() / ".config" / "yt-trans"))
 
 

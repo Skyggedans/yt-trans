@@ -16,6 +16,8 @@
     input { width: 100%; padding: 0.4rem; font: inherit; box-sizing: border-box; }
     .row { display: flex; gap: 0.8rem; }
     .row > div { flex: 1; }
+    .row > .narrow { flex: 0 0 7rem; }
+    .row select { width: 100%; box-sizing: border-box; }
     button { margin-top: 1rem; padding: 0.45rem 1rem; font: inherit; cursor: pointer; }
     #status { margin-top: 1rem; padding: 0.7rem; border-radius: 4px; white-space: pre-wrap; }
     .ok { background: #e6f5e6; color: #14471a; }
@@ -38,14 +40,14 @@
 <body>
   <h1>yt-trans — субтитры к роликам YouTube локальными моделями</h1>
 
-  <label for="token">Токен установки</label>
-  <input id="token" type="text" spellcheck="false" placeholder="вставь содержимое файла с токеном">
-  <div class="hint">
-    Демон создаёт токен при первом запуске. Показать его:
-    <code>cat ~/.config/yt-trans/token</code>
-  </div>
-
   <div class="row">
+    <div class="narrow">
+      <label for="scheme">Протокол</label>
+      <select id="scheme">
+        <option value="http">http</option>
+        <option value="https">https</option>
+      </select>
+    </div>
     <div>
       <label for="host">Адрес демона</label>
       <input id="host" type="text" spellcheck="false">
@@ -54,6 +56,12 @@
       <label for="port">Порт</label>
       <input id="port" type="number">
     </div>
+  </div>
+  <div class="hint">
+    Демон с сертификатом (<code>[server] tls_cert</code> в config.toml) слушает
+    только https, без сертификата — только http. Выбирать вручную не обязательно:
+    если выбранный протокол молчит, расширение само пробует второй. Кнопка
+    проверки делает то же и запоминает рабочий.
   </div>
 
   <fieldset>

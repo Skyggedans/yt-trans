@@ -172,8 +172,8 @@ udev `uaccess` (`/dev/snd/*` с ACL, `/etc/udev/rules.d/70-tobii-uaccess.rules`)
   `HOME`, `USER` и `LOGNAME`, а кэш и конфиг [`helper/env.py`](../helper/env.py)
   берёт из `Path.home()` (`~/.cache/yt-trans`, `~/.config/yt-trans`) или из
   `YT_TRANS_CACHE` и `YT_TRANS_CONFIG`, но не из переменных сеанса. Юнит
-  увидит тот же кэш и токен, что пользовательский, и ключ в расширении менять
-  не придётся. `XDG_RUNTIME_DIR` у него не будет, но демон к нему не
+  увидит тот же кэш и конфиг, что пользовательский.
+  `XDG_RUNTIME_DIR` у него не будет, но демон к нему не
   обращается. Для видеокарты не нужны ни группы, ни `DeviceAllow=`:
   `/dev/nvidia*` открыты всем.
 - SELinux на машине в режиме `Enforcing`, а служба с кодом в `/home` — типичное
@@ -214,8 +214,7 @@ udev `uaccess` (`/dev/snd/*` с ACL, `/etc/udev/rules.d/70-tobii-uaccess.rules`)
 Решение лежит в снимке задания, в поле `language` (`null`, пока не принято):
 
 ```
-TOKEN=$(cat ~/.config/yt-trans/token)
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8756/v1/jobs/<id> | jq .language
+curl -s http://127.0.0.1:8756/v1/jobs/<id> | jq .language
 ```
 
 `<id>` — идентификатор ролика из адреса (`watch?v=…`). Задания живут в памяти до
@@ -223,7 +222,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8756/v1/jobs/<id> | j
 лежит в кэше, смотрят через `/restore` — он ничего не запускает:
 
 ```
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8756/v1/jobs/<id>/restore | jq .snapshot.language
+curl -s http://127.0.0.1:8756/v1/jobs/<id>/restore | jq .snapshot.language
 ```
 
 Ролик без единой реплики не кэшируется: новое задание по нему — после 12 других

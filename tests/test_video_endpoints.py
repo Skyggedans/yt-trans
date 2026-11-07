@@ -63,7 +63,10 @@ async def test_a_bad_video_id_is_a_400_before_any_download(client, manager, tmp_
     assert calls == []
 
 
-async def test_the_file_needs_the_token(manager, tmp_path):
+async def test_the_file_is_open_without_a_token(manager, tmp_path):
+    # <video src> заголовков не шлёт, а токена больше нет: файл отдаётся тому,
+    # кого пустил Origin. Запрос без Origin — это страница самого демона, curl
+    # и приложения вне браузера.
     import httpx
 
     from helper import app as helper_app
@@ -75,12 +78,7 @@ async def test_the_file_needs_the_token(manager, tmp_path):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=helper_app.app), base_url="http://test"
     ) as open_client:
-        assert (await open_client.get(f"/v1/videos/{VIDEO}/file")).status_code == 401
-        assert (
-            await open_client.get(
-                f"/v1/videos/{VIDEO}/file", params={"token": helper_app.TOKEN}
-            )
-        ).status_code == 200
+        assert (await open_client.get(f"/v1/videos/{VIDEO}/file")).status_code == 200
 
 
 async def test_the_size_is_asked_for_with_head_and_no_body(client, manager, tmp_path):

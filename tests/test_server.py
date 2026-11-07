@@ -45,7 +45,7 @@ async def test_a_foreign_page_still_cannot(client):
 
 
 async def test_the_socket_still_refuses_a_foreign_page():
-    socket = FakeSocket(helper_app.TOKEN)
+    socket = FakeSocket()
     socket.headers = {"origin": "http://evil.example", "host": "127.0.0.1:8756"}
 
     await helper_app.websocket(socket)
@@ -55,7 +55,7 @@ async def test_the_socket_still_refuses_a_foreign_page():
 
 
 async def test_the_socket_accepts_the_page_the_daemon_serves(manager):
-    socket = FakeSocket(helper_app.TOKEN)
+    socket = FakeSocket()
     socket.headers = {"origin": "http://127.0.0.1:8756", "host": "127.0.0.1:8756"}
     socket.handler = asyncio.create_task(helper_app.websocket(socket))
 
@@ -73,12 +73,13 @@ async def test_on_the_loop_health_still_diagnoses(client):
 
     assert body["ok"] is True
     assert "models" in body
-    assert "token_path" in body
+    # Токена больше нет — и подсказки, где он лежит, тоже.
+    assert "token_path" not in body
 
 
 async def test_in_the_network_health_says_only_that_it_is_alive(client, monkeypatch):
     # Без ключа и на всех интерфейсах: имена моделей, состояние заданий, размер
-    # кэша и путь к токену с именем пользователя — это карта чужой машины.
+    # кэша и путь к настройкам с именем пользователя — это карта чужой машины.
     monkeypatch.setattr(helper_app, "HOST", "0.0.0.0")
 
     body = (await client.get("/v1/health")).json()

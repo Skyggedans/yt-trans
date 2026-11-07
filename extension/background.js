@@ -17,9 +17,12 @@
 const api = globalThis.browser ?? globalThis.chrome;
 
 const DEFAULTS = {
+  // Протокол до демона. Демон с сертификатом ([server] tls_cert в config.toml)
+  // слушает ТОЛЬКО https: обычному http такой порт не отвечает ничем, и зритель
+  // видел бы «демон не отвечает» при живом демоне. Выбирается в настройках.
+  scheme: "http",
   host: "127.0.0.1",
   port: 8756,
-  token: "",
   targetLang: "ru",
   // Готовая дорожка автора вместо распознавания, если она у ролика есть.
   useAuthorTrack: true,
@@ -60,8 +63,57 @@ async function settings() {
   return { ...DEFAULTS, ...stored };
 }
 
-function baseUrl({ host, port }) {
-  return `http://${host}:${port}`;
+function baseUrl({ scheme, host, port }) {
+  // Всё, кроме явного https, — http: в хранилище может лежать что угодно, а
+  // собирать из этого адрес запроса нельзя.
+  return `${scheme === "https" ? "https" : "http"}://${host}:${port}`;
+}
+
+/**
+ * Какой протокол до демона отвечает сейчас.
+ *
+ * Настройке верить нельзя: временное дополнение теряет хранилище с каждой
+ * перезагрузкой браузера, а демон с сертификатом слушает только https. Поэтому
+ * протокол выбирается по первому же ответу — живой запоминается до конца сеанса.
+ */
+let liveScheme = null;
+
+/** Порядок проверки: живой протокол первым, второй — запасной. */
+function schemes(config) {
+  const chosen = config.scheme === "https" ? "https" : "http";
+  const other = chosen === "https" ? "http" : "https";
+
+  return liveScheme === other ? [other, chosen] : [chosen, other];
+}
+
+/**
+ * Запрос к демону по живому протоколу.
+ *
+ * Отказ сети на одном протоколе не приговор: http к порту с TLS молчит так же,
+ * как закрытый порт, а второй протокол в это время отвечает. Отмену не повторяем
+ * никогда — это наш собственный unwatch, а не сбой.
+ */
+async function call(config, path, init = {}) {
+  let failure;
+
+  for (const scheme of schemes(config)) {
+    try {
+      const response = await fetch(`${baseUrl({ ...config, scheme })}${path}`, init);
+
+      liveScheme = scheme;
+
+      return response;
+    } catch (error) {
+      if (error.name === "AbortError") throw error;
+
+      failure = error;
+    }
+  }
+
+  // Ни один не ответил: демон мог перезапуститься с другим сертификатом.
+  liveScheme = null;
+
+  throw failure;
 }
 
 function viewers(videoId) {
@@ -115,17 +167,11 @@ async function pollLoop(videoId, poll) {
     // этого, оборвать было бы уже некому.
     if (polls.get(videoId) !== poll) return;
 
-    if (!config.token) {
-      deliver(videoId, { type: "helper", ok: false, reason: "нет токена" });
-      await sleep(RETRY_MS);
-      continue;
-    }
-
     const controller = new AbortController();
     poll.controller = controller;
 
-    const url =
-      `${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}/events` +
+    const path =
+      `/v1/jobs/${encodeURIComponent(videoId)}/events` +
       `?cursor=${poll.cursor}&target=${encodeURIComponent(config.targetLang)}` +
       `&authorTrack=${config.useAuthorTrack === false ? "false" : "true"}` +
       `&create=${poll.create ? "true" : "false"}`;
@@ -135,8 +181,7 @@ async function pollLoop(videoId, poll) {
     let answered = false;
 
     try {
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${config.token}` },
+      const response = await call(config, path, {
         signal: controller.signal,
         cache: "no-store",
       });
@@ -150,7 +195,7 @@ async function pollLoop(videoId, poll) {
         deliver(videoId, {
           type: "helper",
           ok: false,
-          reason: response.status === 401 ? "неверный токен" : `демон ответил ${response.status}`,
+          reason: `демон ответил ${response.status}`,
         });
         poll.broken = true;
         await sleep(RETRY_MS);
@@ -235,9 +280,8 @@ async function pollLoop(videoId, poll) {
  * Дождаться, пока процесс демона снова ответит.
  *
  * Спрашиваем то, на что демон отвечает сразу, ничего не создавая: снимок задания
- * или 404, если задания нет. Годится ЛЮБОЙ HTTP-ответ, даже 401 — важно не что
- * сказано, а что сказал живой процесс. С неверным токеном разберётся уже опрос
- * и покажет ровно эту причину.
+ * или 404, если задания нет. Годится ЛЮБОЙ HTTP-ответ, даже 403 — важно не что
+ * сказано, а что сказал живой процесс.
  *
  * Возвращает false, если опрос за это время остановили.
  */
@@ -248,11 +292,11 @@ async function waitForDaemon(videoId, poll) {
     if (polls.get(videoId) !== poll) return false;
 
     try {
-      await fetch(`${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}`, {
-        headers: { Authorization: `Bearer ${config.token}` },
-        cache: "no-store",
-        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      });
+      await call(
+        config,
+        `/v1/jobs/${encodeURIComponent(videoId)}`,
+        { cache: "no-store", signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) },
+      );
 
       return polls.get(videoId) === poll;
     } catch {
@@ -279,10 +323,8 @@ function sleep(ms) {
 async function restore(tabId, videoId, duration) {
   const config = await settings();
 
-  if (!config.token) return;
-
-  const url =
-    `${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}/restore` +
+  const path =
+    `/v1/jobs/${encodeURIComponent(videoId)}/restore` +
     `?target=${encodeURIComponent(config.targetLang)}` +
     `&authorTrack=${config.useAuthorTrack === false ? "false" : "true"}` +
     // Ноль — это «плеер ещё не прочитал метаданные», а не длительность. Уйди он
@@ -293,10 +335,7 @@ async function restore(tabId, videoId, duration) {
   let data;
 
   try {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${config.token}` },
-      cache: "no-store",
-    });
+    const response = await call(config, path, { cache: "no-store" });
 
     if (!response.ok) return;
 
@@ -385,8 +424,7 @@ async function retry(videoId) {
   stopPolling(videoId);
 
   const config = await settings();
-  const job = `${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}`;
-  const headers = { Authorization: `Bearer ${config.token}` };
+  const job = `/v1/jobs/${encodeURIComponent(videoId)}`;
   let unreachable = false;
 
   try {
@@ -396,11 +434,11 @@ async function retry(videoId) {
     // успела уснуть и забыть, кто что смотрит. Сброс вслепую убил бы идущую
     // работу — вплоть до распознавания на середине — и начал бы её с нуля.
     // Идущее задание подписка просто подхватит.
-    const response = await fetch(job, { headers, cache: "no-store" });
+    const response = await call(config, job, { cache: "no-store" });
     const snapshot = response.ok ? await response.json() : null;
 
     if (snapshot?.stage === "error") {
-      await fetch(`${job}/drop`, { method: "POST", headers, cache: "no-store" });
+      await call(config, `${job}/drop`, { method: "POST", cache: "no-store" });
     }
   } catch (error) {
     // Сброс не дошёл. Опрос поднимаем всё равно: дожидаться демона он умеет сам,
@@ -433,12 +471,10 @@ function follow(tabId, videoId) {
 async function sendPlayhead(videoId, t) {
   const config = await settings();
 
-  if (!config.token) return;
-
   try {
-    await fetch(`${baseUrl(config)}/v1/jobs/${encodeURIComponent(videoId)}/playhead`, {
+    await call(config, `/v1/jobs/${encodeURIComponent(videoId)}/playhead`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ t }),
     });
   } catch {
@@ -491,8 +527,8 @@ api.runtime.onConnect.addListener((port) => {
   });
 });
 
-// Смена адреса или токена: обрываем опросы, они переподключатся с новыми
-// настройками на следующем витке цикла.
+// Смена адреса или протокола: обрываем опросы, они переподключатся
+// с новыми настройками на следующем витке цикла.
 //
 // Поднимаем заново только те, что шли, и каждый с его же правом создавать.
 // Законченное задание опроса не держит, и подписка с правом создания по нему
@@ -501,7 +537,10 @@ api.runtime.onConnect.addListener((port) => {
 // не даёт. Курсор с нуля: по новому адресу может отвечать другой демон,
 // и позиция в чужом журнале ничего не значит.
 api.storage.onChanged.addListener((changes) => {
-  if (changes.token || changes.host || changes.port) {
+  if (changes.scheme || changes.host || changes.port) {
+    // Новый адрес — новый выбор протокола: прежний мог достаться другому демону.
+    liveScheme = null;
+
     // По копии: stopPolling меняет polls, а менять коллекцию во время обхода нельзя.
     const running = [...polls].map(([videoId, poll]) => [videoId, poll.create]);
 

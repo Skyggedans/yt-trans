@@ -6,11 +6,12 @@
 таймер простоя воркера, поэтому соединение само себя поддерживает.
 
 Демон делает исходящие запросы к YouTube по команде со страницы, то есть является
-классическим «запутавшимся заместителем». Отсюда токен на каждый запрос и проверка
-Origin: без них любая открытая вкладка и любое расширение могли бы через нас качать
-что угодно. Расширение ходит только сюда и никогда напрямую в ollama — иначе
-пришлось бы выставить OLLAMA_ORIGINS с подстановочным знаком, открыв ollama
-пользователя всем установленным расширениям разом.
+классическим «запутавшимся заместителем». Токена установки нет: хозяин снял его,
+чтобы страница планшета и расширение не требовали ключа. От вкладок чужих сайтов
+защищает проверка Origin — она осталась; запросы без Origin (curl, <video>,
+приложения вне браузера) проходят. Расширение ходит только сюда и никогда
+напрямую в ollama — иначе пришлось бы выставить OLLAMA_ORIGINS с подстановочным
+знаком, открыв ollama пользователя всем установленным расширениям разом.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ import asyncio
 import contextlib
 import logging
 import os
-import secrets
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -31,7 +31,6 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
-    Query,
     Request,
     WebSocket,
     WebSocketDisconnect,
@@ -48,7 +47,6 @@ from helper.sources.ytdlp import YtDlpError, probe_url
 log = logging.getLogger(__name__)
 
 PORT = int(os.environ.get("YT_TRANS_PORT", "8756"))
-TOKEN_PATH = CONFIG_DIR / "token"
 # Корневой сертификат того же каталога, что выпускает packaging/make-tls.sh.
 # Путь не из конфига намеренно: файл нужен ДО включения https, когда в
 # config.toml ещё ничего про tls не написано.
@@ -91,24 +89,6 @@ def refusal_event(video_id: str, message: str, retryable: bool) -> dict:
     }
 
 
-def load_token() -> str:
-    """Токен установки. Создаётся при первом запуске, читается расширением из файла."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-    if TOKEN_PATH.exists():
-        token = TOKEN_PATH.read_text(encoding="utf-8").strip()
-
-        if token:
-            return token
-
-    token = secrets.token_urlsafe(32)
-    TOKEN_PATH.write_text(token, encoding="utf-8")
-    TOKEN_PATH.chmod(0o600)
-
-    return token
-
-
-TOKEN = load_token()
 manager = JobManager()
 
 # Адрес берётся из [server] после того, как появился сам менеджер и его конфиг.
@@ -126,7 +106,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^(chrome|moz|safari-web)-extension://.*$",
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["authorization", "content-type"],
+    allow_headers=["content-type"],
     max_age=86400,
 )
 
@@ -156,33 +136,27 @@ def check_origin(origin: str | None, host: str | None = None) -> None:
         raise HTTPException(status_code=403, detail="origin не разрешён")
 
 
-async def auth(
+async def guard(
     request: Request,
     origin: str | None = Header(default=None),
-    authorization: str | None = Header(default=None),
-    token: str | None = Query(default=None),
 ) -> None:
+    """Единственный пропуск к API: Origin. Токена установки больше нет.
+
+    Расширение и страница планшета ходят без ключа, поэтому закрывает дверь
+    только Origin: чужая страница в браузере подделать его не может.
+    """
     check_origin(origin, request.headers.get("host"))
-
-    supplied = token
-
-    if authorization and authorization.lower().startswith("bearer "):
-        supplied = authorization[7:].strip()
-
-    # Сравнение постоянного времени: длина и содержимое токена не должны утекать
-    # через время ответа.
-    if not supplied or not secrets.compare_digest(supplied, TOKEN):
-        raise HTTPException(status_code=401, detail="нужен токен установки")
 
 
 @app.get("/v1/health")
 async def health() -> dict:
-    """Без токена: расширение по нему находит демон, а человек — диагностирует.
+    """Открыт всем: расширение по нему находит демон, а человек — диагностирует.
 
     На петле рассказывает про модели и карту — там его слышит только хозяин. В сети
     отвечает одно «живой»: этот ответ может получить любой в домашней сети, а имена
-    моделей, состояние заданий, размер кэша и путь к токену с именем пользователя —
-    это карта чужой машины. Секретов тут и раньше не было, но в сети и этого много.
+    моделей, состояние заданий, размер кэша и путь к настройкам с именем
+    пользователя — это карта чужой машины. Секретов тут и раньше не было, но в сети
+    и этого много.
     """
     if HOST not in LOOPBACK_HOSTS:
         return {"ok": True}
@@ -199,11 +173,10 @@ async def health() -> dict:
         },
         "cache": manager.cache.stats(),
         "jobs": manager.stats(),
-        "token_path": str(TOKEN_PATH),
     }
 
 
-@app.post("/v1/jobs", dependencies=[Depends(auth)])
+@app.post("/v1/jobs", dependencies=[Depends(guard)])
 async def create_job(payload: dict) -> dict:
     video_id = (payload or {}).get("videoId", "")
     target = (payload or {}).get("targetLang", "ru")
@@ -223,7 +196,7 @@ async def create_job(payload: dict) -> dict:
     return {"videoId": job.video_id, "stage": job.stage.value}
 
 
-@app.get("/v1/jobs/{video_id}", dependencies=[Depends(auth)])
+@app.get("/v1/jobs/{video_id}", dependencies=[Depends(guard)])
 async def job_snapshot(video_id: str) -> dict:
     job = manager.get(video_id)
 
@@ -233,7 +206,7 @@ async def job_snapshot(video_id: str) -> dict:
     return job.snapshot()
 
 
-@app.get("/v1/jobs/{video_id}/events", dependencies=[Depends(auth)])
+@app.get("/v1/jobs/{video_id}/events", dependencies=[Depends(guard)])
 async def job_events(
     video_id: str,
     cursor: int = 0,
@@ -285,7 +258,7 @@ async def job_events(
     return await job.poll(cursor, POLL_TIMEOUT)
 
 
-@app.get("/v1/jobs/{video_id}/restore", dependencies=[Depends(auth)])
+@app.get("/v1/jobs/{video_id}/restore", dependencies=[Depends(guard)])
 async def restore_job(
     video_id: str,
     target: str = "ru",
@@ -318,7 +291,7 @@ async def restore_job(
     }
 
 
-@app.post("/v1/jobs/{video_id}/playhead", dependencies=[Depends(auth)])
+@app.post("/v1/jobs/{video_id}/playhead", dependencies=[Depends(guard)])
 async def set_playhead(video_id: str, payload: dict) -> dict:
     """Куда смотрит зритель — двигает приоритет очереди перевода.
 
@@ -348,7 +321,7 @@ async def set_playhead(video_id: str, payload: dict) -> dict:
     return {"ok": True}
 
 
-@app.post("/v1/jobs/{video_id}/drop", dependencies=[Depends(auth)])
+@app.post("/v1/jobs/{video_id}/drop", dependencies=[Depends(guard)])
 async def drop_job(video_id: str, payload: dict | None = Body(default=None)) -> dict:
     """Сбросить задание ролика. Тело необязательно; в нём clientId — ключ клиента.
 
@@ -364,7 +337,7 @@ async def drop_job(video_id: str, payload: dict | None = Body(default=None)) -> 
     return {"dropped": video_id, "cancelled": manager.drop(video_id, client_id)}
 
 
-@app.post("/v1/videos/{video_id}", dependencies=[Depends(auth)])
+@app.post("/v1/videos/{video_id}", dependencies=[Depends(guard)])
 async def prepare_video(video_id: str) -> dict:
     """Начать готовить mp4. Отвечает сразу; готовность — отдельным GET."""
     if not ytdlp.VIDEO_ID.match(video_id):
@@ -375,7 +348,7 @@ async def prepare_video(video_id: str) -> dict:
     ).wire()
 
 
-@app.get("/v1/videos/{video_id}", dependencies=[Depends(auth)])
+@app.get("/v1/videos/{video_id}", dependencies=[Depends(guard)])
 async def video_status(video_id: str) -> dict:
     if not ytdlp.VIDEO_ID.match(video_id):
         raise HTTPException(status_code=400, detail="неправильный идентификатор ролика")
@@ -384,12 +357,13 @@ async def video_status(video_id: str) -> dict:
 
 
 @app.api_route(
-    "/v1/videos/{video_id}/file", methods=["GET", "HEAD"], dependencies=[Depends(auth)]
+    "/v1/videos/{video_id}/file", methods=["GET", "HEAD"], dependencies=[Depends(guard)]
 )
 async def video_file(video_id: str) -> FileResponse:
     """Файл целиком или кусок: Range разбирает FileResponse, он же ставит 206.
 
-    Токен принимается и в строке запроса (?token=): <video src> заголовков не шлёт.
+    Ключа не спрашивает: <video src> заголовков не шлёт, а Origin <video>
+    не присылает — пропуск у демона один, и его нет.
     Пока файла нет — 409 с фразой состояния. Страница сначала спрашивает состояние
     и лишь потом ставит src, поэтому <video> не-200 не получает никогда.
 
@@ -426,7 +400,7 @@ async def probe_with_account(url: str, cookies: Path | None) -> dict:
 
 
 
-@app.get("/v1/links", dependencies=[Depends(auth)])
+@app.get("/v1/links", dependencies=[Depends(guard)])
 async def list_links() -> dict:
     """Ссылки с диска; у ссылки на ролик — готовность картинки и перевода.
 
@@ -448,7 +422,7 @@ async def list_links() -> dict:
     return {"links": items}
 
 
-@app.post("/v1/links", dependencies=[Depends(auth)])
+@app.post("/v1/links", dependencies=[Depends(guard)])
 async def add_link(payload: dict) -> dict:
     """Сохранить ссылку. Название, вид и метраж берём у YouTube, а не у человека."""
     url = (payload or {}).get("url", "")
@@ -475,12 +449,12 @@ async def add_link(payload: dict) -> dict:
     return {"link": link.wire()}
 
 
-@app.delete("/v1/links/{link_id}", dependencies=[Depends(auth)])
+@app.delete("/v1/links/{link_id}", dependencies=[Depends(guard)])
 async def drop_link(link_id: str) -> dict:
     return {"removed": links.remove(link_id)}
 
 
-@app.get("/v1/links/{link_id}/videos", dependencies=[Depends(auth)])
+@app.get("/v1/links/{link_id}/videos", dependencies=[Depends(guard)])
 async def link_videos(link_id: str) -> dict:
     """Ролики ссылки плоским списком. Состояние картинки и перевода — сразу.
 
@@ -527,13 +501,6 @@ async def websocket(socket: WebSocket) -> None:
     try:
         check_origin(origin, socket.headers.get("host"))
     except HTTPException:
-        await socket.close(code=4401)
-
-        return
-
-    token = socket.query_params.get("token")
-
-    if not (token and secrets.compare_digest(token, TOKEN)):
         await socket.close(code=4401)
 
         return
@@ -671,7 +638,7 @@ async def websocket(socket: WebSocket) -> None:
 async def root_certificate() -> FileResponse:
     """Свой корневой сертификат — чтобы поставить его на планшет.
 
-    Публичный, как и страница: это сертификат, а не ключ. Отдаётся без токена и
+    Публичный, как и страница: это сертификат, а не ключ. Отдаётся всем и
     до того, как демон переключится на https: установить его на планшет больше
     неоткуда — по http страница открывается, а по https браузер ещё не доверяет.
     """
@@ -683,7 +650,7 @@ async def root_certificate() -> FileResponse:
 
 # Монтируется последним: маршруты выше добавлены раньше и выигрывают у монтирования,
 # так что /v1/* остаётся API, а всё прочее ищется файлом. Страница публичная —
-# секретов в ней нет, а токен она спрашивает у человека сама.
+# секретов в ней нет: дверь к API стережёт один Origin.
 app.mount("/", StaticFiles(directory=PAGE_DIR, html=True), name="page")
 
 
@@ -697,7 +664,6 @@ def main() -> None:
     # Диагностика зависшего перевода начиналась с того, что этот шум надо было
     # сначала отфильтровать, чтобы увидеть единственную важную строку.
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    log.info("токен установки лежит в %s", TOKEN_PATH)
 
     # HTTPS нужен не ради шифрования домашнего Wi-Fi, а ради планшета: браузер
     # считает безопасным только https, и без этого страницу не поставить как

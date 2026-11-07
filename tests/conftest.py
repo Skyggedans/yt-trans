@@ -24,8 +24,8 @@ from starlette.websockets import WebSocketDisconnect
 # строится уже на них: JobManager() в конструкторе сносит PAUSED_AUDIO_DIR (там звук
 # приостановленных заданий настоящего демона), TrackCache пишет в настоящие
 # index.sqlite и tracks/, а импорт helper.app сам строит такой JobManager и читает
-# настоящий токен установки. Опоздай подмена на один импорт — первый же прогон
-# тронул бы всё это.
+# настоящий конфиг. Опоздай подмена на один импорт — первый же прогон тронул бы
+# всё это.
 #
 # tmp_path_factory здесь не годится: он существует только внутри фикстур, а conftest
 # импортируется раньше тестовых модулей. По той же причине helper.* ниже
@@ -152,7 +152,7 @@ def refuse_in_audio_dir(monkeypatch):
 
 @pytest.fixture
 async def client(manager):
-    """HTTP-клиент поверх настоящего приложения, с действующим токеном установки."""
+    """HTTP-клиент поверх настоящего приложения. Токена нет: демон открыт тому, кого пускает Origin."""
     from helper import app as helper_app
 
     # manager в аргументах не ради значения, а ради порядка: подмена
@@ -160,7 +160,6 @@ async def client(manager):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=helper_app.app),
         base_url="http://test",
-        headers={"Authorization": f"Bearer {helper_app.TOKEN}"},
     ) as http:
         yield http
 
@@ -186,12 +185,13 @@ class FakeSocket:
     say, hear и disconnect — сторона клиента, для теста.
     """
 
-    def __init__(self, token: str) -> None:
+    def __init__(self) -> None:
         # Задача обработчика: её ставит фикстура connection, а disconnect дожидается.
         self.handler: asyncio.Task | None = None
-        # Без Origin: check_origin пускает такие запросы, как curl. Токен настоящий.
+        # Без Origin: check_origin пускает такие запросы, как curl, — иных пропусков
+        # у демона нет, токен убран.
         self.headers: dict[str, str] = {}
-        self.query_params = {"token": token}
+        self.query_params: dict[str, str] = {}
         # Что клиент сказал демону; None — разрыв соединения.
         self._incoming: asyncio.Queue = asyncio.Queue()
         # Что демон отправил клиенту, строго по порядку.
@@ -253,7 +253,7 @@ async def connection(manager):
 
     # manager в аргументах ради порядка, как у client: подмена helper.app.manager
     # должна стоять до первого сообщения.
-    socket = FakeSocket(helper_app.TOKEN)
+    socket = FakeSocket()
     socket.handler = asyncio.create_task(helper_app.websocket(socket))
 
     yield socket

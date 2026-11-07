@@ -33,11 +33,13 @@ async def test_the_page_brings_its_styles_and_scripts(client):
     assert (await client.get("/app.js")).status_code == 200
 
 
-async def test_the_page_has_the_screen_for_asking_the_token(client):
+async def test_the_page_never_asks_for_a_token(client):
     text = (await client.get("/")).text
 
-    assert 'id="token-input"' in text
-    assert 'id="setup"' in text
+    assert 'id="token-input"' not in text
+    assert 'id="setup"' not in text
+    # Приложение видно сразу: экрана-препятствия перед ним больше нет.
+    assert '<div id="app">' in text
 
 
 async def test_the_root_certificate_is_offered_before_https_starts(client, monkeypatch, tmp_path):
