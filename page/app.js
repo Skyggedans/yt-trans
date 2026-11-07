@@ -54,6 +54,8 @@ const ICONS = {
   check: '<path d="M4 12.5l5 5.5L20 6.5"/>',
   // Дискета: картинка уже лежит на диске, смотреть можно сразу.
   disk: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+  // Спиннер: кольцо с просветом — вращается, пока картинка качается.
+  spinner: '<circle cx="12" cy="12" r="8" opacity=".25"/><path d="M12 4a8 8 0 0 1 8 8"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
   chevron: '<path d="M6 9l6 6 6-6"/>',
   // «Телевизор» YouTube: скруглённый кадр с треугольником внутри.
@@ -447,9 +449,7 @@ function linkCard(link) {
   // в сохранённом списке она могла устареть, а у плейлиста ни своей картинки,
   // ни своего перевода нет.
   if (!playlist && daemonAlive) {
-    openButton.append(
-      ...[stateMark(link.state), translationMark(link.translated)].filter(Boolean),
-    );
+    openButton.append(...videoMarks(link));
   }
 
   line.append(openButton);
@@ -574,9 +574,7 @@ function videoCard(video, link) {
     episodeLabel(video),
     () => play(video, { id: link.id, title: link.title }),
   );
-  playButton.append(
-    ...[stateMark(video.state), translationMark(video.translated)].filter(Boolean),
-  );
+  playButton.append(...videoMarks(video));
 
   line.append(playButton);
 
@@ -873,10 +871,14 @@ async function addLink(event) {
 // Пометка о картинке — у каждого ролика сразу, чтобы список отвечал на вопрос
 // «что можно смотреть мгновенно». Готовая картинка — дискета: слово «готово»
 // повторялось бы в каждой строке, а галка обещала бы больше — она теперь за
-// готовый перевод.
-const VIDEO_STATE_ICONS = { ready: "disk" };
+// готовый перевод. Качающаяся картинка — спиннер: движение говорит само, без
+// слова, которое приходилось бы читать в каждой строке.
+const VIDEO_STATE_ICONS = { ready: "disk", preparing: "spinner" };
+const VIDEO_STATE_LABELS = {
+  ready: "картинка на диске",
+  preparing: "картинка готовится",
+};
 const VIDEO_STATE_WORDS = {
-  preparing: "готовится",
   error: "не скачалось",
 };
 
@@ -893,12 +895,18 @@ function iconStateMark(icon, label) {
 }
 
 /**
- * Значок состояния после названия: дискета у готовой картинки, слово — у
- * остальных. Готовность видно, но она не спорит с названием.
+ * Значок состояния после названия: дискета у готовой картинки, спиннер у
+ * качающейся, слово — у ошибки. Готовность видно, но она не спорит с названием.
  */
 function stateMark(stateName) {
-  if (VIDEO_STATE_ICONS[stateName]) {
-    return iconStateMark(VIDEO_STATE_ICONS[stateName], "картинка на диске");
+  const icon = VIDEO_STATE_ICONS[stateName];
+
+  if (icon) {
+    const mark = iconStateMark(icon, VIDEO_STATE_LABELS[stateName]);
+    // Вращается только спиннер: неподвижный значок значил бы «замерло».
+    mark.classList.toggle("spin", stateName === "preparing");
+
+    return mark;
   }
 
   const word = VIDEO_STATE_WORDS[stateName];
@@ -920,6 +928,35 @@ function stateMark(stateName) {
  */
 function translationMark(translated) {
   return translated ? iconStateMark("check", "перевод готов") : null;
+}
+
+/**
+ * «new» — свежая строка: по ролику ещё ничего не делали, ни картинки, ни
+ * перевода. Метки времени у ссылки нет, поэтому свежесть и есть «ничего не
+ * трогали»; как только появится любая другая пометка, значок уйдёт сам.
+ */
+function newMark() {
+  const mark = document.createElement("span");
+  mark.className = "new-mark";
+  // Слово на латинице — примета, а не текст для чтения: у значка есть имя.
+  mark.setAttribute("aria-label", "ролик ещё не готовили");
+  mark.textContent = "new";
+
+  return mark;
+}
+
+/**
+ * Все пометки строки ролика в одном месте: и верхняя строка списка, и ролики
+ * плейлиста подписываются одинаково, и разойтись им негде.
+ */
+function videoMarks(video) {
+  const untouched = video.state === "absent" && !video.translated;
+
+  return [
+    stateMark(video.state),
+    translationMark(video.translated),
+    untouched ? newMark() : null,
+  ].filter(Boolean);
 }
 
 function episodeLabel(video) {

@@ -194,6 +194,30 @@ input {
   display: inline-flex;
 }
 
+/* Спиннер — единственная движущаяся пометка: пока картинка качается, движение
+   и есть ответ, а слово «готовится» пришлось бы читать в каждой строке. */
+#links .state-mark.spin .icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* «new» — пометка свежей строки, по которой ещё ничего не делали. Она тише
+   названия: это не состояние ролика, а подсказка, что с ним не работали. */
+#links .new-mark {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid #2b2b31;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
 #links .state-word {
   font-size: 14px;
 }
