@@ -387,10 +387,10 @@ export function copyVerdict(need, free, reserve = SPARE_BYTES) {
 }
 
 /**
- * Подпись к иконке кеша. Само действие называет иконка (скачать или галочка),
- * поэтому здесь остаётся только то, что меняется: ожидание, проценты, размер.
+ * Подпись к иконке кеша. Само действие называет иконка (скачать, дискета или
+ * отмена), поэтому здесь остаётся только то, что меняется: ожидание и проценты.
  */
-export function copyState({ waiting, active, percent: done = 0, size = 0, failed } = {}) {
+export function copyState({ waiting, active, percent: done = 0, failed } = {}) {
   if (failed) {
     return "ошибка";
   }
@@ -403,7 +403,7 @@ export function copyState({ waiting, active, percent: done = 0, size = 0, failed
     return `${done}%`;
   }
 
-  return size > 0 ? formatBytes(size) : "";
+  return "";
 }
 
 /** Пометка сохранённого ролика в списке ссылок. */

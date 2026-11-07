@@ -335,11 +335,12 @@ test("a copy is refused only when the space is really short", () => {
 
 test("the cache switch says what it is doing", () => {
   // Кнопка стала иконкой: слово «кеш» ушло в неё, на кнопке остаётся только
-  // то, что меняется, — проценты, размер, отказ.
+  // то, что меняется, — проценты, ожидание и отказ. Размер готовой копии не
+  // пишется: дискета уже сказала, что ролик на устройстве.
   assert.equal(copyState({}), "");
   assert.equal(copyState({ waiting: true }), "ждёт");
   assert.equal(copyState({ active: true, percent: 37 }), "37%");
-  assert.equal(copyState({ size: 419430400 }), "400 МБ");
+  assert.equal(copyState({ size: 419430400 }), "");
   assert.equal(copyState({ failed: true }), "ошибка");
   // Идёт копирование — проценты важнее старого размера; ошибка важнее всего.
   assert.equal(copyState({ active: true, percent: 5, size: 1000 }), "5%");

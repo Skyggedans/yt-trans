@@ -1378,8 +1378,9 @@ async function openCache() {
 }
 
 /**
- * Кнопка кеша: иконка скачивания, а у готовой копии — галочка и размер.
- * Слово «кеш» здесь больше не пишется: на сцене оно спорило с кадром.
+ * Кнопка кеша: иконка скачивания, а у готовой копии — дискета. Слово «кеш»
+ * и размер здесь не пишутся: на сцене они спорили с кадром, а размер виден
+ * в списке.
  */
 function drawCacheButton() {
   const mine = copy && copy.videoId === state.videoId ? copy : null;
@@ -1389,7 +1390,6 @@ function drawCacheButton() {
     waiting: Boolean(mine && mine.waiting),
     active: Boolean(mine),
     percent: mine ? percent(mine.seen, mine.total) : 0,
-    size: saved ? saved.size : 0,
     failed: copyFailure === state.videoId,
   });
 

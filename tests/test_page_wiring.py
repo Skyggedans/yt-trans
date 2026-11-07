@@ -398,7 +398,7 @@ def test_the_stage_has_a_cache_switch_next_to_fullscreen():
 
 def test_the_cache_switch_is_an_icon_that_says_only_what_changes():
     # На сцене надпись «кеш» спорила с кадром. Скачивание — иконка; когда копия
-    # лежит на устройстве, рядом остаются только дискета и размер.
+    # лежит на устройстве, на кнопке остаётся только дискета.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     body = source[source.index("function drawCacheButton"):source.index("function toggleCache")]
 
@@ -407,7 +407,10 @@ def test_the_cache_switch_is_an_icon_that_says_only_what_changes():
     # значила бы перевод, и два разных значка говорили бы об одном.
     assert "saved ? ICON_DISK : ICON_DOWNLOAD" in body
     assert "ICON_CHECK" not in body
-    # Надпись по-прежнему приходит из logic.js: проценты, размер, ожидание.
+    # Размер у готовой копии не пишется: дискета говорит, что ролик на
+    # устройстве, а мегабайты на сцене спорили с кадром.
+    assert "saved.size" not in body
+    # Надпись по-прежнему приходит из logic.js: проценты и ожидание.
     assert "copyState(" in body
     # Иконка без слова: имя для пальца и подсказки меняется вместе с копией.
     assert "копия на устройстве" in body
