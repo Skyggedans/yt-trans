@@ -52,6 +52,8 @@ const ICONS = {
   back: '<path d="M15 5l-7 7 7 7"/>',
   download: '<path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14"/>',
   check: '<path d="M4 12.5l5 5.5L20 6.5"/>',
+  // Дискета: картинка уже лежит на диске, смотреть можно сразу.
+  disk: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
   chevron: '<path d="M6 9l6 6 6-6"/>',
   // «Телевизор» YouTube: скруглённый кадр с треугольником внутри.
@@ -441,12 +443,13 @@ function linkCard(link) {
     linkTitle(link, only),
     () => openCard(link),
   );
-  // Готовность картинки знает только демон и только про ролик: в сохранённом
-  // списке она могла устареть, а у плейлиста своей картинки нет.
-  const mark = playlist || !daemonAlive ? null : stateMark(link.state);
-
-  if (mark) {
-    openButton.append(mark);
+  // Готовность картинки и перевода знает только демон и только про ролик:
+  // в сохранённом списке она могла устареть, а у плейлиста ни своей картинки,
+  // ни своего перевода нет.
+  if (!playlist && daemonAlive) {
+    openButton.append(
+      ...[stateMark(link.state), translationMark(link.translated)].filter(Boolean),
+    );
   }
 
   line.append(openButton);
@@ -571,11 +574,9 @@ function videoCard(video, link) {
     episodeLabel(video),
     () => play(video, { id: link.id, title: link.title }),
   );
-  const mark = stateMark(video.state);
-
-  if (mark) {
-    playButton.append(mark);
-  }
+  playButton.append(
+    ...[stateMark(video.state), translationMark(video.translated)].filter(Boolean),
+  );
 
   line.append(playButton);
 
@@ -870,28 +871,34 @@ async function addLink(event) {
 }
 
 // Пометка о картинке — у каждого ролика сразу, чтобы список отвечал на вопрос
-// «что можно смотреть мгновенно». Готовая картинка — галочка: слово «готово»
-// повторялось бы в каждой строке и говорило бы ровно то же.
-const VIDEO_STATE_ICONS = { ready: "check" };
+// «что можно смотреть мгновенно». Готовая картинка — дискета: слово «готово»
+// повторялось бы в каждой строке, а галка обещала бы больше — она теперь за
+// готовый перевод.
+const VIDEO_STATE_ICONS = { ready: "disk" };
 const VIDEO_STATE_WORDS = {
   preparing: "готовится",
   error: "не скачалось",
 };
 
+/** Значок состояния в строку названия: тихий, с именем для читалки с экрана. */
+function iconStateMark(icon, label) {
+  const mark = document.createElement("span");
+  mark.className = "state-mark";
+  // Значок сам о себе не расскажет, поэтому у него есть имя.
+  mark.setAttribute("role", "img");
+  mark.setAttribute("aria-label", label);
+  mark.innerHTML = iconMarkup(icon);
+
+  return mark;
+}
+
 /**
- * Значок состояния после названия: галочка у готовой картинки, слово — у
+ * Значок состояния после названия: дискета у готовой картинки, слово — у
  * остальных. Готовность видно, но она не спорит с названием.
  */
 function stateMark(stateName) {
   if (VIDEO_STATE_ICONS[stateName]) {
-    const mark = document.createElement("span");
-    mark.className = "state-mark";
-    // Читалке с экрана галочка ничего не скажет, поэтому у неё есть имя.
-    mark.setAttribute("role", "img");
-    mark.setAttribute("aria-label", "готово");
-    mark.innerHTML = iconMarkup(VIDEO_STATE_ICONS[stateName]);
-
-    return mark;
+    return iconStateMark(VIDEO_STATE_ICONS[stateName], "картинка на диске");
   }
 
   const word = VIDEO_STATE_WORDS[stateName];
@@ -905,6 +912,14 @@ function stateMark(stateName) {
   mark.textContent = word;
 
   return mark;
+}
+
+/**
+ * Готовый перевод — галка: она отвечает «ждать ли перевода», а не «что лежит
+ * на диске». Нет перевода — нет и значка: отсутствие ничего не обещает.
+ */
+function translationMark(translated) {
+  return translated ? iconStateMark("check", "перевод готов") : null;
 }
 
 function episodeLabel(video) {

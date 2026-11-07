@@ -209,21 +209,25 @@ def test_every_header_shows_what_kind_of_thing_it_is():
     assert re.search(r"#links \.title-icon \{[^}]*display: inline-flex", css, re.S)
 
 
-def test_a_ready_picture_is_a_check_and_the_top_row_shows_it_too():
-    # «Готово» словом повторялось в каждой строке списка, а галочка говорит то
-    # же самое и не занимает места. Верхняя строка ролика раньше не говорила о
+def test_a_picture_on_disk_is_a_floppy_and_the_top_row_shows_it_too():
+    # «Готово» словом повторялось в каждой строке списка. Галка говорила бы
+    # «всё готово», хотя означала только картинку на диске, — поэтому картинку
+    # теперь подписывает дискета. Верхняя строка ролика раньше не говорила о
     # готовности вовсе: её знали только ролики внутри раскрытого плейлиста.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
 
-    assert 'ready: "check"' in source
+    icons = source[source.index("const ICONS"):source.index("};", source.index("const ICONS"))]
+    assert "disk:" in icons
+    assert 'ready: "disk"' in source
+    assert 'ready: "check"' not in source
     words_at = source.index("const VIDEO_STATE_WORDS")
     words = source[words_at:source.index("};", words_at)]
     assert "готово" not in words
 
-    mark = source[source.index("function stateMark"):source.index("function episodeLabel")]
-    assert "iconMarkup" in mark
-    assert "VIDEO_STATE_ICONS" in mark
+    marks = source[source.index("function iconStateMark"):source.index("function translationMark")]
+    assert "iconMarkup" in marks
+    assert "VIDEO_STATE_ICONS" in marks
 
     card = source[source.index("function linkCard"):source.index("function copyLine")]
     assert "stateMark(link.state)" in card
@@ -232,6 +236,23 @@ def test_a_ready_picture_is_a_check_and_the_top_row_shows_it_too():
     assert "stateMark(video.state)" in video
 
     assert re.search(r"#links \.state-mark \{[^}]*display: inline-flex", css, re.S)
+
+
+def test_a_finished_translation_is_a_check():
+    # Галка отвечает на другой вопрос: перевод уже сделан и ждать нечего.
+    # Нет перевода — нет и значка: его отсутствие ничего не обещает.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    mark = source[source.index("function translationMark"):source.index("function episodeLabel")]
+    assert 'iconStateMark("check"' in mark
+    assert "translated" in mark
+    assert "перевод готов" in mark
+
+    card = source[source.index("function linkCard"):source.index("function copyLine")]
+    assert "translationMark(link.translated)" in card
+
+    video = source[source.index("function videoCard"):source.index("function chevronButton")]
+    assert "translationMark(video.translated)" in video
 
 
 def test_the_list_rereads_the_picture_state_on_the_way_back():

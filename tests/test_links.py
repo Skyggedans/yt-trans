@@ -139,12 +139,12 @@ def isolated_links(tmp_path, monkeypatch):
     monkeypatch.setattr(links, "LINKS_PATH", tmp_path / "links.json")
 
 
-def probe_stub(monkeypatch):
+def probe_stub(monkeypatch, video_id="abcdefghijk"):
     def probe(url, timeout=60.0, *, cookies=None):
         return {
             "kind": "video",
             "title": "Ролик",
-            "videos": [{"videoId": "abcdefghijk", "title": "Ролик", "duration": 300}],
+            "videos": [{"videoId": video_id, "title": "Ролик", "duration": 300}],
         }
 
     monkeypatch.setattr("helper.app.probe_url", probe)
@@ -243,6 +243,92 @@ async def test_a_playlist_has_no_picture_state_of_its_own(client, manager, monke
     listed = (await client.get("/v1/links")).json()["links"]
 
     assert "state" not in listed[0]
+    # У плейлиста нет ни своей картинки, ни своего перевода: переводить нечего.
+    assert "translated" not in listed[0]
+
+
+# Готовая дорожка так, как её кладёт _finish_translation (JobCue.payload()).
+TRANSLATED = [
+    {
+        "i": 0,
+        "start": 0.0,
+        "end": 1.5,
+        "src": "Dobar dan.",
+        "lines": ["Добрый день."],
+        "study": "Dobar dan.",
+        "failed": False,
+    },
+]
+
+
+# У каждого теста свой ролик: кэш дорожек общий на прогон, и готовый перевод
+# предыдущего теста иначе нашёлся бы и здесь.
+def cache_translation(manager, video_id, cues=TRANSLATED):
+    manager.cache.put(manager._key_for(video_id, "asr"), cues, 300.0)
+
+
+async def test_a_video_link_says_its_translation_is_ready(client, manager, monkeypatch):
+    probe_stub(monkeypatch, "tranready01")
+    cache_translation(manager, "tranready01")
+    await client.post("/v1/links", json={"url": "https://youtu.be/tranready01"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert listed[0]["translated"] is True
+
+
+async def test_a_video_link_without_a_translation_says_so(client, manager, monkeypatch):
+    probe_stub(monkeypatch, "notransla01")
+    await client.post("/v1/links", json={"url": "https://youtu.be/notransla01"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert listed[0]["translated"] is False
+
+
+async def test_an_empty_cached_track_is_not_a_ready_translation(client, manager, monkeypatch):
+    # Пустая дорожка — испорченная запись, а не «всё готово»: с галкой зритель
+    # ждал бы субтитров, которых нет.
+    probe_stub(monkeypatch, "emptytrack1")
+    cache_translation(manager, "emptytrack1", cues=[])
+    await client.post("/v1/links", json={"url": "https://youtu.be/emptytrack1"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert listed[0]["translated"] is False
+
+
+async def test_a_track_from_other_models_is_not_a_ready_translation(client, manager, monkeypatch):
+    # Ключ кэша несёт модели и промпт: сделанное прежней моделью — не то, что
+    # зритель получил бы сейчас, и галка соврала бы.
+    from helper.cache import CacheKey
+
+    probe_stub(monkeypatch, "stalemodel1")
+    stale = CacheKey(
+        video_id="stalemodel1",
+        pin="",
+        asr_model="large-v2/float16",
+        translator_model="старая",
+        track_fingerprint="asr",
+    )
+    manager.cache.put(stale, TRANSLATED, 300.0)
+    await client.post("/v1/links", json={"url": "https://youtu.be/stalemodel1"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert listed[0]["translated"] is False
+
+
+async def test_a_playlist_episode_says_whether_its_translation_is_ready(
+    client, manager, monkeypatch
+):
+    probe_stub(monkeypatch, "playtrans01")
+    cache_translation(manager, "playtrans01")
+    added = await client.post("/v1/links", json={"url": "https://youtu.be/playtrans01"})
+
+    response = await client.get(f"/v1/links/{added.json()['link']['id']}/videos")
+
+    assert response.json()["videos"][0]["translated"] is True
 
 
 async def test_an_unknown_link_is_a_404(client):

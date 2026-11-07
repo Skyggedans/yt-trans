@@ -428,10 +428,10 @@ async def probe_with_account(url: str, cookies: Path | None) -> dict:
 
 @app.get("/v1/links", dependencies=[Depends(auth)])
 async def list_links() -> dict:
-    """Ссылки с диска; у ссылки на ролик — готовность его картинки.
+    """Ссылки с диска; у ссылки на ролик — готовность картинки и перевода.
 
-    Готовность считается по файлу в кэше, а id берётся из адреса: похода в
-    YouTube здесь нет, иначе список ждал бы сеть ради значка в каждой строке.
+    Оба признака считаются по кэшу, а id берётся из адреса: похода в YouTube
+    здесь нет, иначе список ждал бы сеть ради значка в каждой строке.
     """
     items = []
 
@@ -441,6 +441,7 @@ async def list_links() -> dict:
 
         if video_id:
             data["state"] = manager.videos.status(video_id).state
+            data["translated"] = manager.translated(video_id)
 
         items.append(data)
 
@@ -475,11 +476,12 @@ async def drop_link(link_id: str) -> dict:
 
 @app.get("/v1/links/{link_id}/videos", dependencies=[Depends(auth)])
 async def link_videos(link_id: str) -> dict:
-    """Ролики ссылки плоским списком. Состояние картинки — у каждого сразу.
+    """Ролики ссылки плоским списком. Состояние картинки и перевода — сразу.
 
-    Список отвечает на вопрос «что можно смотреть мгновенно»: ready уже лежит
-    в кэше, preparing качается, absent — ничего нет. Спрашивать про каждый ролик
-    отдельно значило бы десяток запросов на открытие плейлиста.
+    Список отвечает на вопрос «что можно смотреть мгновенно и где не ждать
+    перевода»: ready — картинка уже лежит в кэше, preparing — качается,
+    absent — ничего нет; translated — дорожка субтитров уже сделана. Спрашивать
+    про каждый ролик отдельно значило бы десяток запросов на открытие плейлиста.
     """
     link = next((item for item in links.load() if item.id == link_id), None)
 
@@ -498,6 +500,11 @@ async def link_videos(link_id: str) -> dict:
                 manager.videos.status(video["videoId"]).state
                 if ytdlp.VIDEO_ID.match(video["videoId"])
                 else "absent"
+            ),
+            "translated": (
+                manager.translated(video["videoId"])
+                if ytdlp.VIDEO_ID.match(video["videoId"])
+                else False
             ),
         }
         for video in found["videos"]

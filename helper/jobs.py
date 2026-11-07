@@ -2023,6 +2023,19 @@ class JobManager:
 
         return job
 
+    def translated(self, video_id: str, use_author_track: bool = True) -> bool:
+        """Сделан ли уже перевод этого ролика — только чтение, без работы.
+
+        Списку ссылок нужно то же, что у готовности картинки: ответить сразу, без
+        сети и без карты. Ключ считается по нынешним настройкам, поэтому дорожка
+        от прежней модели готовым переводом не считается. Пустая дорожка —
+        испорченная запись, а не готовый перевод: с галкой зритель ждал бы
+        субтитров, которых нет.
+        """
+        payload = self._cached_variant(video_id, use_author_track)
+
+        return bool(payload and payload.get("cues"))
+
     def _cached_variant(
         self, video_id: str, use_author_track: bool, duration: float | None = None
     ) -> dict | None:
