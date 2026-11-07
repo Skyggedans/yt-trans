@@ -362,6 +362,16 @@ test("a link row carries the length of its only copy", () => {
   assert.equal(linkTitle({ url: "https://youtu.be/x" }), "https://youtu.be/x");
 });
 
+test("a link row carries the length the daemon remembered", () => {
+  // Демон запоминает метраж при добавлении ссылки: без копии на устройстве
+  // строка раньше молчала о длительности.
+  assert.equal(linkTitle({ title: "Ролик", duration: 960 }), "Ролик · 16:00");
+  // Копия без метража не должна стирать серверный.
+  assert.equal(linkTitle({ title: "Ролик", duration: 960 }, { duration: 0 }), "Ролик · 16:00");
+  // Сервер метража не знает — и выдумывать нечего.
+  assert.equal(linkTitle({ title: "Ролик", duration: null }), "Ролик");
+});
+
 test("cards are toggled one at a time and nothing is open at start", () => {
   // Раскрытие живёт только до перезагрузки: список открывается свёрнутым,
   // а раскрывают карточку пальцем и по одному месту.

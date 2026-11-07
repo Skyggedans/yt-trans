@@ -31,9 +31,18 @@ class Link:
     url: str
     title: str
     kind: str  # video | playlist
+    # Метраж, который демон увидел при разборе ссылки. У плейлиста одного метража
+    # нет, у старых записей его тоже нет — тогда None.
+    duration: int | None = None
 
     def wire(self) -> dict:
-        return {"id": self.id, "url": self.url, "title": self.title, "kind": self.kind}
+        return {
+            "id": self.id,
+            "url": self.url,
+            "title": self.title,
+            "kind": self.kind,
+            "duration": self.duration,
+        }
 
 
 def is_youtube_url(url: str) -> bool:
@@ -58,6 +67,18 @@ def link_id(url: str) -> str:
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
 
 
+def clean_duration(raw: object) -> int | None:
+    """Секунды из того, что пришло от yt-dlp или с диска; мусор — это None.
+
+    Метраж нужен строке списка, поэтому мусорное значение лучше потерять, чем
+    показать «NaN:NaN» или отрицательное время.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+
+    return int(raw) if raw > 0 else None
+
+
 def load(path: Path | None = None) -> list[Link]:
     """Ссылки с диска. Битый или отсутствующий файл — пустой список, а не падение."""
     path = LINKS_PATH if path is None else path
@@ -72,6 +93,7 @@ def load(path: Path | None = None) -> list[Link]:
                 url=str(item["url"]),
                 title=str(item.get("title") or ""),
                 kind=str(item.get("kind") or "video"),
+                duration=clean_duration(item.get("duration")),
             )
             for item in items
             if isinstance(item, dict) and item.get("id") and item.get("url")
@@ -91,7 +113,13 @@ def save(items: list[Link], path: Path | None = None) -> None:
     os.replace(staging, path)
 
 
-def add(url: str, title: str, kind: str, path: Path | None = None) -> Link:
+def add(
+    url: str,
+    title: str,
+    kind: str,
+    duration: int | None = None,
+    path: Path | None = None,
+) -> Link:
     """Добавить ссылку. Та же ссылка второй раз возвращает уже сохранённую запись."""
     items = load(path)
     known = link_id(url)
@@ -103,7 +131,7 @@ def add(url: str, title: str, kind: str, path: Path | None = None) -> Link:
     if len(items) >= MAX_LINKS:
         raise TooManyLinks(f"не больше {MAX_LINKS} ссылок")
 
-    link = Link(id=known, url=url, title=title, kind=kind)
+    link = Link(id=known, url=url, title=title, kind=kind, duration=clean_duration(duration))
     save([link, *items], path)
 
     return link

@@ -327,15 +327,16 @@ input {
   display: none;
 }
 
+/* Статус живёт в верхней полосе рядом с кнопками одной строкой: поверх кадра
+   он спорил с субтитрами, а отдельные строки занимали больше места, чем
+   говорили. Точки между сообщениями ставит render(). */
 #status {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  /* Ниже выключателей строк: длинная строка о языке иначе ушла бы под них. */
-  top: calc(56px + env(safe-area-inset-top, 0px));
-  text-align: center;
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-shadow: 0 1px 2px #000;
   pointer-events: none;
 }
@@ -411,13 +412,16 @@ input {
   --overlay-scale: 1.3;
 }
 
-/* Полоса слева сверху: возврат, ⛶ и кеш. Она не спорит с выключателями строк
-   справа и не лезет под контролы плеера снизу. */
+/* Полоса слева сверху: возврат, ⛶, кеш и статус. Правее — выключатели строк,
+   поэтому полоса до них не доходит: длинный статус обрезается, а не залезает
+   под кнопки. */
 #stage-bar {
   position: absolute;
   left: 12px;
+  right: calc(268px + env(safe-area-inset-right, 0px));
   top: calc(12px + env(safe-area-inset-top, 0px));
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 
@@ -429,6 +433,21 @@ input {
   font-size: 15px;
   line-height: 1;
   background: rgba(20, 20, 24, .82);
+  flex: none;
+}
+
+/* Полоса со статусом и название гаснут вместе с родными контролами плеера:
+   через те же 2,5 секунды покоя, пока ролик идёт. Кадр без прикосновений
+   остаётся чистым, а касание возвращает надписи. */
+#stage-bar,
+#title {
+  transition: opacity .2s ease;
+}
+
+#stage.idle #stage-bar,
+#stage.idle #title {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* Иконки рисуются контуром и наследуют цвет кнопки: на тёмном кадре они

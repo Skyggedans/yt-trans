@@ -22,6 +22,9 @@ const POLL_VIDEO_MS = 2000;
 const RECONNECT_MS = 1000;
 const PLAYHEAD_MS = 1000;
 const LINKS_TIMEOUT_MS = 3000;
+// Столько же, сколько браузер держит на экране родные контролы плеера после
+// последнего касания: полоса со статусом и название гаснут вместе с ними.
+const CONTROLS_IDLE_MS = 2500;
 const WORKER_KEY = "yt-trans-no-worker";
 
 // Разметка не меняется за время жизни страницы, поэтому каждый элемент ищется
@@ -100,6 +103,8 @@ const cuesByIndex = new Map();
 
 let socket = null;
 let videoTimer = null;
+// Таймер, по которому полоса со статусом и название уходят с кадра.
+let idleTimer = null;
 let layer = null;
 let paintedKey = null;
 // Место просмотра — своё на устройство: планшет в другой комнате продолжает
@@ -1063,6 +1068,9 @@ async function play(video, link = {}) {
   els.title.textContent = state.title;
   els.home.hidden = true;
   els.stage.hidden = false;
+  // Сцена открывается с паузой на видео: полоса и название видны, пока идёт
+  // подготовка, и гаснут только когда картинка уже играет.
+  wakeStage();
   drawCacheButton();
   render();
 
@@ -1780,6 +1788,11 @@ function countTranslated() {
 
 // --- Надписи --------------------------------------------------------------
 
+/**
+ * Статус — одна строка в верхней полосе. Разные сообщения (что готовится, что
+ * не так, на каком языке ролик) разделены точками: это одно место для чтения,
+ * а не три подряд идущие строки поверх кадра.
+ */
 function render() {
   const lines = [];
   const stage = stageText(state.stage, state);
@@ -1798,12 +1811,7 @@ function render() {
     lines.push(language);
   }
 
-  els.status.replaceChildren(...lines.map((text) => {
-    const line = document.createElement("div");
-    line.textContent = text;
-
-    return line;
-  }));
+  els.status.textContent = lines.join(" • ");
   els.status.hidden = lines.length === 0;
 }
 
@@ -2044,6 +2052,25 @@ function pickFontSize() {
 // --- Уход со сцены --------------------------------------------------------
 
 /** Вернуться к списку: браузерная кнопка «назад» зовёт то же самое. */
+/**
+ * Вернуть полосу со статусом и название и завести таймер их ухода.
+ *
+ * Уходят они ровно через столько же, сколько родные контролы плеера после
+ * последнего касания, — и только пока ролик играет: на паузе контролы тоже не
+ * исчезают, и прятать тогда нечего.
+ */
+function wakeStage() {
+  clearTimeout(idleTimer);
+  idleTimer = null;
+  els.stage.classList.remove("idle");
+
+  if (els.stage.hidden || els.video.paused) {
+    return;
+  }
+
+  idleTimer = setTimeout(() => els.stage.classList.add("idle"), CONTROLS_IDLE_MS);
+}
+
 function leaveStage() {
   if (!state.videoId) {
     return;
@@ -2085,6 +2112,10 @@ function leaveStage() {
 
   els.stage.hidden = true;
   els.home.hidden = false;
+  // Ушли со сцены — гасить уже нечего, а таймер не должен пережить уход.
+  clearTimeout(idleTimer);
+  idleTimer = null;
+  els.stage.classList.remove("idle");
   render();
 
   // Пока зритель был на сцене, демон мог докачать картинку. Вернувшись, список
@@ -2148,6 +2179,17 @@ async function boot() {
   els.fullscreen.addEventListener("click", toggleFullscreen);
   els.cache.addEventListener("click", toggleCache);
   els.fontSize.addEventListener("change", pickFontSize);
+  // Полоса со статусом и название гаснут от покоя и возвращаются от любого
+  // прикосновения, клавиши или движения миши — там же, где просыпаются родные
+  // контролы плеера. Слушаем окно: нажатия на родные контролы до сцены не
+  // доходят.
+  for (const type of ["pointermove", "pointerdown", "keydown"]) {
+    window.addEventListener(type, wakeStage, { passive: true, capture: true });
+  }
+  els.video.addEventListener("play", wakeStage);
+  // Пауза и перемотка — тоже повод показать полосу: на паузе контролы видны.
+  els.video.addEventListener("pause", wakeStage);
+  els.video.addEventListener("seeked", wakeStage);
   drawSwitches();
   drawFontSize();
 

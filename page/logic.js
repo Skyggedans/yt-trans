@@ -415,11 +415,14 @@ export function cacheLabel(size) {
  * Заголовок строки ссылки. Метраж единственной копии — это и есть метраж
  * ролика, поэтому он стоит рядом с названием, а строка копии остаётся одна.
  * Копий несколько (плейлист) — метража здесь нет: одна цифра соврала бы про
- * остальные, и он остаётся при каждой копии.
+ * остальные, и он остаётся при каждой копии. Без копии метраж берётся у
+ * ссылки: демон запоминает его при добавлении.
  */
 export function linkTitle(link, copy = null) {
   const title = (link && (link.title || link.url)) || "";
-  const seconds = copy && typeof copy.duration === "number" ? copy.duration : 0;
+  const fromCopy = copy && typeof copy.duration === "number" ? copy.duration : 0;
+  const fromLink = link && typeof link.duration === "number" ? link.duration : 0;
+  const seconds = fromCopy > 0 ? fromCopy : fromLink;
 
   return seconds > 0 ? `${title} · ${formatTime(seconds)}` : title;
 }

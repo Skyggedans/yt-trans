@@ -450,7 +450,7 @@ async def list_links() -> dict:
 
 @app.post("/v1/links", dependencies=[Depends(auth)])
 async def add_link(payload: dict) -> dict:
-    """Сохранить ссылку. Название и вид берём у YouTube, а не у человека."""
+    """Сохранить ссылку. Название, вид и метраж берём у YouTube, а не у человека."""
     url = (payload or {}).get("url", "")
 
     if not isinstance(url, str) or not links.is_youtube_url(url):
@@ -461,8 +461,14 @@ async def add_link(payload: dict) -> dict:
     except YtDlpError as exc:
         raise HTTPException(status_code=502, detail=f"не удалось прочитать ссылку: {exc}") from exc
 
+    # Метраж есть только у одиночного ролика: у плейлиста одна цифра соврала бы
+    # про остальные. Сохраняем его здесь, чтобы список не ходил в YouTube ради
+    # длительности в строке.
+    videos = found.get("videos") or []
+    duration = videos[0].get("duration") if found["kind"] == "video" and videos else None
+
     try:
-        link = links.add(url, found["title"] or url, found["kind"])
+        link = links.add(url, found["title"] or url, found["kind"], duration=duration)
     except links.TooManyLinks as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

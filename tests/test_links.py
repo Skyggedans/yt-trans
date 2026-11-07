@@ -77,6 +77,29 @@ def test_adding_the_same_address_twice_keeps_one_record(tmp_path):
     assert [link.title for link in links.load(path)] == ["Ролик"]
 
 
+def test_a_link_keeps_the_length_it_saw(tmp_path):
+    # Метраж известен уже в момент добавления: сохранить его дешевле, чем ходить
+    # в YouTube при каждом показе списка ради цифры в строке.
+    path = tmp_path / "links.json"
+
+    links.add("https://youtu.be/abcdefghijk", "Ролик", "video", duration=960, path=path)
+
+    assert links.load(path)[0].duration == 960
+    assert links.load(path)[0].wire()["duration"] == 960
+
+
+def test_an_old_record_without_a_length_still_loads(tmp_path):
+    # Файл, записанный до появления метража, — не повод потерять ссылки.
+    path = tmp_path / "links.json"
+    path.write_text(
+        json.dumps({"links": [{"id": "abc", "url": "https://youtu.be/x", "title": "Ролик",
+                               "kind": "video"}]}),
+        encoding="utf-8",
+    )
+
+    assert links.load(path)[0].duration is None
+
+
 def test_removing_an_unknown_link_says_so(tmp_path):
     assert links.remove("nope", path=tmp_path / "links.json") is False
 
@@ -227,6 +250,37 @@ async def test_a_video_link_without_a_picture_says_so(client, manager, monkeypat
     listed = (await client.get("/v1/links")).json()["links"]
 
     assert listed[0]["state"] == "absent"
+
+
+async def test_a_video_link_remembers_its_length(client, manager, monkeypatch, tmp_path):
+    # Демон уже видел метраж при разборе ссылки — список должен получать его
+    # без нового похода в YouTube.
+    from helper.video import VideoStore
+
+    manager.videos = VideoStore(tmp_path)
+    probe_stub(monkeypatch)
+    await client.post("/v1/links", json={"url": "https://youtu.be/abcdefghijk"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert listed[0]["duration"] == 300
+
+
+async def test_a_playlist_has_no_length_of_its_own(client, manager, monkeypatch, tmp_path):
+    # У плейлиста нет одного метража: длина есть у каждого ролика внутри.
+    from helper.video import VideoStore
+
+    manager.videos = VideoStore(tmp_path)
+
+    def probe(url, timeout=60.0, *, cookies=None):
+        return {"kind": "playlist", "title": "Список", "videos": []}
+
+    monkeypatch.setattr("helper.app.probe_url", probe)
+    await client.post("/v1/links", json={"url": "https://youtube.com/playlist?list=PL123"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert listed[0]["duration"] is None
 
 
 async def test_a_playlist_has_no_picture_state_of_its_own(client, manager, monkeypatch, tmp_path):

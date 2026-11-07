@@ -430,6 +430,44 @@ def test_the_stage_bar_holds_both_buttons():
     assert re.search(r"#stage-bar \{[^}]*display: flex", css, re.S)
 
 
+def test_the_status_is_one_bulleted_line_in_the_top_bar():
+    # Статус висел поверх кадра отдельными строками и спорил с субтитрами.
+    # Теперь он в верхней полосе рядом с кнопками, а точки делят сообщения:
+    # «идёт подготовка», «что не так», «язык ролика» читаются как одно.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    bar = re.search(r'<div id="stage-bar">(.*?)</div>', html, re.S)
+
+    assert bar is not None
+    assert 'id="status"' in bar.group(1)
+
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    render = source[source.index("function render()"):source.index("// --- Слой субтитров")]
+
+    assert 'join(" • ")' in render
+    assert "replaceChildren" not in render
+
+
+def test_the_bar_and_the_title_hide_like_the_players_controls():
+    # Полоса со статусом и название гаснут через те же 2,5 секунды покоя, что и
+    # родные контролы плеера, и возвращаются от прикосновения. На паузе они
+    # остаются: контролы на паузе тоже не исчезают.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    assert "CONTROLS_IDLE_MS = 2500" in source
+    idle = source[source.index("function wakeStage"):source.index("function leaveStage")]
+    assert "paused" in idle
+    assert "setTimeout" in idle
+    assert 'classList.add("idle")' in idle
+    assert 'classList.remove("idle")' in idle
+    # Прикосновение, мышь и клавиша возвращают полосу: ждать её никто не станет.
+    assert "pointermove" in source
+    assert "pointerdown" in source
+    assert "keydown" in source
+    assert re.search(r"#stage\.idle #stage-bar", css)
+    assert re.search(r"#stage\.idle #title", css)
+
+
 def test_a_saved_video_plays_from_the_device():
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
 
