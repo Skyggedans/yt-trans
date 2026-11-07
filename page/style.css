@@ -182,6 +182,22 @@ input {
   color: var(--muted);
 }
 
+/* Готовность — тем же тихим голосом, что и тип: галочка отвечает на вопрос
+   «что можно смотреть сразу», не отнимая места у названия. */
+#links .state-mark,
+#links .state-word {
+  flex: none;
+  color: var(--muted);
+}
+
+#links .state-mark {
+  display: inline-flex;
+}
+
+#links .state-word {
+  font-size: 14px;
+}
+
 /* Корзина тише открывающей кнопки: она рядом, но не главная, и нажимают её
    реже — промах по ней не должен стоить ссылки. */
 #links .icon-only {

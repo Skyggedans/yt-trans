@@ -436,11 +436,20 @@ function linkCard(link) {
 
   const line = document.createElement("div");
   line.className = "link-line";
-  line.append(titledButton(
+  const openButton = titledButton(
     playlist ? "playlist" : "video",
     linkTitle(link, only),
     () => openCard(link),
-  ));
+  );
+  // Готовность картинки знает только демон и только про ролик: в сохранённом
+  // списке она могла устареть, а у плейлиста своей картинки нет.
+  const mark = playlist || !daemonAlive ? null : stateMark(link.state);
+
+  if (mark) {
+    openButton.append(mark);
+  }
+
+  line.append(openButton);
   line.append(iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(link)));
 
   // Шеврон — последняя кнопка заголовка: раскрытие не должно стоять между
@@ -557,11 +566,18 @@ function videoCard(video, link) {
 
   const line = document.createElement("div");
   line.className = "video-line";
-  line.append(titledButton(
+  const playButton = titledButton(
     "video",
     episodeLabel(video),
     () => play(video, { id: link.id, title: link.title }),
-  ));
+  );
+  const mark = stateMark(video.state);
+
+  if (mark) {
+    playButton.append(mark);
+  }
+
+  line.append(playButton);
 
   if (saved) {
     line.append(chevronButton(open, () => toggleCard(videoKey(video.videoId))));
@@ -854,24 +870,48 @@ async function addLink(event) {
 }
 
 // Пометка о картинке — у каждого ролика сразу, чтобы список отвечал на вопрос
-// «что можно смотреть мгновенно».
+// «что можно смотреть мгновенно». Готовая картинка — галочка: слово «готово»
+// повторялось бы в каждой строке и говорило бы ровно то же.
+const VIDEO_STATE_ICONS = { ready: "check" };
 const VIDEO_STATE_WORDS = {
-  ready: "готово",
   preparing: "готовится",
   error: "не скачалось",
 };
+
+/**
+ * Значок состояния после названия: галочка у готовой картинки, слово — у
+ * остальных. Готовность видно, но она не спорит с названием.
+ */
+function stateMark(stateName) {
+  if (VIDEO_STATE_ICONS[stateName]) {
+    const mark = document.createElement("span");
+    mark.className = "state-mark";
+    // Читалке с экрана галочка ничего не скажет, поэтому у неё есть имя.
+    mark.setAttribute("role", "img");
+    mark.setAttribute("aria-label", "готово");
+    mark.innerHTML = iconMarkup(VIDEO_STATE_ICONS[stateName]);
+
+    return mark;
+  }
+
+  const word = VIDEO_STATE_WORDS[stateName];
+
+  if (!word) {
+    return null;
+  }
+
+  const mark = document.createElement("span");
+  mark.className = "state-word";
+  mark.textContent = word;
+
+  return mark;
+}
 
 function episodeLabel(video) {
   const parts = [video.title || video.videoId];
 
   if (typeof video.duration === "number") {
     parts.push(formatTime(video.duration));
-  }
-
-  const word = VIDEO_STATE_WORDS[video.state];
-
-  if (word) {
-    parts.push(word);
   }
 
   return parts.join(" · ");
@@ -1994,6 +2034,13 @@ function leaveStage() {
   els.stage.hidden = true;
   els.home.hidden = false;
   render();
+
+  // Пока зритель был на сцене, демон мог докачать картинку. Вернувшись, список
+  // показывает свежую готовность, а не ту, что была при открытии приложения.
+  // Без демона спрашивать некого, и сообщение об этом важнее списка.
+  if (daemonAlive) {
+    loadLinks().catch(() => {});
+  }
 }
 
 // --- Запуск ---------------------------------------------------------------

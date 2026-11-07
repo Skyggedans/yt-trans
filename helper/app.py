@@ -428,7 +428,23 @@ async def probe_with_account(url: str, cookies: Path | None) -> dict:
 
 @app.get("/v1/links", dependencies=[Depends(auth)])
 async def list_links() -> dict:
-    return {"links": [link.wire() for link in links.load()]}
+    """Ссылки с диска; у ссылки на ролик — готовность его картинки.
+
+    Готовность считается по файлу в кэше, а id берётся из адреса: похода в
+    YouTube здесь нет, иначе список ждал бы сеть ради значка в каждой строке.
+    """
+    items = []
+
+    for link in links.load():
+        data = link.wire()
+        video_id = ytdlp.video_id_in(link.url) if link.kind == "video" else ""
+
+        if video_id:
+            data["state"] = manager.videos.status(video_id).state
+
+        items.append(data)
+
+    return {"links": items}
 
 
 @app.post("/v1/links", dependencies=[Depends(auth)])

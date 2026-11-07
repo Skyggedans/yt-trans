@@ -44,6 +44,29 @@ def test_anything_else_is_refused(url):
     assert not links.is_youtube_url(url)
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://youtu.be/abcdefghijk", "abcdefghijk"),
+        ("https://youtu.be/abcdefghijk?si=track", "abcdefghijk"),
+        ("https://www.youtube.com/watch?v=abcdefghijk&t=30", "abcdefghijk"),
+        ("https://m.youtube.com/watch?v=abcdefghijk", "abcdefghijk"),
+        ("https://music.youtube.com/watch?v=abcdefghijk", "abcdefghijk"),
+        ("https://www.youtube.com/shorts/abcdefghijk", "abcdefghijk"),
+        ("https://www.youtube.com/live/abcdefghijk", "abcdefghijk"),
+        ("https://www.youtube.com/embed/abcdefghijk", "abcdefghijk"),
+        ("https://youtube.com/playlist?list=PL123", ""),
+        ("https://youtu.be/", ""),
+        ("https://youtu.be/короткий", ""),
+        ("https://evil.example/watch?v=abcdefghijk", ""),
+    ],
+)
+def test_the_video_id_is_read_from_the_address_without_the_network(url, expected):
+    # Готовность картинки считается по id, а он уже есть в адресе: списку ссылок
+    # незачем ходить в YouTube ради значка.
+    assert ytdlp.video_id_in(url) == expected
+
+
 def test_adding_the_same_address_twice_keeps_one_record(tmp_path):
     path = tmp_path / "links.json"
 
@@ -177,6 +200,49 @@ async def test_an_unprepared_episode_says_so(client, manager, monkeypatch, tmp_p
     response = await client.get(f"/v1/links/{added.json()['link']['id']}/videos")
 
     assert response.json()["videos"][0]["state"] == "absent"
+
+
+async def test_a_video_link_says_its_picture_is_ready(client, manager, monkeypatch, tmp_path):
+    # Значок готовности нужен и верхней строке списка, а не только роликам
+    # внутри плейлиста: иначе про скачанный ролик приходится догадываться.
+    from helper.video import VideoStore
+
+    manager.videos = VideoStore(tmp_path)
+    (tmp_path / "abcdefghijk.mp4").write_bytes(b"mp4")
+    probe_stub(monkeypatch)
+    await client.post("/v1/links", json={"url": "https://youtu.be/abcdefghijk"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert listed[0]["state"] == "ready"
+
+
+async def test_a_video_link_without_a_picture_says_so(client, manager, monkeypatch, tmp_path):
+    from helper.video import VideoStore
+
+    manager.videos = VideoStore(tmp_path)
+    probe_stub(monkeypatch)
+    await client.post("/v1/links", json={"url": "https://youtu.be/abcdefghijk"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert listed[0]["state"] == "absent"
+
+
+async def test_a_playlist_has_no_picture_state_of_its_own(client, manager, monkeypatch, tmp_path):
+    from helper.video import VideoStore
+
+    manager.videos = VideoStore(tmp_path)
+
+    def probe(url, timeout=60.0, *, cookies=None):
+        return {"kind": "playlist", "title": "Список", "videos": []}
+
+    monkeypatch.setattr("helper.app.probe_url", probe)
+    await client.post("/v1/links", json={"url": "https://youtube.com/playlist?list=PL123"})
+
+    listed = (await client.get("/v1/links")).json()["links"]
+
+    assert "state" not in listed[0]
 
 
 async def test_an_unknown_link_is_a_404(client):

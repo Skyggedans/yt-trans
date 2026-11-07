@@ -209,6 +209,40 @@ def test_every_header_shows_what_kind_of_thing_it_is():
     assert re.search(r"#links \.title-icon \{[^}]*display: inline-flex", css, re.S)
 
 
+def test_a_ready_picture_is_a_check_and_the_top_row_shows_it_too():
+    # «Готово» словом повторялось в каждой строке списка, а галочка говорит то
+    # же самое и не занимает места. Верхняя строка ролика раньше не говорила о
+    # готовности вовсе: её знали только ролики внутри раскрытого плейлиста.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    assert 'ready: "check"' in source
+    words_at = source.index("const VIDEO_STATE_WORDS")
+    words = source[words_at:source.index("};", words_at)]
+    assert "готово" not in words
+
+    mark = source[source.index("function stateMark"):source.index("function episodeLabel")]
+    assert "iconMarkup" in mark
+    assert "VIDEO_STATE_ICONS" in mark
+
+    card = source[source.index("function linkCard"):source.index("function copyLine")]
+    assert "stateMark(link.state)" in card
+
+    video = source[source.index("function videoCard"):source.index("function chevronButton")]
+    assert "stateMark(video.state)" in video
+
+    assert re.search(r"#links \.state-mark \{[^}]*display: inline-flex", css, re.S)
+
+
+def test_the_list_rereads_the_picture_state_on_the_way_back():
+    # Картинка готовится, пока зритель на сцене: вернувшись, список должен
+    # показать свежую готовность, а не ту, что была при открытии приложения.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function leaveStage"):source.index("async function registerWorker")]
+
+    assert "loadLinks(" in body
+
+
 def test_cards_start_collapsed_every_time():
     # Всё по умолчанию свёрнуто: раскрытие — действие на этот просмотр, а не
     # настройка устройства.

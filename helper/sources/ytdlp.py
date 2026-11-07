@@ -468,6 +468,40 @@ def _parse_json3(raw: str) -> list[dict]:
     return [c for c in cues if c["end"] > c["start"]]
 
 
+_VIDEO_IN_PATH = {"shorts", "embed", "live", "v"}
+
+
+def video_id_in(url: str) -> str:
+    """id ролика из адреса YouTube — без похода в сеть.
+
+    Списку ссылок готовность картинки нужна сразу, а она считается по id:
+    у ссылки на ролик он уже есть в самом адресе, и ждать yt-dlp незачем.
+    Пустая строка — адрес не про один ролик (плейлист, чужой хост, мусор).
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+
+    host = (parts.hostname or "").lower()
+
+    if host == "youtu.be":
+        candidate = (parts.path or "").strip("/").split("/")[0]
+    elif host == "youtube.com" or host.endswith(".youtube.com"):
+        path = (parts.path or "").rstrip("/")
+
+        if path == "/watch":
+            candidate = (parse_qs(parts.query).get("v") or [""])[0]
+        else:
+            bits = [bit for bit in path.split("/") if bit]
+            is_video_path = len(bits) > 1 and bits[0] in _VIDEO_IN_PATH
+            candidate = bits[1] if is_video_path else ""
+    else:
+        return ""
+
+    return candidate if VIDEO_ID.match(candidate) else ""
+
+
 def _media_summary(url: str) -> str:
     """Что из подписанной ссылки нужно для разбора отказа — без самой подписи.
 
