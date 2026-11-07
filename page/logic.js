@@ -234,17 +234,36 @@ export function flipSwitch(switches, name) {
 
 // --- Поиск по сохранённым ссылкам -------------------------------------
 
-/** Ссылки, в названии или адресе которых есть кусок запроса. */
-export function filterLinks(items, query) {
+/**
+ * Есть ли запрос в строке. Пустой запрос совпадает со всем: поле поиска,
+ * которое ничего не ищет, не должно прятать список.
+ */
+export function matchesQuery(text, query) {
   const needle = String(query || "").trim().toLocaleLowerCase();
+
+  if (!needle) {
+    return true;
+  }
+
+  return String(text || "").toLocaleLowerCase().includes(needle);
+}
+
+/**
+ * Ссылки, где запрос есть в названии плейлиста, адресе или в имени ролика.
+ * Имена роликов отдаёт videosOf: у плейлиста их узнают у демона, у копии —
+ * из её же записи на устройстве.
+ */
+export function filterLinks(items, query, videosOf = () => []) {
+  const needle = String(query || "").trim();
 
   if (!needle) {
     return items;
   }
 
   return items.filter((link) => (
-    String(link.title || "").toLocaleLowerCase().includes(needle)
-    || String(link.url || "").toLocaleLowerCase().includes(needle)
+    matchesQuery(link.title, needle)
+    || matchesQuery(link.url, needle)
+    || (videosOf(link) || []).some((video) => matchesQuery(video.title, needle))
   ));
 }
 
@@ -403,6 +422,25 @@ export function linkTitle(link, copy = null) {
   const seconds = copy && typeof copy.duration === "number" ? copy.duration : 0;
 
   return seconds > 0 ? `${title} · ${formatTime(seconds)}` : title;
+}
+
+// --- Раскрытые карточки списка ------------------------------------------
+//
+// Ключ карточки — «link:<id>» или «video:<id>». Раскрытие живёт только до
+// перезагрузки: список открывается свёрнутым, а карточку раскрывают пальцем.
+
+/** Раскрыть или свернуть одну карточку, не трогая соседние. */
+export function toggleExpanded(keys, key) {
+  const next = Array.isArray(keys) ? [...keys] : [];
+  const at = next.indexOf(key);
+
+  if (at >= 0) {
+    next.splice(at, 1);
+  } else {
+    next.push(key);
+  }
+
+  return next;
 }
 
 /**

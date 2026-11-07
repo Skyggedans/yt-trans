@@ -1,13 +1,12 @@
-// Проводка страницы планшета: токен, сохранённые ссылки, видео с демона, сокет
+// Проводка страницы планшета: сохранённые ссылки, видео с демона, сокет
 // и слой субтитров. Чистая логика — в logic.js, здесь только DOM и сеть.
 
 import {
   activeCueIndex, cacheLabel, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
-  languageText, linkTitle, parsePositions, pendingAt, positionFor, readFontSize, readSwitches,
-  rememberPosition,
-  sharedUrl, SPARE_BYTES, copyState, copyVerdict, formatBytes, mergeCues, percent,
-  playSource,
-  stageText, unwatchMessage, visibleLines, watchMessages,
+  languageText, linkTitle, matchesQuery, parsePositions, pendingAt, positionFor, readFontSize,
+  readSwitches, rememberPosition, sharedUrl, SPARE_BYTES, copyState, copyVerdict, formatBytes,
+  mergeCues, percent, playSource, toggleExpanded, stageText, unwatchMessage, visibleLines,
+  watchMessages,
 } from "./logic.js";
 
 import {
@@ -15,7 +14,6 @@ import {
   openDb, putMeta, putVideo, readJson,
 } from "./cache.js";
 
-const TOKEN_KEY = "yt-trans-token";
 const CLIENT_KEY = "yt-trans-client";
 const POSITIONS_KEY = "yt-trans-positions";
 const SWITCHES_KEY = "yt-trans-switches";
@@ -29,19 +27,12 @@ const WORKER_KEY = "yt-trans-no-worker";
 // Разметка не меняется за время жизни страницы, поэтому каждый элемент ищется
 // один раз: в кадровом цикле слоя обращение к DOM не должно стоить поиска.
 const els = {
-  setup: document.getElementById("setup"),
-  setupMessage: document.getElementById("setup-message"),
-  tokenInput: document.getElementById("token-input"),
-  tokenSave: document.getElementById("token-save"),
   app: document.getElementById("app"),
   home: document.getElementById("home"),
   links: document.getElementById("links"),
   linksFilter: document.getElementById("links-filter"),
   linkForm: document.getElementById("link-form"),
   linkUrl: document.getElementById("link-url"),
-  episodes: document.getElementById("episodes"),
-  episodesTitle: document.getElementById("episodes-title"),
-  episodeList: document.getElementById("episode-list"),
   stage: document.getElementById("stage"),
   video: document.getElementById("video"),
   overlay: document.getElementById("overlay"),
@@ -62,6 +53,7 @@ const ICONS = {
   download: '<path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14"/>',
   check: '<path d="M4 12.5l5 5.5L20 6.5"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
 };
 
 function iconMarkup(name) {
@@ -73,6 +65,7 @@ function iconMarkup(name) {
 const ICON_DOWNLOAD = iconMarkup("download");
 const ICON_CHECK = iconMarkup("check");
 const ICON_TRASH = iconMarkup("trash");
+const ICON_CHEVRON = iconMarkup("chevron");
 
 const state = {
   videoId: null,
@@ -97,7 +90,6 @@ const state = {
 // отдают плотным списком, отсортированным по времени.
 const cuesByIndex = new Map();
 
-let token = "";
 let socket = null;
 let videoTimer = null;
 let layer = null;
@@ -109,8 +101,17 @@ let positions = parsePositions(store(POSITIONS_KEY));
 // ходить на сервер за тем же списком.
 let knownLinks = [];
 let linksQuery = "";
-// Открытая ссылка: перерисовать её эпизоды можно и не спрашивая демона заново.
-let currentEpisodes = null;
+// Раскрытые карточки: «link:<id>» у ссылки и «video:<id>» у ролика, под которым
+// лежит копия. Всё по умолчанию свёрнуто, а раскрытие живёт до перезагрузки:
+// это действие на этот просмотр, а не настройка устройства.
+let expandedKeys = [];
+// Карточки, которые поиск раскрыл сам, а зритель свернул обратно. Живёт до
+// смены запроса: иначе шеврон на найденной карточке ничего бы не делал.
+let searchClosed = new Set();
+// Ролики плейлистов: спрашиваются у демона при раскрытии и живут до перезагрузки.
+// Ошибка запроса тоже запоминается — иначе карточка молчала бы о ней.
+const linkVideos = new Map();
+const loadingVideos = new Set();
 // Какие строки показывать — тоже своё на устройство: планшет в другой комнате
 // не должен менять то, что настроено на компьютере.
 let switches = readSwitches(store(SWITCHES_KEY));
@@ -176,29 +177,22 @@ function makeClientId() {
   return store(CLIENT_KEY, fresh) || fresh;
 }
 
-/** Запрос к демону с токеном установки. 401 — значит токен не тот, и это видно. */
+/** Запрос к демону. Ключа демон не спрашивает: пускает по Origin. */
 async function api(path, options = {}) {
-  const headers = { ...(options.headers || {}), Authorization: `Bearer ${token}` };
+  const headers = { ...(options.headers || {}) };
 
   if (options.body) {
     headers["Content-Type"] = "application/json";
   }
 
   const response = await fetch(path, { ...options, headers }).catch((error) => {
-    // Запрос не дошёл вовсе — демона нет. 401 ниже — наоборот, живой демон
-    // с чужим токеном, и офлайн тут ни при чём.
+    // Запрос не дошёл вовсе — демона нет.
     daemonAlive = false;
 
     throw error;
   });
 
   daemonAlive = true;
-
-  if (response.status === 401) {
-    showSetup("токен не подошёл");
-
-    throw new Error("токен не подошёл");
-  }
 
   let data = {};
 
@@ -221,31 +215,6 @@ async function api(path, options = {}) {
   }
 
   return data;
-}
-
-// --- Экран токена ---------------------------------------------------------
-
-function showSetup(message = "") {
-  els.setupMessage.textContent = message;
-  els.setup.hidden = false;
-  els.app.hidden = true;
-}
-
-function saveToken() {
-  const value = els.tokenInput.value.trim();
-
-  if (!value) {
-    els.setupMessage.textContent = "нужен токен";
-
-    return;
-  }
-
-  token = value;
-  store(TOKEN_KEY, value);
-  els.tokenInput.value = "";
-  els.setup.hidden = true;
-  els.app.hidden = false;
-  start();
 }
 
 // --- Дом: сохранённые ссылки и эпизоды -----------------------------------
@@ -324,6 +293,21 @@ function iconButton(markup, label, onClick) {
   return node;
 }
 
+/**
+ * Имена роликов, известные без сети: прочитанный плейлист и копии на
+ * устройстве. Поиск идёт и по ним — название плейлиста не говорит, что внутри.
+ */
+function videosFor(link) {
+  const known = linkVideos.get(link.id);
+  const list = known && known.videos ? known.videos : [];
+  const seen = new Set(list.map((video) => video.videoId));
+  const extra = savedForLink(link.id)
+    .filter((record) => !seen.has(record.videoId))
+    .map((record) => ({ videoId: record.videoId, title: record.title }));
+
+  return [...list, ...extra];
+}
+
 function drawLinks(items, message) {
   knownLinks = items;
   els.links.replaceChildren();
@@ -356,21 +340,61 @@ function drawLinks(items, message) {
     return;
   }
 
-  const visible = filterLinks(items, linksQuery);
+  const visible = filterLinks(items, linksQuery, videosFor);
+  // Роликам плейлиста узнать имена неоткуда, пока их не прочитали: на время
+  // поиска спрашиваем, иначе совпадение внутри плейлиста так и осталось бы
+  // ненайденным. Ответ приходит один раз — дальше имя уже в памяти страницы.
+  const searching = linksQuery.trim() !== "";
 
   if (!visible.length) {
-    els.links.append(row("ничего не нашлось", ["empty"]));
+    // Плейлист без совпадения по названию уже отфильтрован, и ролики ещё
+    // читаются: «ничего не нашлось» здесь было бы неправдой.
+    const pending = searching && daemonAlive && items.some((link) => (
+      link.kind === "playlist" && (loadingVideos.has(link.id) || !linkVideos.has(link.id))
+    ));
+
+    els.links.append(row(pending ? "ищу в роликах…" : "ничего не нашлось", ["empty"]));
   }
 
   for (const link of visible) {
     els.links.append(linkCard(link));
   }
+
+  // Обход по всем ссылкам, а не по видимым: иначе поиск по имени ролика
+  // отбросил бы плейлист раньше, чем узнал его ролики.
+  for (const link of items) {
+    if (link.kind !== "playlist") {
+      continue;
+    }
+
+    if (expandedKeys.includes(linkKey(link.id)) || searching) {
+      // Запрос после отрисовки: loadVideos сам перерисует список, и звать его
+      // прямо из обхода значило бы вкладывать отрисовку в отрисовку.
+      queueMicrotask(() => loadVideos(link));
+    }
+  }
 }
 
 /**
- * Одна ссылка — одна карточка: название, под ним копия, если она есть.
- * Отдельными плашками они читались как два разных пункта списка, и было
- * непонятно, что нижняя строка относится к строке выше.
+ * Раскрыта ли карточка самим поиском: совпал не её заголовок, а имя ролика.
+ * Такую карточку шеврон закрывает, не трогая раскрытий, сделанных зрителем.
+ */
+function openedBySearch(link) {
+  const key = linkKey(link.id);
+
+  if (expandedKeys.includes(key) || searchClosed.has(key) || linksQuery.trim() === "") {
+    return false;
+  }
+
+  const byTitle = matchesQuery(link.title, linksQuery) || matchesQuery(link.url, linksQuery);
+
+  return !byTitle && videosFor(link).some((video) => matchesQuery(video.title, linksQuery));
+}
+
+/**
+ * Одна ссылка — одна карточка: название, под ним дети. У плейлиста дети —
+ * ролики, у ролика — его копия. Отдельными плашками они читались как разные
+ * пункты списка, и было непонятно, что нижняя строка относится к строке выше.
  */
 function linkCard(link) {
   const item = document.createElement("li");
@@ -379,21 +403,58 @@ function linkCard(link) {
   // Копии этой ссылки живут под ней и при живом демоне: иначе их нельзя было
   // бы ни увидеть, ни удалить, пока компьютер работает.
   const saved = savedForLink(link.id);
+  const playlist = link.kind === "playlist";
+  // Совпадение по названию ссылки видно в самом заголовке, и раскрывать нечего.
+  // Совпадение по имени ролика — наоборот: без раскрытия найденное осталось бы
+  // спрятанным под свёрнутой строкой.
+  const byTitle = matchesQuery(link.title, linksQuery) || matchesQuery(link.url, linksQuery);
+  const key = linkKey(link.id);
+  const searchOpened = openedBySearch(link);
+  const open = expandedKeys.includes(key) || searchOpened;
   // Метраж переезжает в заголовок, только если копия одна: у плейлиста за
   // одной ссылкой их много, и одна цифра соврала бы про остальные.
-  const only = saved.length === 1 ? saved[0] : null;
+  const only = !playlist && saved.length === 1 ? saved[0] : null;
 
   const line = document.createElement("div");
   line.className = "link-line";
-  line.append(
-    button(linkTitle(link, only), () => openLink(link.id)),
-    iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(link.id)),
-  );
+  line.append(button(linkTitle(link, only), () => openCard(link)));
+  line.append(iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(link)));
+
+  // Шеврон — последняя кнопка заголовка: раскрытие не должно стоять между
+  // пальцем и удалением, иначе по нему будут промахиваться в обе стороны.
+  if (playlist || saved.length) {
+    line.append(chevronButton(open, () => toggleCard(
+      key,
+      playlist ? () => loadVideos(link) : null,
+      searchOpened,
+    )));
+  }
+
   item.append(line);
 
-  for (const record of saved) {
-    item.append(copyLine(record, only ? false : true));
+  if (!open) {
+    return item;
   }
+
+  if (playlist) {
+    item.append(playlistChildren(link, byTitle));
+
+    return item;
+  }
+
+  const kids = document.createElement("div");
+  kids.className = "children";
+  // При поиске под карточкой остаются только совпавшие копии; совпадение по
+  // названию ссылки показывает их все.
+  const records = byTitle
+    ? saved
+    : saved.filter((record) => matchesQuery(record.title, linksQuery));
+
+  for (const record of records) {
+    kids.append(copyLine(record, !only));
+  }
+
+  item.append(kids);
 
   return item;
 }
@@ -407,10 +468,168 @@ function copyLine(record, withDuration) {
       withDuration ? savedLabel(record) : cacheLabel(record.size),
       () => play(record, { id: record.linkId, title: record.linkTitle }),
     ),
-    iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record.videoId)),
+    iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record)),
   );
 
   return line;
+}
+
+/**
+ * Дети плейлиста. Ролики приходят от демона: без них раскрытая карточка всё
+ * равно должна показать то, что уже лежит на устройстве, — копии.
+ */
+function playlistChildren(link, all) {
+  const kids = document.createElement("div");
+  kids.className = "children";
+  const known = linkVideos.get(link.id);
+
+  if (known && known.error) {
+    kids.append(cardNote(`ролики плейлиста не прочитались: ${known.error}`));
+  } else if (known) {
+    // При поиске по имени ролика остаются только совпавшие: остальные к
+    // запросу не относятся. Совпадение по названию плейлиста — все ролики.
+    const videos = all
+      ? known.videos
+      : known.videos.filter((video) => matchesQuery(video.title, linksQuery));
+
+    if (!videos.length) {
+      kids.append(cardNote(all ? "в ссылке нет роликов" : "совпадений в плейлисте нет"));
+    }
+
+    for (const video of videos) {
+      kids.append(videoCard(video, link));
+    }
+
+    return kids;
+  } else if (loadingVideos.has(link.id)) {
+    kids.append(cardNote("читаю ролики…"));
+
+    return kids;
+  } else if (!daemonAlive) {
+    kids.append(cardNote("демона нет — роликов плейлиста нет на устройстве"));
+  }
+
+  // Ролики плейлиста могут быть неизвестны и при живом демоне: тогда под
+  // карточкой остаются хотя бы копии, которые уже есть.
+  if (!known) {
+    const records = all
+      ? savedForLink(link.id)
+      : savedForLink(link.id).filter((item) => matchesQuery(item.title, linksQuery));
+
+    for (const record of records) {
+      kids.append(copyLine(record, true));
+    }
+  }
+
+  return kids;
+}
+
+/** Ролик внутри плейлиста: копия под ним — его ребёнок. */
+function videoCard(video, link) {
+  const saved = savedVideos.get(video.videoId);
+  const open = expandedKeys.includes(videoKey(video.videoId));
+
+  const item = document.createElement("div");
+  item.className = "card-row";
+
+  const line = document.createElement("div");
+  line.className = "video-line";
+  line.append(button(
+    episodeLabel(video),
+    () => play(video, { id: link.id, title: link.title }),
+  ));
+
+  if (saved) {
+    line.append(chevronButton(open, () => toggleCard(videoKey(video.videoId))));
+  }
+
+  item.append(line);
+
+  if (saved && open) {
+    const kids = document.createElement("div");
+    kids.className = "children";
+    // Метраж уже стоит в подписи ролика: копии остаётся сказать, где она.
+    kids.append(copyLine(saved, false));
+    item.append(kids);
+  }
+
+  return item;
+}
+
+/** Шеврон конца заголовка: раскрывает и сворачивает детей карточки. */
+function chevronButton(open, onClick) {
+  const node = iconButton(ICON_CHEVRON, open ? "свернуть" : "развернуть", onClick);
+  node.classList.add("chevron");
+  node.setAttribute("aria-expanded", open ? "true" : "false");
+
+  return node;
+}
+
+const linkKey = (id) => `link:${id}`;
+const videoKey = (id) => `video:${id}`;
+
+/**
+ * Раскрыть или свернуть карточку. Состояние переживает перерисовку, но не
+ * перезагрузку: иначе каждая новая копия схлопывала бы список под пальцем.
+ * `bySearch` — карточку раскрыл поиск, а не зритель: её шеврон сворачивает
+ * найденное, не трогая раскрытие, сделанное раньше.
+ */
+function toggleCard(key, onOpen = null, bySearch = false) {
+  if (bySearch && !expandedKeys.includes(key)) {
+    searchClosed.add(key);
+  } else {
+    searchClosed.delete(key);
+    expandedKeys = toggleExpanded(expandedKeys, key);
+  }
+
+  drawLinks(knownLinks, "");
+
+  if (onOpen && expandedKeys.includes(key)) {
+    onOpen();
+  }
+}
+
+/** Заголовок карточки: ролик играет сразу, плейлист раскрывается. */
+function openCard(link) {
+  if (link.kind === "playlist") {
+    toggleCard(linkKey(link.id), () => loadVideos(link), openedBySearch(link));
+
+    return;
+  }
+
+  openLink(link.id);
+}
+
+/**
+ * Ролики плейлиста спрашиваются при раскрытии, а не при каждой отрисовке:
+ * за ответом демон ходит на YouTube, и список не должен этого делать зря.
+ */
+async function loadVideos(link) {
+  if (linkVideos.has(link.id) || loadingVideos.has(link.id) || !daemonAlive) {
+    return;
+  }
+
+  loadingVideos.add(link.id);
+  drawLinks(knownLinks, "");
+
+  try {
+    const data = await api(`/v1/links/${encodeURIComponent(link.id)}/videos`);
+    linkVideos.set(link.id, { videos: Array.isArray(data.videos) ? data.videos : [] });
+  } catch (error) {
+    linkVideos.set(link.id, { error: daemonAlive ? error.message : "демона нет" });
+  } finally {
+    loadingVideos.delete(link.id);
+    drawLinks(knownLinks, "");
+  }
+}
+
+/** Строка-подпись внутри карточки: div, а не li — вложенного списка здесь нет. */
+function cardNote(text) {
+  const node = document.createElement("div");
+  node.className = "empty";
+  node.textContent = text;
+
+  return node;
 }
 
 async function loadLinks() {
@@ -496,8 +715,8 @@ function savedLabel(record) {
   return parts.join(" · ");
 }
 
-/** Убрать копию с устройства: место на планшете кончается, и это должно быть можно. */
-async function dropCopy(videoId) {
+/** Забыть копию: база, список и хвост титров, который ещё дописывался. */
+async function forgetCopy(videoId) {
   if (follow && follow.videoId === videoId) {
     clearTimeout(follow.timer);
     follow = null;
@@ -508,14 +727,75 @@ async function dropCopy(videoId) {
   }
 
   savedVideos.delete(videoId);
+}
+
+async function dropLink(link) {
+  const saved = savedForLink(link.id);
+  const title = link.title || link.url;
+  const question = saved.length
+    ? `Удалить «${title}» вместе с сохранёнными копиями (${saved.length})?`
+    : `Удалить «${title}»?`;
+
+  if (!confirm(question)) {
+    return;
+  }
+
+  if (!daemonAlive) {
+    drawLinks(knownLinks, "демона нет — ссылку удалить нельзя");
+
+    return;
+  }
+
+  try {
+    await api(`/v1/links/${encodeURIComponent(link.id)}`, { method: "DELETE" });
+  } catch (error) {
+    if (!daemonAlive) {
+      drawLinks(knownLinks, "демона нет — ссылку удалить нельзя");
+
+      return;
+    }
+
+    drawLinks(knownLinks, `не удалось удалить: ${error.message}`);
+
+    return;
+  }
+
+  // Ссылка ушла — уходит и всё, что лежало под ней. Иначе ролики плейлиста
+  // остались бы на устройстве без строки, из которой их видно.
+  linkVideos.delete(link.id);
+
+  for (const record of saved) {
+    await forgetCopy(record.videoId);
+  }
+
+  expandedKeys = expandedKeys.filter((key) => key !== linkKey(link.id));
+
+  // Список правится на месте: если демон умер сразу после удаления, запрос за
+  // списком вернул бы удалённую ссылку обратно.
+  const left = knownLinks.filter((item) => item.id !== link.id);
+
+  if (db) {
+    await putMeta(db, "links", left).catch(() => {});
+  }
+
+  drawCacheButton();
+  drawLinks(left, "");
+}
+
+/** Убрать копию с устройства: место на планшете кончается, и это должно быть можно. */
+async function dropCopy(record) {
+  const title = record.title || record.videoId;
+
+  // Копия — это сотни мегабайт, которые потом придётся качать заново: одно
+  // неверное касание не должно их уносить.
+  if (!confirm(`Удалить копию «${title}» с устройства?`)) {
+    return;
+  }
+
+  await forgetCopy(record.videoId);
   // Переключатель на сцене живёт своей надписью и без этого продолжал бы
   // показывать размер удалённой копии.
   drawCacheButton();
-
-  if (currentEpisodes) {
-    drawEpisodes(currentEpisodes.title, currentEpisodes.videos, currentEpisodes.linkId);
-  }
-
   drawLinks(knownLinks, "");
 }
 
@@ -549,27 +829,6 @@ async function addLink(event) {
   }
 }
 
-async function dropLink(id) {
-  if (!daemonAlive) {
-    drawLinks(knownLinks, "демона нет — ссылку удалить нельзя");
-
-    return;
-  }
-
-  try {
-    await api(`/v1/links/${encodeURIComponent(id)}`, { method: "DELETE" });
-    await loadLinks();
-  } catch (error) {
-    if (!daemonAlive) {
-      drawLinks(knownLinks, "демона нет — ссылку удалить нельзя");
-
-      return;
-    }
-
-    drawLinks(knownLinks, `не удалось удалить: ${error.message}`);
-  }
-}
-
 // Пометка о картинке — у каждого ролика сразу, чтобы список отвечал на вопрос
 // «что можно смотреть мгновенно».
 const VIDEO_STATE_WORDS = {
@@ -596,8 +855,8 @@ function episodeLabel(video) {
 
 async function openLink(id) {
   if (!daemonAlive) {
-    // Список эпизодов пришёл бы от демона, а его нет: зато ролики этой
-    // ссылки могли уже лежать на устройстве.
+    // Ролики идут от демона, а его нет: зато копии этой ссылки могли уже
+    // лежать на устройстве, и список показывает их.
     const saved = savedForLink(id);
 
     drawLinks(knownLinks, saved.length
@@ -626,44 +885,24 @@ async function openLink(id) {
     return;
   }
 
+  const videos = Array.isArray(data.videos) ? data.videos : [];
+  linkVideos.set(id, { videos });
+
   // Одиночный ролик — это не список, а сразу просмотр: кнопка с одним пунктом
   // только заставляла бы нажимать дважды.
-  if ((data.videos || []).length === 1) {
-    play(data.videos[0], { id, title: data.title || "" });
+  if (videos.length === 1) {
+    play(videos[0], { id, title: data.title || "" });
 
     return;
   }
 
-  drawEpisodes(data.title || "", data.videos || [], id);
-}
-
-function drawEpisodes(title, videos, linkId = "") {
-  currentEpisodes = { title, videos, linkId };
-
-  els.episodesTitle.textContent = title;
-  els.episodeList.replaceChildren();
-
-  if (!videos.length) {
-    els.episodeList.append(row("в ссылке нет роликов", ["empty"]));
+  // Похоже, под «роликом» оказался плейлист: раскрываем его карточку, а не
+  // открываем отдельный экран — список и есть дерево.
+  if (!expandedKeys.includes(linkKey(id))) {
+    expandedKeys = toggleExpanded(expandedKeys, linkKey(id));
   }
 
-  for (const video of videos) {
-    const saved = savedVideos.get(video.videoId);
-    const item = document.createElement("li");
-
-    item.append(button(
-      saved ? `${episodeLabel(video)} · ${cacheLabel(saved.size)}` : episodeLabel(video),
-      () => play(video, { id: linkId, title }),
-    ));
-
-    if (saved) {
-      item.append(button("удалить", () => dropCopy(video.videoId)));
-    }
-
-    els.episodeList.append(item);
-  }
-
-  els.episodes.hidden = false;
+  drawLinks(knownLinks, "");
 }
 
 // --- Сцена ----------------------------------------------------------------
@@ -784,7 +1023,7 @@ async function prepareVideo() {
 
       const resume = positionFor(positions, videoId);
 
-      els.video.src = `/v1/videos/${encodeURIComponent(videoId)}/file?token=${encodeURIComponent(token)}`;
+      els.video.src = `/v1/videos/${encodeURIComponent(videoId)}/file`;
       els.video.addEventListener("loadedmetadata", () => {
         if (resume > 0) {
           els.video.currentTime = resume;
@@ -921,8 +1160,7 @@ function switchToCopy(record, { resume = 0, autoplay = false } = {}) {
 // и пишем не чаще раза в пять секунд — к концу перевода в базе всё равно всё.
 const FOLLOW_MS = 5000;
 
-const filePath = (videoId) =>
-  `/v1/videos/${encodeURIComponent(videoId)}/file?token=${encodeURIComponent(token)}`;
+const filePath = (videoId) => `/v1/videos/${encodeURIComponent(videoId)}/file`;
 
 /** Размер готового mp4: HEAD не отдаёт тело, но Content-Length у него есть. */
 async function fileSize(path) {
@@ -1272,10 +1510,6 @@ function followSoon() {
 // --- Сокет ----------------------------------------------------------------
 
 function connectSocket() {
-  if (!token) {
-    return;
-  }
-
   if (socket) {
     try {
       socket.close();
@@ -1285,7 +1519,7 @@ function connectSocket() {
   }
 
   const scheme = location.protocol === "https:" ? "wss" : "ws";
-  const url = `${scheme}://${location.host}/v1/ws?token=${encodeURIComponent(token)}`;
+  const url = `${scheme}://${location.host}/v1/ws`;
   const opening = new WebSocket(url);
 
   socket = opening;
@@ -1775,12 +2009,11 @@ function workerNote() {
 }
 
 async function boot() {
-  token = store(TOKEN_KEY);
-
-  els.tokenSave.addEventListener("click", saveToken);
   els.linkForm.addEventListener("submit", addLink);
   els.linksFilter.addEventListener("input", () => {
     linksQuery = els.linksFilter.value;
+    // Новый запрос — новые совпадения: прежнее «свернул» к ним не относится.
+    searchClosed = new Set();
     drawLinks(knownLinks, "");
   });
   els.toggleTarget.addEventListener("click", () => flipLine("target"));
@@ -1805,17 +2038,9 @@ async function boot() {
   startClock();
   reportPlayhead();
 
-  // Экран решается по токену и сразу. Раздел токена виден в разметке по
-  // умолчанию, а регистрация воркера без сети может не ответить вовсе: дожидаясь
-  // её, страница оставляла зрителя перед экраном ввода давно сохранённого
-  // токена, и офлайн оттуда было не выбраться.
-  if (token) {
-    els.setup.hidden = true;
-    els.app.hidden = false;
-    start();
-  } else {
-    showSetup();
-  }
+  // Приложение видно сразу: ключа у демона нет, спрашивать нечего.
+  els.app.hidden = false;
+  start();
 
   // Регистрация идёт следом и не задерживает ни экран, ни сохранённое.
   await registerWorker();

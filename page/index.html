@@ -16,17 +16,7 @@
 </head>
 <body>
 
-<section id="setup">
-  <h1>yt-trans</h1>
-  <p>Субтитры делает демон на компьютере. Вставь сюда токен установки —
-    он лежит в <code>~/.config/yt-trans/token</code> на том компьютере.</p>
-  <input id="token-input" type="password" autocomplete="off" autocapitalize="off"
-    spellcheck="false" placeholder="токен">
-  <button id="token-save" type="button">Сохранить</button>
-  <p id="setup-message" role="status"></p>
-</section>
-
-<div id="app" hidden>
+<div id="app">
 
   <section id="home">
     <header>
@@ -49,11 +39,6 @@
          на экране, сколько бы ссылок ни накопилось. -->
     <div id="library">
       <ul id="links"></ul>
-
-      <section id="episodes" hidden>
-        <h2 id="episodes-title"></h2>
-        <ul id="episode-list"></ul>
-      </section>
     </div>
   </section>
 

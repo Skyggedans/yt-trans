@@ -72,31 +72,6 @@ input {
   min-width: 0;
 }
 
-/* --- Экран токена, если страница открыта впервые ------------------------- */
-
-#setup {
-  max-width: 560px;
-  margin: 0 auto;
-  padding: 24px 16px 40px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-#setup p {
-  margin: 0;
-  color: var(--muted);
-}
-
-#setup input,
-#setup button {
-  width: 100%;
-}
-
-#setup[hidden] {
-  display: none;
-}
-
 /* --- Дом: сохранённые ссылки и эпизоды ----------------------------------- */
 
 #home {
@@ -142,8 +117,7 @@ input {
   width: 100%;
 }
 
-#links,
-#episode-list {
+#links {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -152,15 +126,13 @@ input {
   gap: 8px;
 }
 
-#links li,
-#episode-list li {
+#links li {
   display: flex;
   gap: 8px;
 }
 
-/* Ссылка и её копия — одна карточка: заголовок сверху, строка копии под ним
-   через тонкую черту. Отдельными плашками они читались как два разных пункта
-   списка, и было непонятно, что копия относится к строке выше. */
+/* Ссылка и всё, что под ней лежит, — одна карточка. Дети стоят с отступом,
+   и по нему видно, что ролик лежит внутри плейлиста, а копия — внутри ролика. */
 #links li.card {
   flex-direction: column;
   gap: 0;
@@ -171,19 +143,16 @@ input {
 }
 
 #links .link-line,
+#links .video-line,
 #links .saved-line {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-/* Черта отделяет копию от ссылки, не разрывая карточку на две. */
-#links .saved-line {
-  border-top: 1px solid #26262c;
-}
-
 /* Внутри карточки кнопки не рисуют своих рамок и фона: рамка одна — у карточки. */
 #links .link-line button,
+#links .video-line button,
 #links .saved-line button {
   background: transparent;
   border: 0;
@@ -191,31 +160,50 @@ input {
 }
 
 #links .link-line > button:first-child,
-#links .saved-line > button:first-child,
-#episode-list li button:first-child {
+#links .video-line > button:first-child,
+#links .saved-line > button:first-child {
   flex: 1;
   text-align: left;
 }
 
 /* Корзина тише открывающей кнопки: она рядом, но не главная, и нажимают её
    реже — промах по ней не должен стоить ссылки. */
-#links .link-line .icon-only,
-#links .saved-line .icon-only {
+#links .icon-only {
   color: var(--muted);
+}
+
+/* Блок детей: отступ и черта отделяют его от заголовка, не разрывая карточку. */
+#links .children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px 8px 12px;
+  margin-left: 4px;
+  border-top: 1px solid #26262c;
+}
+
+#links .card-row {
+  display: flex;
+  flex-direction: column;
+}
+
+#links .children .children {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+/* Шеврон показывает, куда смотреть: вниз — есть что раскрыть, вверх — уже
+   раскрыто. Движение то же, что у пальца. */
+#links .chevron .icon {
+  transition: transform .15s;
+}
+
+#links .chevron[aria-expanded="true"] .icon {
+  transform: rotate(180deg);
 }
 
 #links .empty {
   color: var(--muted);
-}
-
-#episodes[hidden] {
-  display: none;
-}
-
-#episodes {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 /* --- Сцена: видео и слой субтитров --------------------------------------- */

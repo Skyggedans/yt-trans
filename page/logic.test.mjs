@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import {
   activeCueIndex, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
-  languageText, parsePositions, readFontSize, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
+  languageText, matchesQuery, parsePositions, readFontSize, pendingAt, positionFor, readSwitches, rememberPosition, sharedUrl,
   stageText, unwatchMessage, visibleLines, watchMessages,
 } from "./logic.js";
 
@@ -256,6 +256,30 @@ test("a link without a title does not break the search", () => {
   assert.deepEqual(filterLinks([{ id: "4", url: "https://youtu.be/ddd" }], "ddd"), [{ id: "4", url: "https://youtu.be/ddd" }]);
 });
 
+test("the search reaches the names of the videos under a link", () => {
+  // Название плейлиста ничего не говорит о том, что внутри, а ищут обычно
+  // ролик: ссылка с совпавшим роликом должна остаться в списке.
+  const videos = {
+    3: [
+      { videoId: "v1", title: "Kako se kalio čelik" },
+      { videoId: "v2", title: "Istorija Balkana" },
+    ],
+  };
+  const named = (link) => videos[link.id] || [];
+
+  assert.deepEqual(filterLinks(LINKS, "kalio", named).map((link) => link.id), ["3"]);
+  assert.deepEqual(filterLinks(LINKS, "balkan", named).map((link) => link.id), ["3"]);
+  // Совпадение по имени ролика не заменяет поиск по названию самой ссылки.
+  assert.deepEqual(filterLinks(LINKS, "RAKI", named).map((link) => link.id), ["1"]);
+});
+
+test("a name matches by part of a word, and an empty query matches everything", () => {
+  assert.equal(matchesQuery("Kako se kalio čelik", "KALIO"), true);
+  assert.equal(matchesQuery("Kako se kalio čelik", "  čelik "), true);
+  assert.equal(matchesQuery("Kako se kalio čelik", "bakar"), false);
+  assert.equal(matchesQuery(undefined, ""), true);
+});
+
 test("the subtitle size is remembered, and rubbish means the usual one", () => {
   assert.equal(readFontSize("tiny"), "tiny");
   assert.equal(readFontSize("small"), "small");
@@ -271,8 +295,8 @@ test("the subtitle size is remembered, and rubbish means the usual one", () => {
 // --- Кеш роликов на устройстве -----------------------------------------
 
 import {
-  cacheLabel, copyState, copyVerdict, formatBytes, linkTitle, mergeCues, percent,
-  playSource,
+  cacheLabel, copyState, copyVerdict, formatBytes, linkTitle, mergeCues,
+  percent, playSource, toggleExpanded,
 } from "./logic.js";
 
 test("bytes are shown the way a person reads them", () => {
@@ -336,6 +360,15 @@ test("a link row carries the length of its only copy", () => {
   assert.equal(linkTitle({ title: "Ролик" }, { duration: 0 }), "Ролик");
   // Название не пришло — показываем адрес, а не пустую строку.
   assert.equal(linkTitle({ url: "https://youtu.be/x" }), "https://youtu.be/x");
+});
+
+test("cards are toggled one at a time and nothing is open at start", () => {
+  // Раскрытие живёт только до перезагрузки: список открывается свёрнутым,
+  // а раскрывают карточку пальцем и по одному месту.
+  assert.deepEqual(toggleExpanded([], "link:a"), ["link:a"]);
+  assert.deepEqual(toggleExpanded(["link:a"], "link:b"), ["link:a", "link:b"]);
+  assert.deepEqual(toggleExpanded(["link:a", "link:b"], "link:a"), ["link:b"]);
+  assert.deepEqual(toggleExpanded(null, "link:a"), ["link:a"]);
 });
 
 test("saved and arrived cues are merged by their number", () => {

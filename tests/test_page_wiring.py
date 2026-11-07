@@ -158,6 +158,45 @@ def test_the_saved_links_can_be_searched_by_name():
     assert 'els.linksFilter.addEventListener("input"' in source
 
 
+def test_the_search_knows_the_names_of_the_videos_too():
+    # Название плейлиста не говорит, что внутри: ищут обычно ролик, и
+    # ссылка с совпавшим роликом должна остаться в списке.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    logic = (ROOT / "page" / "logic.js").read_text(encoding="utf-8")
+
+    assert "filterLinks(items, linksQuery, videosFor)" in source
+    body = source[source.index("function videosFor"):source.index("function drawLinks")]
+    # Известные имена — из прочитанного плейлиста и из копий на устройстве.
+    assert "linkVideos.get(" in body
+    assert "savedForLink(" in body
+    # Совпадение внутри плейлиста раскрывает карточку: иначе найденное
+    # осталось бы спрятанным под свёрнутой строкой.
+    card = source[source.index("function linkCard"):source.index("function copyLine")]
+    assert "matchesQuery(" in card
+    # Раскрытую поиском карточку можно снова свернуть: шеврон, который ничего
+    # не делает, выглядит поломкой.
+    helper = source[source.index("function openedBySearch"):source.index("function linkCard")]
+    assert "searchClosed" in helper
+    # Имена роликов плейлиста ещё не прочитаны — на время поиска их спрашивают.
+    # Обход идёт по всем ссылкам, а не по видимым: ссылка без совпадения по
+    # названию уже отфильтрована, и её роликов никто бы не спросил.
+    drawn = source[source.index("function drawLinks"):source.index("function linkCard")]
+    assert "loadVideos(link)" in drawn
+    assert "for (const link of items)" in drawn
+    # Пока ролики читаются, «ничего не нашлось» было бы неправдой.
+    assert "ищу в роликах" in drawn
+
+
+def test_cards_start_collapsed_every_time():
+    # Всё по умолчанию свёрнуто: раскрытие — действие на этот просмотр, а не
+    # настройка устройства.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "yt-trans-expanded" not in source
+    assert "parseExpanded(" not in source
+    assert re.search(r"let expandedKeys = \[\]", source)
+
+
 def test_the_saved_links_scroll_while_the_fields_stay_in_place():
     # Поле ссылки и поиск должны стоять на месте: на планшете с сотней
     # сохранённых прокрутка страницы уносила бы их с экрана.
@@ -168,7 +207,6 @@ def test_the_saved_links_scroll_while_the_fields_stay_in_place():
 
     assert library is not None
     assert 'id="links"' in library.group(1)
-    assert 'id="episodes"' in library.group(1)
     assert 'id="links-filter"' not in library.group(1)
     assert re.search(r"#home \{[^}]*height: 100dvh", css, re.S)
     assert re.search(r"#library \{[^}]*overflow-y: auto", css, re.S)
@@ -356,16 +394,16 @@ def test_a_saved_video_is_marked_in_the_list_and_can_be_deleted():
     # Удаление — корзина: слово на каждой строке отнимало место у того, ради
     # чего строку читают (метраж, статус, размер).
     assert "ICON_TRASH" in source
-    assert 'iconButton(ICON_TRASH, "удалить копию", () => dropCopy(' in source
+    assert 'iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record))' in source
 
 
 def test_a_saved_row_does_not_repeat_the_title():
-    # Строка копии стоит в карточке своей ссылки, и заголовок уже нарисован
+    # Строка копии стоит в карточке своего ролика, и заголовок уже нарисован
     # выше. Повторять его — значит отнимать место у того, ради чего строку
     # читают: сколько лежит на устройстве и сколько там ещё места.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
-    rows = source[source.index("function savedRows"):source.index("async function dropCopy")]
-    label = source[source.index("function savedLabel"):source.index("async function dropCopy")]
+    rows = source[source.index("function copyLine"):source.index("function playlistChildren")]
+    label = source[source.index("function savedLabel"):source.index("async function dropLink")]
 
     assert "episodeLabel(" not in rows
     assert "savedLabel(" in rows
@@ -383,8 +421,66 @@ def test_the_link_row_carries_the_length_of_its_only_copy():
 
     assert "export function linkTitle(" in logic
     assert "linkTitle(" in source
-    body = source[source.index("function drawLinks"):source.index("async function loadLinks")]
+    body = source[source.index("function linkCard"):source.index("function copyLine")]
     assert "saved.length === 1" in body
+
+
+def test_a_card_with_children_opens_by_a_chevron_after_the_trash():
+    # Шеврон — последняя кнопка заголовка: сначала корзина, потом он. Иначе
+    # раскрытие стояло бы между «удалить» и названием, и палец тянулся бы к
+    # удалению, раскрывая карточку.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("function linkCard"):source.index("function copyLine")]
+
+    assert "ICON_CHEVRON" in source
+    assert body.index("iconButton(ICON_TRASH") < body.index("chevronButton(")
+    assert 'aria-expanded' in source
+    # Раскрытие переживает перерисовку: иначе каждая новая копия схлопывала бы
+    # список прямо под пальцем. Перезагрузку оно не переживает — там всё
+    # свёрнуто.
+    assert "toggleExpanded(" in source
+
+
+def test_a_playlist_keeps_its_videos_inside_the_card():
+    # Плейлист раскрывается в свои ролики, а копия ролика — его дочерняя
+    # строка. Отдельный экран эпизодов для этого больше не нужен.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+
+    assert "function playlistChildren" in source
+    assert 'kind === "playlist"' in source
+    assert "linkVideos" in source
+    assert "function videoCard" in source
+    assert "expandedKeys.includes(videoKey(" in source
+    assert 'id="episodes"' not in html
+
+
+def test_the_playlist_trash_takes_its_copies_with_it():
+    # Корзина карточки убирает и ссылку, и всё, что под ней лежит: иначе
+    # удалённый плейлист оставлял бы на устройстве свои ролики без способа
+    # их найти.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function dropLink"):source.index("async function dropCopy")]
+
+    assert "savedForLink(link.id)" in body
+    # Копии забываются тем же путём, что и одиночная: база и список не должны
+    # разойтись из-за двух разных способов удаления.
+    assert "forgetCopy(record.videoId)" in body
+    assert "deleteVideo(" in source[source.index("async function forgetCopy"):source.index("async function dropLink")]
+
+
+def test_every_trash_asks_before_deleting():
+    # Копия — это сотни мегабайт на планшете, а ссылка — запись в списке;
+    # одно неверное касание не должно их уносить.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    for start, end in (
+        ("async function dropLink", "async function dropCopy"),
+        ("async function dropCopy", "async function addLink"),
+    ):
+        body = source[source.index(start):source.index(end)]
+
+        assert "confirm(" in body, start
 
 
 def test_the_link_and_its_copy_are_one_card():
@@ -393,7 +489,7 @@ def test_the_link_and_its_copy_are_one_card():
     css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
 
     assert re.search(r"#links li\.card \{[^}]*flex-direction: column", css, re.S)
-    assert re.search(r"#links \.saved-line \{[^}]*border-top", css, re.S)
+    assert re.search(r"#links \.children \{[^}]*border-top", css, re.S)
     assert re.search(r"#links \.link-line button[^}]*background: transparent", css, re.S)
 
 
@@ -403,8 +499,8 @@ def test_every_row_in_the_list_deletes_with_a_trash_icon():
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
 
     assert 'button("Удалить"' not in source
-    assert 'iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(' in source
-    assert 'iconButton(ICON_TRASH, "удалить копию", () => dropCopy(' in source
+    assert 'iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(link))' in source
+    assert 'iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record))' in source
 
 
 def test_a_shared_link_does_not_wipe_the_saved_home():
@@ -565,15 +661,26 @@ def test_returning_to_the_window_refreshes_the_copies():
     assert 'document.addEventListener("visibilitychange"' in source
 
 
-def test_the_token_screen_does_not_wait_for_the_service_worker():
-    # Раздел токена виден в разметке по умолчанию, а приложение — спрятано.
-    # Регистрация воркера без сети может не ответить вовсе: дождавшись её до
-    # решения об экране, страница оставляла зрителя перед экраном ввода токена,
-    # который тот давно сохранил, — и офлайн оттуда не выбраться.
+def test_the_app_shows_without_asking_for_anything():
+    # Экрана токена больше нет: демон открыт тому, кого пускает Origin, и
+    # приложение видно с первого кадра. Регистрация воркера идёт следом и
+    # по-прежнему не задерживает ни экран, ни сохранённое.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     body = source[source.index("async function boot("):source.index("boot();", source.index("async function boot("))]
 
+    assert "els.app.hidden = false" in body
+    assert "start()" in body
     assert body.index("els.app.hidden = false") < body.index("await registerWorker()")
+
+
+def test_the_page_keeps_no_token_to_send():
+    # Токена нет ни в хранилище страницы, ни в заголовках, ни в адресе файла:
+    # пережиток экрана ввода иначе уводил бы зрителя обратно в тупик.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert "TOKEN_KEY" not in source
+    assert "Authorization" not in source
+    assert "token=" not in source
 
 
 def test_a_missing_worker_is_reported_over_the_drawn_list():
