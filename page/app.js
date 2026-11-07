@@ -450,11 +450,11 @@ function linkCard(link) {
     linkTitle(link, only),
     () => openCard(link),
   );
-  // Готовность картинки и перевода знает только демон и только про ролик:
-  // в сохранённом списке она могла устареть, а у плейлиста ни своей картинки,
-  // ни своего перевода нет.
-  if (!playlist && daemonAlive) {
-    openButton.append(...videoMarks(link));
+  // Пометки — про ролик и про копию на устройстве: копия играет и без демона,
+  // поэтому её значок нужен и тогда, когда демон молчит. У плейлиста ни своей
+  // картинки, ни своего перевода нет.
+  if (!playlist && (saved.length || daemonAlive)) {
+    openButton.append(...videoMarks(link, saved.length > 0));
   }
 
   line.append(openButton);
@@ -579,7 +579,7 @@ function videoCard(video, link) {
     episodeLabel(video),
     () => play(video, { id: link.id, title: link.title }),
   );
-  playButton.append(...videoMarks(video));
+  playButton.append(...videoMarks(video, Boolean(saved)));
 
   line.append(playButton);
 
@@ -874,13 +874,13 @@ async function addLink(event) {
 }
 
 // Пометка о картинке — у каждого ролика сразу, чтобы список отвечал на вопрос
-// «что можно смотреть мгновенно». Готовая картинка — дискета: слово «готово»
-// повторялось бы в каждой строке, а галка обещала бы больше — она теперь за
-// готовый перевод. Качающаяся картинка — спиннер: движение говорит само, без
-// слова, которое приходилось бы читать в каждой строке.
-const VIDEO_STATE_ICONS = { ready: "disk", preparing: "spinner" };
+// «что можно смотреть мгновенно». Копия на устройстве — дискета: только она
+// играет и без компьютера, а серверный кэш зрителю видеть незачем. Галка
+// обещала бы больше — она за готовый перевод. Качающаяся картинка — спиннер:
+// движение говорит само, без слова, которое приходилось бы читать в каждой
+// строке.
+const VIDEO_STATE_ICONS = { preparing: "spinner" };
 const VIDEO_STATE_LABELS = {
-  ready: "картинка на диске",
   preparing: "картинка готовится",
 };
 const VIDEO_STATE_WORDS = {
@@ -899,9 +899,14 @@ function iconStateMark(icon, label) {
   return mark;
 }
 
+/** Копия на устройстве — дискета: это единственная готовность, за которую ручаемся. */
+function copyMark() {
+  return iconStateMark("disk", "копия на устройстве");
+}
+
 /**
- * Значок состояния после названия: дискета у готовой картинки, спиннер у
- * качающейся, слово — у ошибки. Готовность видно, но она не спорит с названием.
+ * Значок состояния после названия: спиннер у качающейся картинки, слово — у
+ * ошибки. Готовность видно, но она не спорит с названием.
  */
 function stateMark(stateName) {
   const icon = VIDEO_STATE_ICONS[stateName];
@@ -953,14 +958,17 @@ function newMark() {
 /**
  * Все пометки строки ролика в одном месте: и верхняя строка списка, и ролики
  * плейлиста подписываются одинаково, и разойтись им негде.
+ *
+ * onDevice — копия лежит на устройстве: её и рисует дискета. Готовность на
+ * сервере списку ничего не обещает, поэтому state "ready" значка не даёт.
  */
-function videoMarks(video) {
+function videoMarks(video, onDevice = false) {
   const untouched = video.state === "absent" && !video.translated;
 
   return [
-    stateMark(video.state),
+    onDevice ? copyMark() : stateMark(video.state),
     translationMark(video.translated),
-    untouched ? newMark() : null,
+    untouched && !onDevice ? newMark() : null,
   ].filter(Boolean);
 }
 

@@ -211,8 +211,8 @@ def test_every_header_shows_what_kind_of_thing_it_is():
 
 def test_a_picture_on_disk_is_a_floppy_and_a_downloading_one_spins():
     # «Готово» словом повторялось в каждой строке списка. Галка говорила бы
-    # «всё готово», хотя означала только картинку на диске, — поэтому картинку
-    # подписывает дискета, а пока она качается, на её месте крутится спиннер:
+    # «всё готово», хотя означала только копию, — поэтому копию подписывает
+    # дискета, а пока картинка качается, на её месте крутится спиннер:
     # движение видно и без слова.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
@@ -220,7 +220,6 @@ def test_a_picture_on_disk_is_a_floppy_and_a_downloading_one_spins():
     icons = source[source.index("const ICONS"):source.index("};", source.index("const ICONS"))]
     assert "disk:" in icons
     assert "spinner:" in icons
-    assert 'ready: "disk"' in source
     assert 'preparing: "spinner"' in source
     assert 'ready: "check"' not in source
     words_at = source.index("const VIDEO_STATE_WORDS")
@@ -233,14 +232,38 @@ def test_a_picture_on_disk_is_a_floppy_and_a_downloading_one_spins():
     assert "VIDEO_STATE_ICONS" in marks
 
     card = source[source.index("function linkCard"):source.index("function copyLine")]
-    assert "videoMarks(link)" in card
+    assert "videoMarks(link," in card
 
     video = source[source.index("function videoCard"):source.index("function chevronButton")]
-    assert "videoMarks(video)" in video
+    assert "videoMarks(video," in video
 
     assert re.search(r"#links \.state-mark \{[^}]*display: inline-flex", css, re.S)
     assert re.search(r"\.state-mark\.spin \.icon \{[^}]*animation", css, re.S)
     assert "@keyframes spin" in css
+
+
+def test_the_floppy_means_a_copy_on_the_device_not_the_daemons_cache():
+    # Зрителю нет дела до серверного кэша: дискета отвечает на вопрос «что
+    # заиграет и без компьютера». Поэтому её ставит копия на устройстве, а
+    # готовая картинка на сервере значка больше не рисует вовсе.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert 'ready: "disk"' not in source
+
+    marks = source[source.index("function videoMarks"):source.index("function episodeLabel")]
+    assert "onDevice" in marks
+    assert "copyMark()" in marks
+    assert "stateMark(video.state)" in marks
+
+    copy = source[source.index("function copyMark"):source.index("function stateMark")]
+    assert 'iconStateMark("disk"' in copy
+    assert "на устройстве" in copy
+
+    card = source[source.index("function linkCard"):source.index("function copyLine")]
+    assert "videoMarks(link, saved.length > 0)" in card
+
+    video = source[source.index("function videoCard"):source.index("function chevronButton")]
+    assert "videoMarks(video, Boolean(saved))" in video
 
 
 def test_a_finished_translation_is_a_check():
