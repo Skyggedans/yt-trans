@@ -66,6 +66,15 @@ def test_the_layer_obeys_the_switches():
     assert "visibleLines" in body
 
 
+def test_the_home_screen_starts_with_the_link_field_not_the_app_name():
+    # Заголовок «yt-trans» над списком занимал строку и ничего не говорил:
+    # страница и так открыта, а первое, что нужно, — поле для ссылки.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+
+    assert "<h1" not in html
+    assert "yt-trans</h1>" not in html
+
+
 def test_the_stage_is_left_by_the_browser_history():
     # Список эпизодов — тот же адрес: без pushState и popstate браузерная
     # история уводила бы со страницы целиком.
@@ -389,14 +398,15 @@ def test_the_stage_has_a_cache_switch_next_to_fullscreen():
 
 def test_the_cache_switch_is_an_icon_that_says_only_what_changes():
     # На сцене надпись «кеш» спорила с кадром. Скачивание — иконка; когда копия
-    # лежит на устройстве, рядом остаются только галочка и размер.
+    # лежит на устройстве, рядом остаются только дискета и размер.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     body = source[source.index("function drawCacheButton"):source.index("function toggleCache")]
 
     assert "ICON_DOWNLOAD" in body
-    assert "ICON_CHECK" in body
-    # Готовая копия — галочка, иначе — скачивание; слов на кнопке нет.
-    assert "saved ? ICON_CHECK : ICON_DOWNLOAD" in body
+    # Готовая копия — та же дискета, что в списке: копия на устройстве. Галочка
+    # значила бы перевод, и два разных значка говорили бы об одном.
+    assert "saved ? ICON_DISK : ICON_DOWNLOAD" in body
+    assert "ICON_CHECK" not in body
     # Надпись по-прежнему приходит из logic.js: проценты, размер, ожидание.
     assert "copyState(" in body
     # Иконка без слова: имя для пальца и подсказки меняется вместе с копией.

@@ -30,21 +30,6 @@ body {
   overscroll-behavior: none;
 }
 
-h1,
-h2 {
-  margin: 0;
-  font-weight: 600;
-}
-
-h1 {
-  font-size: 24px;
-}
-
-h2 {
-  font-size: 18px;
-  color: var(--muted);
-}
-
 code {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 13px;

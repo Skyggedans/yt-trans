@@ -74,7 +74,7 @@ function iconMarkup(name) {
 }
 
 const ICON_DOWNLOAD = iconMarkup("download");
-const ICON_CHECK = iconMarkup("check");
+const ICON_DISK = iconMarkup("disk");
 const ICON_TRASH = iconMarkup("trash");
 const ICON_CHEVRON = iconMarkup("chevron");
 
@@ -1393,7 +1393,9 @@ function drawCacheButton() {
     failed: copyFailure === state.videoId,
   });
 
-  els.cache.innerHTML = `${saved ? ICON_CHECK : ICON_DOWNLOAD}<span class="cache-label"></span>`;
+  // Готовая копия — та же дискета, что в списке: оба значка говорят одно —
+  // «ролик лежит на устройстве».
+  els.cache.innerHTML = `${saved ? ICON_DISK : ICON_DOWNLOAD}<span class="cache-label"></span>`;
 
   // Подпись отдельным узлом, а не innerHTML: пустая строка не должна оставлять
   // после себя пробелов и лишних отступов на кнопке.
