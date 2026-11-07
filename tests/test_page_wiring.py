@@ -187,6 +187,28 @@ def test_the_search_knows_the_names_of_the_videos_too():
     assert "ищу в роликах" in drawn
 
 
+def test_every_header_shows_what_kind_of_thing_it_is():
+    # Перед названием — иконка типа: ролик узнаётся по «телевизору» YouTube,
+    # плейлист — по списку с треугольником. Словами это занимало бы место,
+    # которого на планшете и так мало.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    icons = source[source.index("const ICONS"):source.index("function iconMarkup")]
+    assert "video:" in icons
+    assert "playlist:" in icons
+
+    assert "function titledButton(" in source
+    card = source[source.index("function linkCard"):source.index("function copyLine")]
+    assert "const playlist = link.kind ===" in card
+    assert 'playlist ? "playlist" : "video"' in card
+    video = source[source.index("function videoCard"):source.index("function chevronButton")]
+    assert re.search(r'titledButton\(\s*"video"', video)
+
+    # Иконка и текст стоят в одну строку и по центру, иначе название прыгает.
+    assert re.search(r"#links \.title-icon \{[^}]*display: inline-flex", css, re.S)
+
+
 def test_cards_start_collapsed_every_time():
     # Всё по умолчанию свёрнуто: раскрытие — действие на этот просмотр, а не
     # настройка устройства.

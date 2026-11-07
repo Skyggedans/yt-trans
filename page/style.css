@@ -166,6 +166,22 @@ input {
   text-align: left;
 }
 
+/* Иконка типа стоит в строку с названием: отдельной колонкой она отнимала бы
+   ширину, а под названием — высоту. */
+#links .link-line > button:first-child,
+#links .video-line > button:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Тип говорит о себе тихо: иконка подсказывает, но не спорит с названием. */
+#links .title-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
 /* Корзина тише открывающей кнопки: она рядом, но не главная, и нажимают её
    реже — промах по ней не должен стоить ссылки. */
 #links .icon-only {

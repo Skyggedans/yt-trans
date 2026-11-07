@@ -54,6 +54,10 @@ const ICONS = {
   check: '<path d="M4 12.5l5 5.5L20 6.5"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
   chevron: '<path d="M6 9l6 6 6-6"/>',
+  // «Телевизор» YouTube: скруглённый кадр с треугольником внутри.
+  video: '<rect x="2.5" y="5" width="19" height="14" rx="4"/><path d="M10 9.2l5.5 2.8-5.5 2.8z" fill="currentColor"/>',
+  // Список с треугольником — как у плейлиста на самом YouTube.
+  playlist: '<path d="M3.5 7h11M3.5 12h11M3.5 17h7"/><path d="M15.5 13.5l5 3.5-5 3.5z" fill="currentColor"/>',
 };
 
 function iconMarkup(name) {
@@ -282,6 +286,21 @@ function button(text, onClick) {
   return node;
 }
 
+/**
+ * Кнопка заголовка: иконка типа перед названием. Иконка — часть кнопки, но не
+ * её имени: читалке с экрана остаётся только название.
+ */
+function titledButton(icon, text, onClick) {
+  const node = button("", onClick);
+  const mark = document.createElement("span");
+  mark.className = "title-icon";
+  mark.innerHTML = iconMarkup(icon);
+  mark.setAttribute("aria-hidden", "true");
+  node.append(mark, document.createTextNode(text));
+
+  return node;
+}
+
 /** Кнопка-иконка: подписи на экране нет, поэтому имя нужно для пальца и для слуха. */
 function iconButton(markup, label, onClick) {
   const node = button("", onClick);
@@ -417,7 +436,11 @@ function linkCard(link) {
 
   const line = document.createElement("div");
   line.className = "link-line";
-  line.append(button(linkTitle(link, only), () => openCard(link)));
+  line.append(titledButton(
+    playlist ? "playlist" : "video",
+    linkTitle(link, only),
+    () => openCard(link),
+  ));
   line.append(iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(link)));
 
   // Шеврон — последняя кнопка заголовка: раскрытие не должно стоять между
@@ -534,7 +557,8 @@ function videoCard(video, link) {
 
   const line = document.createElement("div");
   line.className = "video-line";
-  line.append(button(
+  line.append(titledButton(
+    "video",
     episodeLabel(video),
     () => play(video, { id: link.id, title: link.title }),
   ));
