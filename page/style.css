@@ -9,6 +9,11 @@
   --bg: #0d0d0f;
   --panel: #17171b;
   --accent: #4c8dff;
+  /* Цвета пометок в списке: готово — зелёное, удаление и ролик YouTube —
+     красное, копия на устройстве — голубая. Плейлист остаётся тихим серым. */
+  --ok: #5fcf80;
+  --alert: #ff6b6b;
+  --copy: #6fb8ff;
 }
 
 * {
@@ -182,6 +187,16 @@ input {
   color: var(--muted);
 }
 
+/* Ролик — красный, как у самого YouTube; плейлист остаётся тихим серым:
+   значок отвечает «что это», не отнимая места у названия. */
+#links .title-icon.is-video {
+  color: var(--alert);
+}
+
+#links .title-icon.is-playlist {
+  color: var(--muted);
+}
+
 /* Готовность — тем же тихим голосом, что и тип: галочка отвечает на вопрос
    «что можно смотреть сразу», не отнимая места у названия. */
 #links .state-mark,
@@ -192,6 +207,16 @@ input {
 
 #links .state-mark {
   display: inline-flex;
+}
+
+/* Галка — готовый перевод, дискета — копия на устройстве: цвет отвечает
+   раньше, чем читается подсказка. Спиннер остаётся тихим. */
+#links .state-mark.is-check {
+  color: var(--ok);
+}
+
+#links .state-mark.is-disk {
+  color: var(--copy);
 }
 
 /* Спиннер — единственная движущаяся пометка: пока картинка качается, движение
@@ -226,6 +251,12 @@ input {
    реже — промах по ней не должен стоить ссылки. */
 #links .icon-only {
   color: var(--muted);
+}
+
+/* Корзина — единственная красная кнопка строки: промах по ней стоит записи,
+   и цвет говорит это раньше, чем палец коснётся. */
+#links .icon-only.trash {
+  color: var(--alert);
 }
 
 /* Блок детей: отступ и черта отделяют его от заголовка, не разрывая карточку. */
@@ -345,13 +376,15 @@ input {
   display: none;
 }
 
+/* Название — в верхней полосе, одной строкой по центру свободного места
+   между кнопками. Снизу оно висело над кадром как раз там, где идут
+   субтитры. */
 #title {
-  position: absolute;
-  left: 16px;
-  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
-  right: 16px;
+  flex: 1;
+  min-width: 0;
   color: var(--muted);
   font-size: 14px;
+  text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

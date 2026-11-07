@@ -13,6 +13,14 @@ def ids_the_page_looks_for():
     return set(re.findall(r'getElementById\("([^"]+)"\)', source))
 
 
+def stage_bar(html):
+    """Верхняя полоса сцены вместе с вложенными блоками: статус и название."""
+
+    start = html.index('id="stage-bar"')
+
+    return html[start:html.index("</section>", start)]
+
+
 def test_the_page_looks_for_something():
     assert ids_the_page_looks_for()
 
@@ -71,11 +79,10 @@ def test_the_stage_goes_back_to_the_list_by_its_own_arrow():
     # С планшета браузерную кнопку «назад» искать негде, а уход со сцены — самое
     # частое действие. Стрелка стоит первой в полосе, перед «во весь экран».
     html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
-    bar = re.search(r'<div id="stage-bar">(.*?)</div>', html, re.S)
+    bar = stage_bar(html)
 
-    assert bar is not None
-    assert 'id="back"' in bar.group(1)
-    assert bar.group(1).index('id="back"') < bar.group(1).index('id="fullscreen"')
+    assert 'id="back"' in bar
+    assert bar.index('id="back"') < bar.index('id="fullscreen"')
 
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
 
@@ -372,13 +379,12 @@ def test_the_chosen_size_survives_a_reload_and_shapes_the_layer():
 
 def test_the_stage_has_a_cache_switch_next_to_fullscreen():
     html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
-    bar = re.search(r'<div id="stage-bar">(.*?)</div>', html, re.S)
+    bar = stage_bar(html)
 
-    assert bar is not None
-    assert 'id="cache"' in bar.group(1)
-    assert 'id="fullscreen"' in bar.group(1)
+    assert 'id="cache"' in bar
+    assert 'id="fullscreen"' in bar
     # По умолчанию кеш выключен: без нажатия на устройстве не оседает ничего.
-    assert 'aria-pressed="false"' in bar.group(1)
+    assert 'aria-pressed="false"' in bar
 
 
 def test_the_cache_switch_is_an_icon_that_says_only_what_changes():
@@ -464,10 +470,9 @@ def test_the_status_is_one_bulleted_line_in_the_top_bar():
     # Теперь он в верхней полосе рядом с кнопками, а точки делят сообщения:
     # «идёт подготовка», «что не так», «язык ролика» читаются как одно.
     html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
-    bar = re.search(r'<div id="stage-bar">(.*?)</div>', html, re.S)
+    bar = stage_bar(html)
 
-    assert bar is not None
-    assert 'id="status"' in bar.group(1)
+    assert 'id="status"' in bar
 
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     render = source[source.index("function render()"):source.index("// --- Слой субтитров")]
@@ -495,6 +500,56 @@ def test_the_bar_and_the_title_hide_like_the_players_controls():
     assert "keydown" in source
     assert re.search(r"#stage\.idle #stage-bar", css)
     assert re.search(r"#stage\.idle #title", css)
+
+
+def test_the_title_stands_in_the_top_bar_in_one_centred_line():
+    # Название висело внизу над кадром, где его и так закрывают субтитры.
+    # Теперь оно в верхней полосе, одной строкой по центру между кнопками.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    bar = stage_bar(html)
+
+    assert 'id="title"' in bar
+
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+    title = re.search(r"#title \{(.*?)\}", css, re.S).group(1)
+
+    assert "text-align: center" in title
+    assert "white-space: nowrap" in title
+    assert "text-overflow: ellipsis" in title
+    # Название больше не висит над кадром: его место — в верхней полосе.
+    assert "position: absolute" not in title
+    assert "bottom:" not in title
+
+
+def test_the_list_icons_are_told_apart_by_colour():
+    # Цвет отвечает раньше слова: галка зелёная, корзина красная, дискета
+    # голубая, ролик YouTube красный, плейлист остаётся тихим серым.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+    root = re.search(r":root \{(.*?)\}", css, re.S).group(1)
+
+    assert "--ok:" in root
+    assert "--alert:" in root
+    assert "--copy:" in root
+
+    # Значок знает, чей он: класс берётся из имени иконки, а не из места в списке.
+    assert 'mark.className = `title-icon is-${icon}`' in source
+    assert 'mark.className = `state-mark is-${icon}`' in source
+    assert "trashButton(" in source
+
+    def colour(selector):
+        block = re.search(re.escape(selector) + r" \{(.*?)\}", css, re.S)
+        assert block is not None, selector
+        found = re.search(r"color: var\((--[a-z]+)\)", block.group(1))
+        assert found is not None, selector
+
+        return found.group(1)
+
+    assert colour("#links .title-icon.is-video") == "--alert"
+    assert colour("#links .title-icon.is-playlist") == "--muted"
+    assert colour("#links .icon-only.trash") == "--alert"
+    assert colour("#links .state-mark.is-check") == "--ok"
+    assert colour("#links .state-mark.is-disk") == "--copy"
 
 
 def test_a_saved_video_plays_from_the_device():
@@ -559,7 +614,7 @@ def test_a_saved_video_is_marked_in_the_list_and_can_be_deleted():
     # Удаление — корзина: слово на каждой строке отнимало место у того, ради
     # чего строку читают (метраж, статус, размер).
     assert "ICON_TRASH" in source
-    assert 'iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record))' in source
+    assert 'trashButton("удалить копию", () => dropCopy(record))' in source
 
 
 def test_a_saved_row_does_not_repeat_the_title():
@@ -598,7 +653,7 @@ def test_a_card_with_children_opens_by_a_chevron_after_the_trash():
     body = source[source.index("function linkCard"):source.index("function copyLine")]
 
     assert "ICON_CHEVRON" in source
-    assert body.index("iconButton(ICON_TRASH") < body.index("chevronButton(")
+    assert body.index("trashButton(") < body.index("chevronButton(")
     assert 'aria-expanded' in source
     # Раскрытие переживает перерисовку: иначе каждая новая копия схлопывала бы
     # список прямо под пальцем. Перезагрузку оно не переживает — там всё
@@ -664,8 +719,8 @@ def test_every_row_in_the_list_deletes_with_a_trash_icon():
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
 
     assert 'button("Удалить"' not in source
-    assert 'iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(link))' in source
-    assert 'iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record))' in source
+    assert 'trashButton("удалить ссылку", () => dropLink(link))' in source
+    assert 'trashButton("удалить копию", () => dropCopy(record))' in source
 
 
 def test_a_shared_link_does_not_wipe_the_saved_home():

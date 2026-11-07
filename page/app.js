@@ -302,7 +302,9 @@ function button(text, onClick) {
 function titledButton(icon, text, onClick) {
   const node = button("", onClick);
   const mark = document.createElement("span");
-  mark.className = "title-icon";
+  // Имя иконки становится классом: по нему style.css красит ролик, плейлист
+  // и остальные пометки в разные цвета.
+  mark.className = `title-icon is-${icon}`;
   mark.innerHTML = iconMarkup(icon);
   mark.setAttribute("aria-hidden", "true");
   node.append(mark, document.createTextNode(text));
@@ -317,6 +319,14 @@ function iconButton(markup, label, onClick) {
   node.innerHTML = markup;
   node.setAttribute("aria-label", label);
   node.title = label;
+
+  return node;
+}
+
+/** Корзина: красная, потому что промах по ней стоит ссылки или копии. */
+function trashButton(label, onClick) {
+  const node = iconButton(ICON_TRASH, label, onClick);
+  node.classList.add("trash");
 
   return node;
 }
@@ -458,7 +468,7 @@ function linkCard(link) {
   }
 
   line.append(openButton);
-  line.append(iconButton(ICON_TRASH, "удалить ссылку", () => dropLink(link)));
+  line.append(trashButton("удалить ссылку", () => dropLink(link)));
 
   // Шеврон — последняя кнопка заголовка: раскрытие не должно стоять между
   // пальцем и удалением, иначе по нему будут промахиваться в обе стороны.
@@ -508,7 +518,7 @@ function copyLine(record, withDuration) {
       withDuration ? savedLabel(record) : cacheLabel(record.size),
       () => play(record, { id: record.linkId, title: record.linkTitle }),
     ),
-    iconButton(ICON_TRASH, "удалить копию", () => dropCopy(record)),
+    trashButton("удалить копию", () => dropCopy(record)),
   );
 
   return line;
@@ -890,7 +900,8 @@ const VIDEO_STATE_WORDS = {
 /** Значок состояния в строку названия: тихий, с именем для читалки с экрана. */
 function iconStateMark(icon, label) {
   const mark = document.createElement("span");
-  mark.className = "state-mark";
+  // По классу иконки style.css даёт галке зелёный, дискете — голубой.
+  mark.className = `state-mark is-${icon}`;
   // Значок сам о себе не расскажет, поэтому у него есть имя.
   mark.setAttribute("role", "img");
   mark.setAttribute("aria-label", label);
