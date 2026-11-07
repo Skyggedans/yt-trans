@@ -1,4 +1,4 @@
-"""Скачивание картинки: H.264 не выше 1080p, родной звук, склейка без перекодирования."""
+"""Downloading the picture: H.264 no higher than 1080p, native audio, muxing without re-encoding."""
 
 from pathlib import Path
 
@@ -29,15 +29,15 @@ def test_the_video_is_downloaded_as_h264_mp4_with_its_own_sound(tmp_path, monkey
 
     cmd, timeout = calls[0]
     assert cmd[cmd.index("-f") + 1] == ytdlp.VIDEO_FORMAT
-    # Сортировка начинается с res, а не с размера файла: 1080p — потолок,
-    # ниже можно, выше нельзя. lang,+size — родной звук, а не автодубляж.
+    # Sorting starts with res, not file size: 1080p is the ceiling —
+    # lower is fine, higher is not. lang,+size — native audio, not auto-dubbing.
     assert cmd[cmd.index("-S") + 1] == "res:1080,lang,+size"
     assert cmd[cmd.index("--merge-output-format") + 1] == "mp4"
     assert cmd[cmd.index("--postprocessor-args") + 1] == "Merger+ffmpeg:-movflags +faststart"
     assert cmd[cmd.index("-o") + 1].endswith("video.%(ext)s")
     assert timeout == 1800.0
     assert target.read_bytes() == b"mp4"
-    # Временного каталога рядом не осталось: он живёт внутри родителя цели.
+    # No temporary directory is left next to it: it lives inside the target's parent.
     assert [p.name for p in tmp_path.iterdir()] == [target.name]
 
 

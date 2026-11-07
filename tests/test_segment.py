@@ -1,4 +1,4 @@
-"""Сборка реплик из сегментов распознавания: helper.segment."""
+"""Assembling utterances from recognition segments: helper.segment."""
 
 from helper.segment import build_cues, split_sentences
 

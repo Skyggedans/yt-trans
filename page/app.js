@@ -1,5 +1,5 @@
-// Проводка страницы планшета: сохранённые ссылки, видео с демона, сокет
-// и слой субтитров. Чистая логика — в logic.js, здесь только DOM и сеть.
+// Wiring of the tablet page: saved links, videos from the daemon, the socket
+// and the subtitle layer. Pure logic lives in logic.js, here only DOM and network.
 
 import {
   activeCueIndex, cacheLabel, cueLines, filterLinks, flipSwitch, formatTime, isForVideo,
@@ -22,13 +22,13 @@ const POLL_VIDEO_MS = 2000;
 const RECONNECT_MS = 1000;
 const PLAYHEAD_MS = 1000;
 const LINKS_TIMEOUT_MS = 3000;
-// Столько же, сколько браузер держит на экране родные контролы плеера после
-// последнего касания: полоса со статусом и название гаснут вместе с ними.
+// The same as the browser keeps the player's own controls on screen after the
+// last touch: the status bar and the title fade out together with them.
 const CONTROLS_IDLE_MS = 2500;
 const WORKER_KEY = "yt-trans-no-worker";
 
-// Разметка не меняется за время жизни страницы, поэтому каждый элемент ищется
-// один раз: в кадровом цикле слоя обращение к DOM не должно стоить поиска.
+// The markup does not change during the life of the page, so each element is
+// looked up once: in the layer's frame loop a DOM access must not cost a lookup.
 const els = {
   app: document.getElementById("app"),
   home: document.getElementById("home"),
@@ -49,21 +49,22 @@ const els = {
   cache: document.getElementById("cache"),
 };
 
-// Иконки рисуются вместе с кнопкой: страница не тянет шрифтов и картинок из
-// сети, а без сети они и не пришли бы. Контур наследует цвет кнопки.
+// Icons are drawn together with the button: the page pulls no fonts or images
+// from the network, and without the network they would not come anyway. The
+// outline inherits the button colour.
 const ICONS = {
   back: '<path d="M15 5l-7 7 7 7"/>',
   download: '<path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14"/>',
   check: '<path d="M4 12.5l5 5.5L20 6.5"/>',
-  // Дискета: картинка уже лежит на диске, смотреть можно сразу.
+  // Floppy disk: the picture already lies on the disk, it can be watched right away.
   disk: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
-  // Спиннер: кольцо с просветом — вращается, пока картинка качается.
+  // Spinner: a ring with a gap — it spins while the picture is downloading.
   spinner: '<circle cx="12" cy="12" r="8" opacity=".25"/><path d="M12 4a8 8 0 0 1 8 8"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
   chevron: '<path d="M6 9l6 6 6-6"/>',
-  // «Телевизор» YouTube: скруглённый кадр с треугольником внутри.
+  // YouTube "TV": a rounded frame with a triangle inside.
   video: '<rect x="2.5" y="5" width="19" height="14" rx="4"/><path d="M10 9.2l5.5 2.8-5.5 2.8z" fill="currentColor"/>',
-  // Список с треугольником — как у плейлиста на самом YouTube.
+  // List with a triangle — like a playlist on YouTube itself.
   playlist: '<path d="M3.5 7h11M3.5 12h11M3.5 17h7"/><path d="M15.5 13.5l5 3.5-5 3.5z" fill="currentColor"/>',
 };
 
@@ -91,73 +92,76 @@ const state = {
   translated: 0,
   title: "",
   notice: "",
-  // Из какой ссылки ролик и какой он длины: копия записывает это в базу, а
-  // заполняет play(). Пока сцена не открыта, там пусто.
+  // Which link the video came from and how long it is: the copy writes this to
+  // the database, and play() fills it in. While the stage is not open, it is empty.
   link: { id: "", title: "" },
   duration: 0,
 };
 
-// Реплики приходят пачками и не по порядку: их вливают по номеру, а на экран
-// отдают плотным списком, отсортированным по времени.
+// Cues arrive in batches and out of order: they are poured in by number, and
+// handed to the screen as a dense list sorted by time.
 const cuesByIndex = new Map();
 
 let socket = null;
 let videoTimer = null;
-// Таймер, по которому полоса со статусом и название уходят с кадра.
+// The timer that takes the status bar and the title off the frame.
 let idleTimer = null;
 let layer = null;
 let paintedKey = null;
-// Место просмотра — своё на устройство: планшет в другой комнате продолжает
-// с того места, где его оставили, и не тянет за собой вкладки компьютера.
+// The watch position is per device: a tablet in another room continues from
+// where it was left and does not drag the computer's tabs along.
 let positions = parsePositions(store(POSITIONS_KEY));
-// Что сейчас в списке и что набрано в поиске: перерисовка по вводу не должна
-// ходить на сервер за тем же списком.
+// What is in the list now and what is typed in the search: a redraw on input
+// must not go to the server for the same list.
 let knownLinks = [];
 let linksQuery = "";
-// Раскрытые карточки: «link:<id>» у ссылки и «video:<id>» у ролика, под которым
-// лежит копия. Всё по умолчанию свёрнуто, а раскрытие живёт до перезагрузки:
-// это действие на этот просмотр, а не настройка устройства.
+// Expanded cards: "link:<id>" on a link and "video:<id>" on a video under
+// which a copy lies. Everything is collapsed by default, and expansion lives
+// until a reload: it is an action for this viewing, not a device setting.
 let expandedKeys = [];
-// Карточки, которые поиск раскрыл сам, а зритель свернул обратно. Живёт до
-// смены запроса: иначе шеврон на найденной карточке ничего бы не делал.
+// Cards that the search opened itself and the viewer collapsed back. It lives
+// until the query changes: otherwise the chevron on a found card would do nothing.
 let searchClosed = new Set();
-// Ролики плейлистов: спрашиваются у демона при раскрытии и живут до перезагрузки.
-// Ошибка запроса тоже запоминается — иначе карточка молчала бы о ней.
+// Playlist videos: they are asked of the daemon when the card expands and live
+// until a reload. A request error is remembered too — otherwise the card would
+// stay silent about it.
 const linkVideos = new Map();
 const loadingVideos = new Set();
-// Какие строки показывать — тоже своё на устройство: планшет в другой комнате
-// не должен менять то, что настроено на компьютере.
+// Which lines to show is per device too: a tablet in another room must not
+// change what is set up on the computer.
 let switches = readSwitches(store(SWITCHES_KEY));
-// Размер строк тоже запоминается на устройстве: на планшете в другой комнате
-// он нужен другой, чем за компьютером.
+// The line size is remembered on the device too: on a tablet in another room
+// it needs to be different from the one at the computer.
 let fontSize = readFontSize(store(FONT_KEY));
 
 const clientId = makeClientId();
 
-// Кеш на устройстве. База открывается один раз; savedVideos — то, что по ней
-// уже известно, без самих mp4, чтобы список отвечал без чтения сотен мегабайт.
+// Cache on the device. The database is opened once; savedVideos is what is
+// already known about it, without the mp4s themselves, so the list answers
+// without reading hundreds of megabytes.
 let db = null;
 const savedVideos = new Map();
-// Копия, которая сейчас качается: {videoId, controller, waiting, seen, total,
-// cues, linkId, linkTitle, title, duration, language}. Одна за раз.
+// The copy that is downloading now: {videoId, controller, waiting, seen, total,
+// cues, linkId, linkTitle, title, duration, language}. One at a time.
 let copy = null;
-// Ролик, чья копия не сохранилась: кнопка говорит об этом до следующей попытки.
+// A video whose copy failed to save: the button says so until the next attempt.
 let copyFailure = null;
-// Адрес копии для <video>; отзывается при уходе со сцены и смене ролика.
+// The copy's address for <video>; revoked when leaving the stage or changing videos.
 let objectUrl = null;
-// Офлайн — признак страницы, а не сети: ставится неудачей запроса к демону,
-// снимается любым успешным ответом. navigator.onLine не спрашивается.
+// Offline is a property of the page, not of the network: it is set by a failed
+// request to the daemon and cleared by any successful answer. navigator.onLine
+// is not consulted.
 let offline = false;
 let daemonAlive = true;
-// Постоянное хранилище просим один раз за жизнь страницы, а не на каждую копию.
+// We ask for persistent storage once per page life, not for every copy.
 let persistAsked = false;
-// Сервис-воркера нет: страница откроется только с живым демоном, и об этом
-// стоит сказать — но один раз, а не при каждом запуске.
+// There is no service worker: the page will open only with a live daemon, and
+// that is worth saying — but once, not on every launch.
 let workerMissing = false;
-// Сказано ли уже в этом запуске, что оболочки не будет: строку списка
-// перерисовка не должна затирать.
+// Whether this launch has already said there will be no shell: a redraw must
+// not wipe the list row.
 let workerWarning = "";
-// Сохранённая копия, чьи титры ещё дописываются: {videoId, record, timer}.
+// A saved copy whose cues are still being appended: {videoId, record, timer}.
 let follow = null;
 
 function store(key, value) {
@@ -170,8 +174,8 @@ function store(key, value) {
 
     return value;
   } catch {
-    // Хранилище может быть закрыто настройками приватности: тогда ключ живёт
-    // до перезагрузки, но страница работает.
+    // Storage may be closed by privacy settings: then the key lives until a
+    // reload, but the page works.
     return "";
   }
 }
@@ -190,7 +194,7 @@ function makeClientId() {
   return store(CLIENT_KEY, fresh) || fresh;
 }
 
-/** Запрос к демону. Ключа демон не спрашивает: пускает по Origin. */
+/** Request to the daemon. The daemon asks for no key: it lets in by Origin. */
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
 
@@ -199,7 +203,7 @@ async function api(path, options = {}) {
   }
 
   const response = await fetch(path, { ...options, headers }).catch((error) => {
-    // Запрос не дошёл вовсе — демона нет.
+    // The request did not arrive at all — there is no daemon.
     daemonAlive = false;
 
     throw error;
@@ -213,24 +217,25 @@ async function api(path, options = {}) {
     data = await readJson(response);
   } catch (error) {
     if (!response.ok) {
-      throw new Error(`демон ответил ${response.status}`);
+      throw new Error(`daemon answered ${response.status}`);
     }
 
-    // Тело оборвалось посреди ответа — демон умер или вышел срок. Это отказ,
-    // а не пустой ответ: иначе сохранённый список затёрся бы пустым.
+    // The body broke in the middle of the response — the daemon died or the
+    // deadline passed. This is a refusal, not an empty answer: otherwise the
+    // saved list would be overwritten with emptiness.
     daemonAlive = false;
 
     throw error;
   }
 
   if (!response.ok) {
-    throw new Error(data.detail || `демон ответил ${response.status}`);
+    throw new Error(data.detail || `daemon answered ${response.status}`);
   }
 
   return data;
 }
 
-// --- Дом: сохранённые ссылки и эпизоды -----------------------------------
+// --- Home: saved links and episodes -------------------------------------
 
 async function start() {
   await openCache();
@@ -239,10 +244,10 @@ async function start() {
   consumeShare();
 }
 
-// Приложение зарегистрировано в share-диалоге Android, поэтому из YouTube его
-// открывают адресом вида /?text=<ссылка>. Ссылка добавляется тем же путём, что
-// и набранная руками: демон сам проверит её у YouTube и, если это один ролик,
-// страница сразу откроет его.
+// The app is registered in Android's share dialog, so from YouTube it is
+// opened with an address like /?text=<link>. The link is added the same way as
+// one typed by hand: the daemon checks it with YouTube itself and, if it is a
+// single video, the page opens it right away.
 async function consumeShare() {
   const shared = sharedUrl(new URLSearchParams(location.search));
 
@@ -250,12 +255,13 @@ async function consumeShare() {
     return;
   }
 
-  // Сначала чистим адрес, потом работаем с сетью: иначе перезагрузка страницы
-  // повторила бы добавление, а «назад» из ролика вернул бы на тот же шаринг.
+  // First clean the address, then work with the network: otherwise a page
+  // reload would repeat the addition, and "back" from the video would return
+  // to the same share.
   history.replaceState(null, "", location.pathname);
 
   if (!daemonAlive) {
-    drawLinks(knownLinks, "демона нет — ссылку из YouTube добавить нельзя");
+    drawLinks(knownLinks, "no daemon — cannot add the link from YouTube");
 
     return;
   }
@@ -269,12 +275,12 @@ async function consumeShare() {
     }
   } catch (error) {
     if (!daemonAlive) {
-      drawLinks(knownLinks, "демона нет — ссылку из YouTube добавить нельзя");
+      drawLinks(knownLinks, "no daemon — cannot add the link from YouTube");
 
       return;
     }
 
-    drawLinks(knownLinks, `не удалось открыть ссылку из YouTube: ${error.message}`);
+    drawLinks(knownLinks, `failed to open the link from YouTube: ${error.message}`);
   }
 }
 
@@ -296,14 +302,14 @@ function button(text, onClick) {
 }
 
 /**
- * Кнопка заголовка: иконка типа перед названием. Иконка — часть кнопки, но не
- * её имени: читалке с экрана остаётся только название.
+ * Header button: a type icon before the title. The icon is part of the button
+ * but not of its name: only the title is left for the screen reader.
  */
 function titledButton(icon, text, onClick) {
   const node = button("", onClick);
   const mark = document.createElement("span");
-  // Имя иконки становится классом: по нему style.css красит ролик, плейлист
-  // и остальные пометки в разные цвета.
+  // The icon name becomes a class: style.css uses it to colour the video,
+  // the playlist and the other marks differently.
   mark.className = `title-icon is-${icon}`;
   mark.innerHTML = iconMarkup(icon);
   mark.setAttribute("aria-hidden", "true");
@@ -312,7 +318,7 @@ function titledButton(icon, text, onClick) {
   return node;
 }
 
-/** Кнопка-иконка: подписи на экране нет, поэтому имя нужно для пальца и для слуха. */
+/** Icon button: there is no caption on screen, so the name is needed for the finger and for hearing. */
 function iconButton(markup, label, onClick) {
   const node = button("", onClick);
   node.classList.add("icon-only");
@@ -323,7 +329,7 @@ function iconButton(markup, label, onClick) {
   return node;
 }
 
-/** Корзина: красная, потому что промах по ней стоит ссылки или копии. */
+/** Trash: red, because a miss on it costs a link or a copy. */
 function trashButton(label, onClick) {
   const node = iconButton(ICON_TRASH, label, onClick);
   node.classList.add("trash");
@@ -332,8 +338,9 @@ function trashButton(label, onClick) {
 }
 
 /**
- * Имена роликов, известные без сети: прочитанный плейлист и копии на
- * устройстве. Поиск идёт и по ним — название плейлиста не говорит, что внутри.
+ * Video names known without the network: a playlist that was read and copies
+ * on the device. The search goes through them too — a playlist title does not
+ * say what is inside.
  */
 function videosFor(link) {
   const known = linkVideos.get(link.id);
@@ -350,8 +357,8 @@ function drawLinks(items, message) {
   knownLinks = items;
   els.links.replaceChildren();
 
-  // Искать нечего, пока нечего показывать: пустое поле над «пока пусто» —
-  // только лишний вопрос.
+  // There is nothing to search while there is nothing to show: an empty field
+  // above "empty for now" is only an extra question.
   els.linksFilter.hidden = items.length === 0;
 
   if (message) {
@@ -359,9 +366,9 @@ function drawLinks(items, message) {
   }
 
   if (!items.length) {
-    // Ссылок демон не дал, но сохранённое лежит на устройстве: оно и есть
-    // список, искать среди него тоже можно. Карточки здесь одинокие — своей
-    // ссылки у них на экране нет, поэтому метраж остаётся при копии.
+    // The daemon gave no links, but what was saved lies on the device: it is
+    // the list, and it can be searched too. The cards here are lonely — they
+    // have no link of their own on screen, so the length stays with the copy.
     if (savedVideos.size) {
       els.links.append(...savedRows([...savedVideos.values()]));
 
@@ -370,7 +377,7 @@ function drawLinks(items, message) {
 
     if (!message) {
       els.links.append(row(
-        offline ? "демона нет, на устройстве ничего не сохранено" : "пока пусто, добавь ссылку",
+        offline ? "no daemon, nothing is saved on the device" : "empty for now, add a link",
         ["empty"],
       ));
     }
@@ -379,43 +386,44 @@ function drawLinks(items, message) {
   }
 
   const visible = filterLinks(items, linksQuery, videosFor);
-  // Роликам плейлиста узнать имена неоткуда, пока их не прочитали: на время
-  // поиска спрашиваем, иначе совпадение внутри плейлиста так и осталось бы
-  // ненайденным. Ответ приходит один раз — дальше имя уже в памяти страницы.
+  // Playlist videos have nowhere to learn names from until they are read: we
+  // ask during the search, otherwise a match inside a playlist would stay
+  // unfound. The answer comes once — after that the name is in page memory.
   const searching = linksQuery.trim() !== "";
 
   if (!visible.length) {
-    // Плейлист без совпадения по названию уже отфильтрован, и ролики ещё
-    // читаются: «ничего не нашлось» здесь было бы неправдой.
+    // A playlist with no title match is already filtered out, and its videos
+    // are still being read: "nothing found" here would be untrue.
     const pending = searching && daemonAlive && items.some((link) => (
       link.kind === "playlist" && (loadingVideos.has(link.id) || !linkVideos.has(link.id))
     ));
 
-    els.links.append(row(pending ? "ищу в роликах…" : "ничего не нашлось", ["empty"]));
+    els.links.append(row(pending ? "searching the videos…" : "nothing found", ["empty"]));
   }
 
   for (const link of visible) {
     els.links.append(linkCard(link));
   }
 
-  // Обход по всем ссылкам, а не по видимым: иначе поиск по имени ролика
-  // отбросил бы плейлист раньше, чем узнал его ролики.
+  // The walk is over all links, not the visible ones: otherwise a search by
+  // video name would drop a playlist before learning its videos.
   for (const link of items) {
     if (link.kind !== "playlist") {
       continue;
     }
 
     if (expandedKeys.includes(linkKey(link.id)) || searching) {
-      // Запрос после отрисовки: loadVideos сам перерисует список, и звать его
-      // прямо из обхода значило бы вкладывать отрисовку в отрисовку.
+      // A request after drawing: loadVideos redraws the list itself, and
+      // calling it straight from the walk would nest drawing in drawing.
       queueMicrotask(() => loadVideos(link));
     }
   }
 }
 
 /**
- * Раскрыта ли карточка самим поиском: совпал не её заголовок, а имя ролика.
- * Такую карточку шеврон закрывает, не трогая раскрытий, сделанных зрителем.
+ * Whether the card was opened by the search itself: not its title matched, but
+ * a video name. The chevron closes such a card without touching expansions
+ * made by the viewer.
  */
 function openedBySearch(link) {
   const key = linkKey(link.id);
@@ -430,27 +438,28 @@ function openedBySearch(link) {
 }
 
 /**
- * Одна ссылка — одна карточка: название, под ним дети. У плейлиста дети —
- * ролики, у ролика — его копия. Отдельными плашками они читались как разные
- * пункты списка, и было непонятно, что нижняя строка относится к строке выше.
+ * One link — one card: the title, and children under it. For a playlist the
+ * children are videos, for a video — its copy. As separate tiles they read as
+ * different list items, and it was unclear that the lower row belongs to the
+ * one above.
  */
 function linkCard(link) {
   const item = document.createElement("li");
   item.className = "card";
 
-  // Копии этой ссылки живут под ней и при живом демоне: иначе их нельзя было
-  // бы ни увидеть, ни удалить, пока компьютер работает.
+  // Copies of this link live under it even with a live daemon: otherwise they
+  // could be neither seen nor deleted while the computer is running.
   const saved = savedForLink(link.id);
   const playlist = link.kind === "playlist";
-  // Совпадение по названию ссылки видно в самом заголовке, и раскрывать нечего.
-  // Совпадение по имени ролика — наоборот: без раскрытия найденное осталось бы
-  // спрятанным под свёрнутой строкой.
+  // A match on the link title is visible in the header itself, and there is
+  // nothing to expand. A match on a video name is the opposite: without
+  // expanding, the found item would stay hidden under a collapsed row.
   const byTitle = matchesQuery(link.title, linksQuery) || matchesQuery(link.url, linksQuery);
   const key = linkKey(link.id);
   const searchOpened = openedBySearch(link);
   const open = expandedKeys.includes(key) || searchOpened;
-  // Метраж переезжает в заголовок, только если копия одна: у плейлиста за
-  // одной ссылкой их много, и одна цифра соврала бы про остальные.
+  // The length moves into the title only when there is one copy: in a playlist
+  // there are many behind one link, and one number would lie about the rest.
   const only = !playlist && saved.length === 1 ? saved[0] : null;
 
   const line = document.createElement("div");
@@ -460,18 +469,18 @@ function linkCard(link) {
     linkTitle(link, only),
     () => openCard(link),
   );
-  // Пометки — про ролик и про копию на устройстве: копия играет и без демона,
-  // поэтому её значок нужен и тогда, когда демон молчит. У плейлиста ни своей
-  // картинки, ни своего перевода нет.
+  // The marks are about the video and about the copy on the device: the copy
+  // plays without the daemon too, so its icon is needed even when the daemon
+  // is silent. A playlist has neither its own picture nor its own translation.
   if (!playlist && (saved.length || daemonAlive)) {
     openButton.append(...videoMarks(link, saved.length > 0));
   }
 
   line.append(openButton);
-  line.append(trashButton("удалить ссылку", () => dropLink(link)));
+  line.append(trashButton("delete link", () => dropLink(link)));
 
-  // Шеврон — последняя кнопка заголовка: раскрытие не должно стоять между
-  // пальцем и удалением, иначе по нему будут промахиваться в обе стороны.
+  // The chevron is the last button of the header: expansion must not stand
+  // between the finger and deletion, otherwise both would be missed.
   if (playlist || saved.length) {
     line.append(chevronButton(open, () => toggleCard(
       key,
@@ -494,8 +503,8 @@ function linkCard(link) {
 
   const kids = document.createElement("div");
   kids.className = "children";
-  // При поиске под карточкой остаются только совпавшие копии; совпадение по
-  // названию ссылки показывает их все.
+  // During a search only matching copies stay under the card; a match on the
+  // link title shows them all.
   const records = byTitle
     ? saved
     : saved.filter((record) => matchesQuery(record.title, linksQuery));
@@ -509,7 +518,7 @@ function linkCard(link) {
   return item;
 }
 
-/** Строка копии в карточке: открыть с устройства и убрать её. */
+/** Copy row in the card: open from the device and remove it. */
 function copyLine(record, withDuration) {
   const line = document.createElement("div");
   line.className = "saved-line";
@@ -518,15 +527,15 @@ function copyLine(record, withDuration) {
       withDuration ? savedLabel(record) : cacheLabel(record.size),
       () => play(record, { id: record.linkId, title: record.linkTitle }),
     ),
-    trashButton("удалить копию", () => dropCopy(record)),
+    trashButton("delete copy", () => dropCopy(record)),
   );
 
   return line;
 }
 
 /**
- * Дети плейлиста. Ролики приходят от демона: без них раскрытая карточка всё
- * равно должна показать то, что уже лежит на устройстве, — копии.
+ * Playlist children. Videos come from the daemon: without them an expanded
+ * card must still show what already lies on the device — copies.
  */
 function playlistChildren(link, all) {
   const kids = document.createElement("div");
@@ -534,16 +543,16 @@ function playlistChildren(link, all) {
   const known = linkVideos.get(link.id);
 
   if (known && known.error) {
-    kids.append(cardNote(`ролики плейлиста не прочитались: ${known.error}`));
+    kids.append(cardNote(`the playlist videos could not be read: ${known.error}`));
   } else if (known) {
-    // При поиске по имени ролика остаются только совпавшие: остальные к
-    // запросу не относятся. Совпадение по названию плейлиста — все ролики.
+    // When searching by video name only matches stay: the rest have nothing
+    // to do with the query. A match on the playlist title means all videos.
     const videos = all
       ? known.videos
       : known.videos.filter((video) => matchesQuery(video.title, linksQuery));
 
     if (!videos.length) {
-      kids.append(cardNote(all ? "в ссылке нет роликов" : "совпадений в плейлисте нет"));
+      kids.append(cardNote(all ? "the link has no videos" : "no matches in the playlist"));
     }
 
     for (const video of videos) {
@@ -552,15 +561,15 @@ function playlistChildren(link, all) {
 
     return kids;
   } else if (loadingVideos.has(link.id)) {
-    kids.append(cardNote("читаю ролики…"));
+    kids.append(cardNote("reading videos…"));
 
     return kids;
   } else if (!daemonAlive) {
-    kids.append(cardNote("демона нет — роликов плейлиста нет на устройстве"));
+    kids.append(cardNote("no daemon — the playlist videos are not on the device"));
   }
 
-  // Ролики плейлиста могут быть неизвестны и при живом демоне: тогда под
-  // карточкой остаются хотя бы копии, которые уже есть.
+  // Playlist videos may be unknown even with a live daemon: then at least the
+  // copies that already exist stay under the card.
   if (!known) {
     const records = all
       ? savedForLink(link.id)
@@ -574,7 +583,7 @@ function playlistChildren(link, all) {
   return kids;
 }
 
-/** Ролик внутри плейлиста: копия под ним — его ребёнок. */
+/** A video inside a playlist: the copy under it is its child. */
 function videoCard(video, link) {
   const saved = savedVideos.get(video.videoId);
   const open = expandedKeys.includes(videoKey(video.videoId));
@@ -602,7 +611,7 @@ function videoCard(video, link) {
   if (saved && open) {
     const kids = document.createElement("div");
     kids.className = "children";
-    // Метраж уже стоит в подписи ролика: копии остаётся сказать, где она.
+    // The length already stands in the video caption: the copy only has to say where it is.
     kids.append(copyLine(saved, false));
     item.append(kids);
   }
@@ -610,9 +619,9 @@ function videoCard(video, link) {
   return item;
 }
 
-/** Шеврон конца заголовка: раскрывает и сворачивает детей карточки. */
+/** Chevron at the end of the header: expands and collapses the card's children. */
 function chevronButton(open, onClick) {
-  const node = iconButton(ICON_CHEVRON, open ? "свернуть" : "развернуть", onClick);
+  const node = iconButton(ICON_CHEVRON, open ? "collapse" : "expand", onClick);
   node.classList.add("chevron");
   node.setAttribute("aria-expanded", open ? "true" : "false");
 
@@ -623,10 +632,10 @@ const linkKey = (id) => `link:${id}`;
 const videoKey = (id) => `video:${id}`;
 
 /**
- * Раскрыть или свернуть карточку. Состояние переживает перерисовку, но не
- * перезагрузку: иначе каждая новая копия схлопывала бы список под пальцем.
- * `bySearch` — карточку раскрыл поиск, а не зритель: её шеврон сворачивает
- * найденное, не трогая раскрытие, сделанное раньше.
+ * Expand or collapse a card. The state survives a redraw but not a reload:
+ * otherwise every new copy would collapse the list under the finger.
+ * `bySearch` — the card was opened by the search, not by the viewer: its
+ * chevron collapses what was found without touching an earlier expansion.
  */
 function toggleCard(key, onOpen = null, bySearch = false) {
   if (bySearch && !expandedKeys.includes(key)) {
@@ -643,7 +652,7 @@ function toggleCard(key, onOpen = null, bySearch = false) {
   }
 }
 
-/** Заголовок карточки: ролик играет сразу, плейлист раскрывается. */
+/** Card header: a video plays right away, a playlist expands. */
 function openCard(link) {
   if (link.kind === "playlist") {
     toggleCard(linkKey(link.id), () => loadVideos(link), openedBySearch(link));
@@ -655,8 +664,8 @@ function openCard(link) {
 }
 
 /**
- * Ролики плейлиста спрашиваются при раскрытии, а не при каждой отрисовке:
- * за ответом демон ходит на YouTube, и список не должен этого делать зря.
+ * Playlist videos are requested on expansion, not on every draw: the daemon
+ * goes to YouTube for the answer, and the list must not do that for nothing.
  */
 async function loadVideos(link) {
   if (linkVideos.has(link.id) || loadingVideos.has(link.id) || !daemonAlive) {
@@ -670,14 +679,14 @@ async function loadVideos(link) {
     const data = await api(`/v1/links/${encodeURIComponent(link.id)}/videos`);
     linkVideos.set(link.id, { videos: Array.isArray(data.videos) ? data.videos : [] });
   } catch (error) {
-    linkVideos.set(link.id, { error: daemonAlive ? error.message : "демона нет" });
+    linkVideos.set(link.id, { error: daemonAlive ? error.message : "no daemon" });
   } finally {
     loadingVideos.delete(link.id);
     drawLinks(knownLinks, "");
   }
 }
 
-/** Строка-подпись внутри карточки: div, а не li — вложенного списка здесь нет. */
+/** Caption row inside a card: a div, not an li — there is no nested list here. */
 function cardNote(text) {
   const node = document.createElement("div");
   node.className = "empty";
@@ -687,8 +696,9 @@ function cardNote(text) {
 }
 
 async function loadLinks() {
-  // Прошлый список с устройства важнее скорости ответа: пока демон думает,
-  // экран уже не пустой, а молчащий демон оставляет этот список на месте.
+  // The previous list from the device matters more than the answer speed:
+  // while the daemon thinks, the screen is already not empty, and a silent
+  // daemon leaves this list in place.
   const last = db ? await getMeta(db, "links") : null;
 
   if (last && last.length) {
@@ -703,10 +713,11 @@ async function loadLinks() {
   } catch (error) {
     offline = !daemonAlive;
 
-    // Сбой запроса не стирает то, что уже на экране. Ссылки пришли с устройства
-    // или прошлым ответом, и строка об ошибке встаёт над ними; иначе один
-    // неудавшийся запрос оставлял от дома одни сохранённые копии, и строки
-    // роликов пропадали, хотя сами ссылки никуда не делись.
+    // A request failure does not wipe what is already on screen. The links
+    // came from the device or a previous answer, and the error row stands
+    // above them; otherwise one failed request left only the saved copies out
+    // of the home, and video rows disappeared although the links themselves
+    // had not gone anywhere.
     drawLinks(last && last.length ? last : knownLinks, daemonAlive ? error.message : "");
 
     return;
@@ -714,10 +725,11 @@ async function loadLinks() {
 
   offline = false;
 
-  // Список ссылок — массив. Ответ без него (демон ответил не тем) не должен
-  // ни затирать сохранённое, ни притворяться пустым списком.
+  // The list of links is an array. An answer without it (the daemon answered
+  // with the wrong thing) must neither wipe the saved data nor pretend to be
+  // an empty list.
   if (!Array.isArray(data.links)) {
-    drawLinks(last && last.length ? last : knownLinks, "демон ответил без списка ссылок");
+    drawLinks(last && last.length ? last : knownLinks, "the daemon answered without a list of links");
 
     return;
   }
@@ -731,7 +743,7 @@ async function loadLinks() {
   drawLinks(links, workerNote());
 }
 
-/** Сохранённые ролики этой ссылки, свежие первыми. */
+/** Saved videos of this link, freshest first. */
 function savedForLink(linkId) {
   return [...savedVideos.values()]
     .filter((record) => record.linkId === linkId)
@@ -739,8 +751,8 @@ function savedForLink(linkId) {
 }
 
 /**
- * Копии без своих ссылок: карточка на каждую, метраж внутри — снаружи его
- * взять неоткуда.
+ * Copies without links of their own: a card for each, with the length inside —
+ * there is nowhere outside to take it from.
  */
 function savedRows(records) {
   return records.map((record) => {
@@ -753,9 +765,9 @@ function savedRows(records) {
 }
 
 /**
- * Подпись копии под её ссылкой. Заголовок здесь не повторяется — он уже
- * нарисован строкой выше; остаётся то, чего там нет: метраж, состояние и место
- * на устройстве.
+ * Caption of a copy under its link. The title is not repeated here — it is
+ * already drawn a row above; what is left is what is not there: the length,
+ * the state and the place on the device.
  */
 function savedLabel(record) {
   const parts = [];
@@ -769,7 +781,7 @@ function savedLabel(record) {
   return parts.join(" · ");
 }
 
-/** Забыть копию: база, список и хвост титров, который ещё дописывался. */
+/** Forget a copy: the database, the list and the tail of cues still being appended. */
 async function forgetCopy(videoId) {
   if (follow && follow.videoId === videoId) {
     clearTimeout(follow.timer);
@@ -787,15 +799,15 @@ async function dropLink(link) {
   const saved = savedForLink(link.id);
   const title = link.title || link.url;
   const question = saved.length
-    ? `Удалить «${title}» вместе с сохранёнными копиями (${saved.length})?`
-    : `Удалить «${title}»?`;
+    ? `Delete "${title}" together with its saved copies (${saved.length})?`
+    : `Delete "${title}"?`;
 
   if (!confirm(question)) {
     return;
   }
 
   if (!daemonAlive) {
-    drawLinks(knownLinks, "демона нет — ссылку удалить нельзя");
+    drawLinks(knownLinks, "no daemon — cannot delete the link");
 
     return;
   }
@@ -804,18 +816,18 @@ async function dropLink(link) {
     await api(`/v1/links/${encodeURIComponent(link.id)}`, { method: "DELETE" });
   } catch (error) {
     if (!daemonAlive) {
-      drawLinks(knownLinks, "демона нет — ссылку удалить нельзя");
+      drawLinks(knownLinks, "no daemon — cannot delete the link");
 
       return;
     }
 
-    drawLinks(knownLinks, `не удалось удалить: ${error.message}`);
+    drawLinks(knownLinks, `failed to delete: ${error.message}`);
 
     return;
   }
 
-  // Ссылка ушла — уходит и всё, что лежало под ней. Иначе ролики плейлиста
-  // остались бы на устройстве без строки, из которой их видно.
+  // The link is gone — so is everything that lay under it. Otherwise the
+  // playlist videos would stay on the device without a row to see them from.
   linkVideos.delete(link.id);
 
   for (const record of saved) {
@@ -824,8 +836,8 @@ async function dropLink(link) {
 
   expandedKeys = expandedKeys.filter((key) => key !== linkKey(link.id));
 
-  // Список правится на месте: если демон умер сразу после удаления, запрос за
-  // списком вернул бы удалённую ссылку обратно.
+  // The list is edited in place: if the daemon died right after the deletion,
+  // a request for the list would bring the deleted link back.
   const left = knownLinks.filter((item) => item.id !== link.id);
 
   if (db) {
@@ -836,19 +848,19 @@ async function dropLink(link) {
   drawLinks(left, "");
 }
 
-/** Убрать копию с устройства: место на планшете кончается, и это должно быть можно. */
+/** Remove a copy from the device: space on the tablet runs out, and this must be possible. */
 async function dropCopy(record) {
   const title = record.title || record.videoId;
 
-  // Копия — это сотни мегабайт, которые потом придётся качать заново: одно
-  // неверное касание не должно их уносить.
-  if (!confirm(`Удалить копию «${title}» с устройства?`)) {
+  // A copy is hundreds of megabytes that will have to be downloaded again:
+  // one wrong touch must not take them away.
+  if (!confirm(`Delete the copy "${title}" from the device?`)) {
     return;
   }
 
   await forgetCopy(record.videoId);
-  // Переключатель на сцене живёт своей надписью и без этого продолжал бы
-  // показывать размер удалённой копии.
+  // The switch on the stage lives by its own caption and without this would
+  // keep showing the size of the deleted copy.
   drawCacheButton();
   drawLinks(knownLinks, "");
 }
@@ -863,7 +875,7 @@ async function addLink(event) {
   }
 
   if (!daemonAlive) {
-    drawLinks(knownLinks, "демона нет — ссылку добавить нельзя");
+    drawLinks(knownLinks, "no daemon — cannot add the link");
 
     return;
   }
@@ -874,35 +886,35 @@ async function addLink(event) {
     await loadLinks();
   } catch (error) {
     if (!daemonAlive) {
-      drawLinks(knownLinks, "демона нет — ссылку добавить нельзя");
+      drawLinks(knownLinks, "no daemon — cannot add the link");
 
       return;
     }
 
-    drawLinks(knownLinks, `не удалось добавить: ${error.message}`);
+    drawLinks(knownLinks, `failed to add: ${error.message}`);
   }
 }
 
-// Пометка о картинке — у каждого ролика сразу, чтобы список отвечал на вопрос
-// «что можно смотреть мгновенно». Копия на устройстве — дискета: только она
-// играет и без компьютера, а серверный кэш зрителю видеть незачем. Галка
-// обещала бы больше — она за готовый перевод. Качающаяся картинка — спиннер:
-// движение говорит само, без слова, которое приходилось бы читать в каждой
-// строке.
+// The picture mark is on every video at once, so the list answers "what can be
+// watched instantly". A copy on the device is a floppy: only it plays without
+// the computer too, and the server cache is not for the viewer to see. A check
+// would promise more — it is for a finished translation. A downloading picture
+// is a spinner: the motion speaks for itself, without a word that would have
+// to be read in every row.
 const VIDEO_STATE_ICONS = { preparing: "spinner" };
 const VIDEO_STATE_LABELS = {
-  preparing: "картинка готовится",
+  preparing: "the picture is being prepared",
 };
 const VIDEO_STATE_WORDS = {
-  error: "не скачалось",
+  error: "did not download",
 };
 
-/** Значок состояния в строку названия: тихий, с именем для читалки с экрана. */
+/** State icon into the title row: quiet, with a name for the screen reader. */
 function iconStateMark(icon, label) {
   const mark = document.createElement("span");
-  // По классу иконки style.css даёт галке зелёный, дискете — голубой.
+  // By the icon class style.css makes the check green and the floppy blue.
   mark.className = `state-mark is-${icon}`;
-  // Значок сам о себе не расскажет, поэтому у него есть имя.
+  // The mark will not tell about itself, so it has a name.
   mark.setAttribute("role", "img");
   mark.setAttribute("aria-label", label);
   mark.innerHTML = iconMarkup(icon);
@@ -910,21 +922,21 @@ function iconStateMark(icon, label) {
   return mark;
 }
 
-/** Копия на устройстве — дискета: это единственная готовность, за которую ручаемся. */
+/** A copy on the device is a floppy: it is the only readiness we vouch for. */
 function copyMark() {
-  return iconStateMark("disk", "копия на устройстве");
+  return iconStateMark("disk", "copy on the device");
 }
 
 /**
- * Значок состояния после названия: спиннер у качающейся картинки, слово — у
- * ошибки. Готовность видно, но она не спорит с названием.
+ * State mark after the title: a spinner for a downloading picture, a word for
+ * an error. Readiness is visible, but it does not argue with the title.
  */
 function stateMark(stateName) {
   const icon = VIDEO_STATE_ICONS[stateName];
 
   if (icon) {
     const mark = iconStateMark(icon, VIDEO_STATE_LABELS[stateName]);
-    // Вращается только спиннер: неподвижный значок значил бы «замерло».
+    // Only the spinner spins: a still mark would mean "frozen".
     mark.classList.toggle("spin", stateName === "preparing");
 
     return mark;
@@ -944,34 +956,36 @@ function stateMark(stateName) {
 }
 
 /**
- * Готовый перевод — галка: она отвечает «ждать ли перевода», а не «что лежит
- * на диске». Нет перевода — нет и значка: отсутствие ничего не обещает.
+ * A finished translation is a check: it answers "is there a translation to
+ * wait for", not "what lies on the disk". No translation — no mark: absence
+ * promises nothing.
  */
 function translationMark(translated) {
-  return translated ? iconStateMark("check", "перевод готов") : null;
+  return translated ? iconStateMark("check", "translation ready") : null;
 }
 
 /**
- * «new» — свежая строка: по ролику ещё ничего не делали, ни картинки, ни
- * перевода. Метки времени у ссылки нет, поэтому свежесть и есть «ничего не
- * трогали»; как только появится любая другая пометка, значок уйдёт сам.
+ * "new" — a fresh row: nothing has been done to the video yet, neither the
+ * picture nor the translation. The link has no timestamp, so freshness is
+ * "nothing touched yet"; as soon as any other mark appears, the icon goes away
+ * by itself.
  */
 function newMark() {
   const mark = document.createElement("span");
   mark.className = "new-mark";
-  // Слово на латинице — примета, а не текст для чтения: у значка есть имя.
-  mark.setAttribute("aria-label", "ролик ещё не готовили");
+  // The word is in Latin script — a sign, not text to read: the mark has a name.
+  mark.setAttribute("aria-label", "the video has not been processed yet");
   mark.textContent = "new";
 
   return mark;
 }
 
 /**
- * Все пометки строки ролика в одном месте: и верхняя строка списка, и ролики
- * плейлиста подписываются одинаково, и разойтись им негде.
+ * All marks of a video row in one place: both the top list row and the
+ * playlist videos are captioned the same way, and they have nowhere to diverge.
  *
- * onDevice — копия лежит на устройстве: её и рисует дискета. Готовность на
- * сервере списку ничего не обещает, поэтому state "ready" значка не даёт.
+ * onDevice — the copy lies on the device: the floppy draws it. Readiness on
+ * the server promises nothing to the list, so the state "ready" gives no icon.
  */
 function videoMarks(video, onDevice = false) {
   const untouched = video.state === "absent" && !video.translated;
@@ -995,13 +1009,13 @@ function episodeLabel(video) {
 
 async function openLink(id) {
   if (!daemonAlive) {
-    // Ролики идут от демона, а его нет: зато копии этой ссылки могли уже
-    // лежать на устройстве, и список показывает их.
+    // Videos come from the daemon, and it is gone: but copies of this link
+    // could already lie on the device, and the list shows them.
     const saved = savedForLink(id);
 
     drawLinks(knownLinks, saved.length
-      ? "демона нет — в списке сохранённые ролики этой ссылки"
-      : "демона нет, роликов этой ссылки на устройстве нет");
+      ? "no daemon — the list shows the saved videos of this link"
+      : "no daemon, this link's videos are not on the device");
 
     return;
   }
@@ -1014,13 +1028,13 @@ async function openLink(id) {
     if (!daemonAlive) {
       const saved = savedForLink(id);
       drawLinks(knownLinks, saved.length
-        ? "демона нет — в списке сохранённые ролики этой ссылки"
-        : "демона нет, роликов этой ссылки на устройстве нет");
+        ? "no daemon — the list shows the saved videos of this link"
+        : "no daemon, this link's videos are not on the device");
 
       return;
     }
 
-    drawLinks(knownLinks, `не удалось прочитать ссылку: ${error.message}`);
+    drawLinks(knownLinks, `failed to read the link: ${error.message}`);
 
     return;
   }
@@ -1028,16 +1042,16 @@ async function openLink(id) {
   const videos = Array.isArray(data.videos) ? data.videos : [];
   linkVideos.set(id, { videos });
 
-  // Одиночный ролик — это не список, а сразу просмотр: кнопка с одним пунктом
-  // только заставляла бы нажимать дважды.
+  // A single video is not a list but viewing right away: a button with one
+  // item would only make you press twice.
   if (videos.length === 1) {
     play(videos[0], { id, title: data.title || "" });
 
     return;
   }
 
-  // Похоже, под «роликом» оказался плейлист: раскрываем его карточку, а не
-  // открываем отдельный экран — список и есть дерево.
+  // Looks like a playlist turned up under the "video": expand its card instead
+  // of opening a separate screen — the list is the tree.
   if (!expandedKeys.includes(linkKey(id))) {
     expandedKeys = toggleExpanded(expandedKeys, linkKey(id));
   }
@@ -1045,17 +1059,19 @@ async function openLink(id) {
   drawLinks(knownLinks, "");
 }
 
-// --- Сцена ----------------------------------------------------------------
+// --- Stage ----------------------------------------------------------------
 
 async function play(video, link = {}) {
-  // Устройство — единственный источник правды о копиях: удалённую в другом окне
-  // страница иначе приняла бы за сохранённую и открыла пустую сцену.
+  // The device is the only source of truth about copies: otherwise the page
+  // would take a copy deleted in another window for a saved one and open an
+  // empty stage.
   await openCache();
 
-  // Без копии и без демона играть нечего: чёрный экран притворялся бы поломкой,
-  // поэтому сцена не открывается, а домашняя страница говорит, в чём дело.
+  // Without a copy and without the daemon there is nothing to play: a black
+  // screen would pretend to be a breakdown, so the stage does not open, and
+  // the home page says what is the matter.
   if (playSource(savedVideos.has(video.videoId), daemonAlive) === "none") {
-    drawLinks(knownLinks, "демона нет, этого ролика на устройстве нет");
+    drawLinks(knownLinks, "no daemon, this video is not on the device");
 
     return;
   }
@@ -1087,8 +1103,8 @@ async function play(video, link = {}) {
   els.title.textContent = state.title;
   els.home.hidden = true;
   els.stage.hidden = false;
-  // Сцена открывается с паузой на видео: полоса и название видны, пока идёт
-  // подготовка, и гаснут только когда картинка уже играет.
+  // The stage opens paused on the video: the bar and the title are visible
+  // while preparation goes on, and fade only when the picture is already playing.
   wakeStage();
   drawCacheButton();
   render();
@@ -1107,8 +1123,9 @@ async function createJob(videoId) {
       body: JSON.stringify({ videoId, targetLang: "ru", authorTrack: true }),
     });
   } catch (error) {
-    // Демона нет, но копия на устройстве есть — заводить задание не для кого.
-    note(!daemonAlive && savedVideos.has(videoId) ? "демона нет — играю сохранённое" : error.message);
+    // There is no daemon, but there is a copy on the device — there is no one
+    // to create a job for.
+    note(!daemonAlive && savedVideos.has(videoId) ? "no daemon — playing the saved copy" : error.message);
   }
 }
 
@@ -1124,14 +1141,14 @@ function stopVideoPoll() {
   }
 }
 
-/** Спросить у демона готовый mp4 и ждать, пока он его склеит. */
+/** Ask the daemon for the finished mp4 and wait until it stitches it. */
 async function prepareVideo() {
   const videoId = state.videoId;
 
   stopVideoPoll();
 
-  // Копия на устройстве предпочтительнее демона: она не ждёт склейки и не
-  // рвётся вместе со связью.
+  // A copy on the device is preferable to the daemon: it does not wait for
+  // stitching and does not break together with the connection.
   if (playSource(savedVideos.has(videoId), daemonAlive) === "copy" && await playLocal(videoId)) {
     return;
   }
@@ -1142,10 +1159,11 @@ async function prepareVideo() {
     status = await api(`/v1/videos/${encodeURIComponent(videoId)}`, { method: "POST" });
   } catch (error) {
     if (playSource(false, daemonAlive) === "none") {
-      // Копия числилась, но её вытеснил браузер, а демона нет: сцена
-      // открылась бы пустой, поэтому сообщение остаётся на домашней.
+      // The copy was counted, but the browser evicted it, and there is no
+      // daemon: the stage would open empty, so the message stays on the home
+      // page.
       leaveStage();
-      drawLinks(knownLinks, "демона нет, этого ролика на устройстве нет");
+      drawLinks(knownLinks, "no daemon, this video is not on the device");
 
       return;
     }
@@ -1156,7 +1174,7 @@ async function prepareVideo() {
   }
 
   const step = (current) => {
-    // Пока ждали двухсекундного ответа, зритель мог уйти на другой ролик.
+    // While waiting for the two-second answer, the viewer could go to another video.
     if (videoId !== state.videoId) {
       return;
     }
@@ -1173,20 +1191,21 @@ async function prepareVideo() {
         }
       }, { once: true });
       els.video.play().catch(() => {
-        // Браузер вправе отказать: запуск вне нажатия он считает автозапуском.
-        // Кнопки у плеера свои, так что зритель начнёт сам — молчать тут честно.
+        // The browser may refuse: a launch outside a press counts as autoplay.
+        // The player has its own buttons, so the viewer will start it
+        // themselves — being silent here is honest.
       });
 
       return;
     }
 
     if (current.state === "error") {
-      note(current.message || "видео не скачалось");
+      note(current.message || "the video did not download");
 
       return;
     }
 
-    note("готовлю картинку…");
+    note("preparing the picture…");
     videoTimer = setTimeout(async () => {
       try {
         step(await api(`/v1/videos/${encodeURIComponent(videoId)}`));
@@ -1199,9 +1218,9 @@ async function prepareVideo() {
   step(status);
 }
 
-// --- Кеш роликов на устройстве -------------------------------------------
+// --- Video cache on the device -------------------------------------------
 
-/** Сохранённые титры в память страницы: они не зависят ни от сокета, ни от демона. */
+/** Saved cues into page memory: they depend neither on the socket nor on the daemon. */
 function seedCues(record) {
   if (!record.cues || !record.cues.length) {
     return;
@@ -1221,7 +1240,7 @@ function seedCues(record) {
   paint();
 }
 
-/** Открыть ролик из копии; false — копии нет или она не наша. */
+/** Open a video from a copy; false — there is no copy or it is not ours. */
 async function playLocal(videoId) {
   if (!savedVideos.has(videoId) || !db) {
     return false;
@@ -1234,12 +1253,13 @@ async function playLocal(videoId) {
   }
 
   if (!record || !record.blob) {
-    // Браузер вправе вытеснить Blob: запись в базе есть, играть нечего, и
-    // строка списка не должна больше врать, что ролик на устройстве.
+    // The browser may evict a Blob: the record is in the database, there is
+    // nothing to play, and the list row must no longer lie that the video is
+    // on the device.
     savedVideos.delete(videoId);
     deleteVideo(db, videoId).catch(() => {});
     drawCacheButton();
-    // Строка списка обещала «на устройстве» — теперь это уже неправда.
+    // The list row promised "on the device" — now that is no longer true.
     drawLinks(knownLinks, "");
 
     return false;
@@ -1249,15 +1269,16 @@ async function playLocal(videoId) {
   seedCues(record);
 
   if (!daemonAlive) {
-    note("демона нет — играю сохранённое");
+    note("no daemon — playing the saved copy");
   } else {
-    // Копия могла быть снята раньше, чем перевод закончился. Запись должна
-    // расти и при обычном просмотре: иначе офлайн останутся только те титры,
-    // что успели к копированию, а новые пропадут вместе с этим просмотром.
+    // The copy could have been taken before the translation finished. The
+    // record must grow during ordinary viewing too: otherwise only the cues
+    // that made it to the copy would stay offline, and new ones would
+    // disappear together with this viewing.
     follow = { videoId, record, timer: null };
 
-    // Снимок подписки мог дойти раньше, чем копия открылась: его реплики уже
-    // в памяти страницы, и запись стоит ими догнать.
+    // The subscription snapshot could arrive before the copy opened: its cues
+    // are already in page memory, and the record is worth catching up with them.
     const merged = mergeCues(record.cues, state.cues);
 
     if (merged.length !== (record.cues || []).length) {
@@ -1270,9 +1291,9 @@ async function playLocal(videoId) {
 }
 
 /**
- * Играть из копии, не потеряв место и паузу: адрес объекта подставляется в
- * <video>, а время возвращается по loadedmetadata. `resume` не задан — берём
- * то место, где ролик стоит сейчас.
+ * Play from a copy without losing the position or the pause: the object
+ * address is put into <video>, and the time is restored on loadedmetadata.
+ * `resume` is not given — we take the place where the video stands now.
  */
 function switchToCopy(record, { resume = 0, autoplay = false } = {}) {
   const from = resume || els.video.currentTime;
@@ -1291,7 +1312,7 @@ function switchToCopy(record, { resume = 0, autoplay = false } = {}) {
 
     if (wasPlaying) {
       els.video.play().catch(() => {
-        // Вне нажатия браузер вправе отказать — тогда зритель начнёт сам.
+        // Outside a press the browser may refuse — then the viewer will start it themselves.
       });
     }
   }, { once: true });
@@ -1299,25 +1320,26 @@ function switchToCopy(record, { resume = 0, autoplay = false } = {}) {
   els.video.src = objectUrl;
 }
 
-// Запись сохранённых титров стоит дорого (целый mp4 поверх), поэтому копим их
-// и пишем не чаще раза в пять секунд — к концу перевода в базе всё равно всё.
+// Writing saved cues is expensive (a whole mp4 on top), so we accumulate them
+// and write no more than once every five seconds — by the end of the
+// translation everything is in the database anyway.
 const FOLLOW_MS = 5000;
 
 const filePath = (videoId) => `/v1/videos/${encodeURIComponent(videoId)}/file`;
 
-/** Размер готового mp4: HEAD не отдаёт тело, но Content-Length у него есть. */
+/** Size of the finished mp4: HEAD does not return a body, but it does have Content-Length. */
 async function fileSize(path) {
   try {
     const response = await fetch(path, { method: "HEAD" });
 
     return Number(response.headers.get("Content-Length") || 0);
   } catch {
-    // Размер не спросили — не повод отказывать: приговор будет «unknown».
+    // The size was not asked for — no reason to refuse: the verdict will be "unknown".
     return 0;
   }
 }
 
-/** Ждёт готовый mp4, как ждёт его сцена; -1 — демон сказал, что не будет. */
+/** Wait for the finished mp4 the way the stage waits for it; -1 — the daemon said it will not be. */
 async function waitForFile(videoId) {
   const mine = copy;
 
@@ -1334,7 +1356,7 @@ async function waitForFile(videoId) {
     }
 
     if (status && status.state === "error") {
-      note(status.message || "видео не скачалось");
+      note(status.message || "the video did not download");
 
       return -1;
     }
@@ -1347,7 +1369,7 @@ async function waitForFile(videoId) {
   }
 }
 
-/** Открыть базу и вспомнить, что на устройстве уже лежит. Зовётся и из start(). */
+/** Open the database and recall what already lies on the device. Called from start() too. */
 async function openCache() {
   if (!db) {
     try {
@@ -1364,23 +1386,24 @@ async function openCache() {
   try {
     const records = await listVideos(db);
 
-    // Не доливка, а пересборка: копию могли удалить в другом окне, и в памяти
-    // этого окна осталась бы строка, обещающая то, чего на устройстве нет.
-    // Пересобираем только по удавшемуся чтению: иначе сбой стирал бы список.
+    // Not topping up but rebuilding: a copy may have been deleted in another
+    // window, and this window's memory would keep a row promising what is not
+    // on the device. We rebuild only after a successful read: otherwise a
+    // failure would wipe the list.
     savedVideos.clear();
 
     for (const record of records) {
       savedVideos.set(record.videoId, record);
     }
   } catch {
-    // Список не прочитался — копия всё равно попробует сохраниться.
+    // The list was not read — the copy will still try to save.
   }
 }
 
 /**
- * Кнопка кеша: иконка скачивания, а у готовой копии — дискета. Слово «кеш»
- * и размер здесь не пишутся: на сцене они спорили с кадром, а размер виден
- * в списке.
+ * Cache button: a download icon, and a floppy for a finished copy. The word
+ * "cache" and the size are not written here: on the stage they argued with the
+ * frame, and the size is visible in the list.
  */
 function drawCacheButton() {
   const mine = copy && copy.videoId === state.videoId ? copy : null;
@@ -1393,19 +1416,19 @@ function drawCacheButton() {
     failed: copyFailure === state.videoId,
   });
 
-  // Готовая копия — та же дискета, что в списке: оба значка говорят одно —
-  // «ролик лежит на устройстве».
+  // A finished copy is the same floppy as in the list: both icons say one
+  // thing — "the video lies on the device".
   els.cache.innerHTML = `${saved ? ICON_DISK : ICON_DOWNLOAD}<span class="cache-label"></span>`;
 
-  // Подпись отдельным узлом, а не innerHTML: пустая строка не должна оставлять
-  // после себя пробелов и лишних отступов на кнопке.
+  // The caption as a separate node, not innerHTML: an empty string must not
+  // leave spaces and extra padding on the button.
   if (label) {
     els.cache.querySelector(".cache-label").textContent = label;
   }
 
-  // Иконка без слова: что произойдёт по нажатию, должно быть слышно и видно
-  // при наведении. У готовой копии нажатие ничего не делает — так и говорим.
-  const hint = mine ? "отменить копирование" : saved ? "копия на устройстве" : "копировать ролик на устройство";
+  // An icon without a word: what a press will do must be heard and seen on
+  // hover. On a finished copy a press does nothing — so we say that.
+  const hint = mine ? "cancel copying" : saved ? "copy on the device" : "copy the video to the device";
 
   els.cache.setAttribute("aria-label", hint);
   els.cache.title = hint;
@@ -1425,8 +1448,8 @@ function toggleCache() {
     return;
   }
 
-  // «Кеш ✓» само ничего не удаляет: дорогую копию нельзя снести неверным
-  // касанием, для этого есть кнопка в списке.
+  // "Cache ✓" deletes nothing by itself: an expensive copy must not be
+  // destroyed by a wrong touch, there is a button for that in the list.
   if (savedVideos.has(videoId)) {
     return;
   }
@@ -1446,7 +1469,7 @@ async function startCopy() {
   }
 
   if (!db) {
-    note("браузер не дал хранилище");
+    note("the browser did not give storage");
 
     return;
   }
@@ -1457,8 +1480,8 @@ async function startCopy() {
     waiting: true,
     seen: 0,
     total: 0,
-    // Титры, пришедшие до начала копирования, уже лежат в памяти страницы —
-    // сохраняется всё, что есть на этот момент.
+    // Cues that arrived before copying began are already in page memory —
+    // everything that exists at this moment is saved.
     cues: new Map(cuesByIndex),
     linkId: state.link.id,
     linkTitle: state.link.title,
@@ -1496,7 +1519,7 @@ async function startCopy() {
   }
 
   if (copyVerdict(size, free) === "tight") {
-    note(`не хватает места: нужно ещё ${formatBytes(size + SPARE_BYTES - free)}, свободно ${formatBytes(free)}`);
+    note(`not enough space: ${formatBytes(size + SPARE_BYTES - free)} more needed, ${formatBytes(free)} free`);
     copy = null;
     drawCacheButton();
 
@@ -1519,8 +1542,8 @@ async function startCopy() {
           mine.total = total;
         }
 
-        // Перерисовываем только когда процент сменился: иначе кнопка дёргалась
-        // бы на каждом куске потока.
+        // Redraw only when the percentage changed: otherwise the button would
+        // twitch on every chunk of the stream.
         const now = percent(mine.seen, mine.total);
 
         if (now !== drawn) {
@@ -1540,7 +1563,7 @@ async function startCopy() {
 
     if (!cancelled) {
       copyFailure = videoId;
-      note(`копия не сохранилась: ${error.message}`);
+      note(`the copy was not saved: ${error.message}`);
     }
 
     drawCacheButton();
@@ -1581,7 +1604,8 @@ async function finishCopy(blob) {
     linkTitle: mine.linkTitle,
     title: mine.title,
     duration: mine.duration,
-    // Размер — у самого файла: HEAD мог не ответить, а blob уже весь здесь.
+    // The size comes from the file itself: HEAD might not answer, and the
+    // blob is all here already.
     size: blob.size,
     savedAt: Date.now(),
     language: mine.language,
@@ -1594,7 +1618,7 @@ async function finishCopy(blob) {
   } catch (error) {
     copy = null;
     copyFailure = mine.videoId;
-    note(`копия не сохранилась: ${error.message}`);
+    note(`the copy was not saved: ${error.message}`);
     drawCacheButton();
 
     return;
@@ -1606,20 +1630,20 @@ async function finishCopy(blob) {
   drawLinks(knownLinks, "");
 
   if (state.videoId === record.videoId) {
-    note("сохранено на устройстве");
-    // Копия готова посреди просмотра — подхватываем её без потери места.
+    note("saved on the device");
+    // The copy is ready in the middle of viewing — pick it up without losing the position.
     switchToCopy(record);
-    // Перевод идёт дальше: сохранённые титры дописываем, пока зритель тут.
+    // The translation goes on: saved cues are appended while the viewer is here.
     follow = { videoId: record.videoId, record, timer: null };
   } else {
     send(unwatchMessage(record.videoId));
   }
 }
 
-/** Реплики ложатся и в недокачанную копию, и в уже сохранённую. */
+/** Cues go both into a not-yet-downloaded copy and into an already saved one. */
 function rememberCues(message) {
   if (message.videoId === undefined || message.videoId === null) {
-    return;   // событие задания: к ролику не относится
+    return;   // a job event: it does not belong to a video
   }
 
   const list = message.type === "snapshot" || message.type === "cues" ? message.cues || [] : [];
@@ -1652,14 +1676,14 @@ function followSoon() {
   }, FOLLOW_MS);
 }
 
-// --- Сокет ----------------------------------------------------------------
+// --- Socket ----------------------------------------------------------------
 
 function connectSocket() {
   if (socket) {
     try {
       socket.close();
     } catch {
-      // Сокет уже мог закрыться сам; новому это не мешает.
+      // The socket may have closed itself already; this does not bother the new one.
     }
   }
 
@@ -1672,8 +1696,9 @@ function connectSocket() {
   opening.addEventListener("open", () => {
     daemonAlive = true;
 
-    // Копия и её титры переживают уход со сцены: после переподключения
-    // подписка нужна и им, иначе запись оборвётся на переподключении.
+    // The copy and its cues survive leaving the stage: after a reconnect the
+    // subscription is needed for them too, otherwise the record would break on
+    // the reconnect.
     for (const videoId of new Set([state.videoId, copy && copy.videoId, follow && follow.videoId])) {
       if (videoId) {
         watch(videoId);
@@ -1694,8 +1719,8 @@ function connectSocket() {
   });
 
   opening.addEventListener("close", () => {
-    // Демон перезапустился или связь пропала — переподключаемся молча:
-    // снимок вернёт всё состояние целиком, терять нечего.
+    // The daemon restarted or the connection dropped — we reconnect silently:
+    // the snapshot will bring back the whole state, there is nothing to lose.
     if (socket === opening) {
       socket = null;
       daemonAlive = false;
@@ -1715,8 +1740,9 @@ function send(message) {
 }
 
 function watch(videoId, previous = null) {
-  // Подписка уйдёт из обработчика open, как только соединение поднимется:
-  // сокета ещё нет, а запоминать её тут нечем — он подпишется по state.videoId.
+  // The subscription will leave the open handler as soon as the connection
+  // rises: there is no socket yet, and there is nothing here to remember it
+  // with — it will subscribe by state.videoId.
   for (const message of watchMessages(
     videoId, positionFor(positions, videoId), clientId, previous,
   )) {
@@ -1725,14 +1751,15 @@ function watch(videoId, previous = null) {
 }
 
 function handleMessage(message) {
-  // Копия ловит реплики раньше проверки на свой ролик: равенство по videoId
-  // честнее, потому что событие без videoId к копии не относится вовсе.
+  // The copy catches cues before the check for its own video: equality by
+  // videoId is more honest, because an event without videoId does not belong
+  // to the copy at all.
   rememberCues(message);
 
-  // События задания несут ролик, но демон постарее его не подписывал: такое
-  // событие считаем своим, иначе титры пропали бы вместе с обновлением
-  // страницы. Чужое не наше — иначе реплики прежнего эпизода легли бы на
-  // номера нового.
+  // Job events carry the video, but an older daemon did not subscribe it: we
+  // count such an event as ours, otherwise the cues would disappear together
+  // with a page reload. Someone else's is not ours — otherwise the cues of
+  // the previous episode would land on the new episode's numbers.
   if (!isForVideo(message, state.videoId)) {
     return;
   }
@@ -1760,14 +1787,14 @@ function handleMessage(message) {
       state.translated = countTranslated();
       break;
     default:
-      // ping держит соединение; показывать в нём нечего.
+      // ping holds the connection; there is nothing in it to show.
       return;
   }
 
   render();
-  // На паузе кадров нет, timeupdate молчит — новый перевод иначе не дошёл бы
-  // до экрана до самого возобновления. paint() дешёвый: одинаковая строка
-  // не трогает DOM.
+  // On pause there are no frames, timeupdate is silent — otherwise a new
+  // translation would not reach the screen until the resume. paint() is cheap:
+  // an identical line does not touch the DOM.
   paint();
 }
 
@@ -1802,17 +1829,17 @@ function takeCues(list) {
   state.cues = [...cuesByIndex.values()].sort((a, b) => a.start - b.start);
 }
 
-/** Переведённая реплика — та, у которой есть строки: так её считает и демон. */
+/** A translated cue is one that has lines: the daemon counts it the same way. */
 function countTranslated() {
   return state.cues.filter((cue) => (cue.lines || []).length > 0).length;
 }
 
-// --- Надписи --------------------------------------------------------------
+// --- Captions -------------------------------------------------------------
 
 /**
- * Статус — одна строка в верхней полосе. Разные сообщения (что готовится, что
- * не так, на каком языке ролик) разделены точками: это одно место для чтения,
- * а не три подряд идущие строки поверх кадра.
+ * Status is one line in the top bar. Different messages (what is being
+ * prepared, what is wrong, in what language the video is) are separated by
+ * dots: this is one place to read, not three rows in a row over the frame.
  */
 function render() {
   const lines = [];
@@ -1836,12 +1863,13 @@ function render() {
   els.status.hidden = lines.length === 0;
 }
 
-// --- Слой субтитров -------------------------------------------------------
+// --- Subtitle layer -------------------------------------------------------
 
-// Стили слоя живут в его теневом дереве, а не в style.css: теневая граница
-// не пропускает внешние правила внутрь. Вид — тот же, что в extension/content.js;
-// --font и --overlay-scale наследуются сквозь границу, поэтому крупный шрифт
-// широкого экрана и выбранный зрителем размер приходят сюда сами.
+// The layer's styles live in its shadow tree, not in style.css: the shadow
+// boundary does not let outside rules in. The look is the same as in
+// extension/content.js; --font and --overlay-scale are inherited across the
+// boundary, so the wide screen's large font and the size chosen by the viewer
+// arrive here by themselves.
 const LAYER_CSS = `
   .box {
     max-width: 88%;
@@ -1853,8 +1881,8 @@ const LAYER_CSS = `
   .line {
     margin: 0;
     color: #fff;
-    /* --overlay-scale — выбранный на сцене размер; множитель, а не замена:
-       на широком экране обычный уже крупнее. */
+    /* --overlay-scale — the size chosen on the stage; a multiplier, not a
+       replacement: on a wide screen the usual one is already larger. */
     font-size: calc(var(--font, 22px) * var(--overlay-scale, 1));
     line-height: 1.3;
     text-shadow: 0 1px 2px rgba(0, 0, 0, .9);
@@ -1906,24 +1934,27 @@ function paint() {
   if (index >= 0) {
     const found = cueLines(state.cues[index]);
 
-    // Реплика без перевода на экран не идёт: её место занимает надпись о том,
-    // что перевода ещё нет, если она попадает в непереведённый кусок.
+    // A cue without a translation does not go on screen: its place is taken
+    // by a caption saying there is no translation yet, if it falls into an
+    // untranslated piece.
     if (found.target) {
       lines = found;
     }
   }
 
-  // «Перевод ещё не готов…» стоит на месте русской строки: выключил её — значит
-  // и ждать нечего показывать, черногорская приходит вместе с ней.
+  // "The translation is not ready yet…" stands in place of the Russian line:
+  // switched it off — there is nothing to wait for either, the Montenegrin
+  // line comes together with it.
   if (!lines && switches.target && pendingAt(state.pending, els.video.currentTime)) {
-    lines = { target: "перевод ещё не готов…", secondary: "", failed: true };
+    lines = { target: "the translation is not ready yet…", secondary: "", failed: true };
   }
 
   if (lines) {
     lines = visibleLines(lines, switches);
   }
 
-  // Обе строки выключены — слой молчит целиком, вместе с надписью об ожидании.
+  // Both lines are off — the layer is silent as a whole, together with the
+  // waiting caption.
   if (!lines || (!lines.target && !lines.secondary)) {
     paintedKey = null;
     nodes.box.classList.add("hidden");
@@ -1942,18 +1973,19 @@ function paint() {
   nodes.target.hidden = !lines.target;
   nodes.secondary.textContent = lines.secondary;
   nodes.secondary.hidden = !lines.secondary;
-  // failed меняет вид только первой строки: вторая гаснет лишь тогда, когда
-  // пуста или повторяет первую (это уже решил cueLines).
+  // failed changes the look of the first line only: the second goes dark only
+  // when it is empty or repeats the first (cueLines has already decided that).
   nodes.box.classList.toggle("failed", lines.failed);
   nodes.box.classList.remove("hidden");
 }
 
-// Родная кнопка плеера разворачивает сам <video>, а слой строк — соседний
-// элемент, и в этом режиме его не видно. Подменить элемент «по факту» браузер
-// не даёт: полноэкранный режим требует нажатия, и запрос из обработчика
-// fullscreenchange отклоняется — видно, как экран разворачивается и сразу
-// возвращается. Поэтому у плеера его кнопка спрятана (controlslist), а сцену
-// разворачивает своя — по нажатию, когда браузер разрешает.
+// The player's own button expands the <video> itself, while the line layer is
+// a neighbouring element, and in this mode it is not visible. The browser does
+// not let the element be swapped "after the fact": fullscreen mode requires a
+// press, and a request from the fullscreenchange handler is rejected — you can
+// see the screen expand and return at once. So the player's button is hidden
+// (controlslist), and the stage is expanded by our own — on a press, when the
+// browser allows.
 function toggleFullscreen() {
   if (document.fullscreenElement) {
     document.exitFullscreen().catch(() => {});
@@ -1963,9 +1995,10 @@ function toggleFullscreen() {
   els.stage.requestFullscreen().catch(() => {});
 }
 
-// Там, где спрятать родную кнопку нечем (iOS), остаётся перехват: если
-// полноэкранным стал ролик, просим сцену. Отказ больше не выкидывает из
-// режима — иначе получался бы тот же прыжок туда и обратно.
+// Where there is nothing to hide the native button with (iOS), interception
+// remains: if the video became fullscreen, we ask for the stage. A refusal no
+// longer throws us out of the mode — otherwise it would be the same jump there
+// and back.
 function watchFullscreen() {
   document.addEventListener("fullscreenchange", () => {
     if (document.fullscreenElement !== els.video || !els.stage.requestFullscreen) {
@@ -1976,9 +2009,10 @@ function watchFullscreen() {
   });
 }
 
-// Окно прячут и возвращаются к нему: пока его не было, копию могли удалить в
-// соседнем (установленное приложение и вкладка браузера — разные экземпляры
-// страницы). Вернувшись, список спрашивает устройство, а не свою память.
+// The window is hidden and returned to: while it was away, a copy could be
+// deleted in a neighbouring one (an installed app and a browser tab are
+// different instances of the page). On return, the list asks the device, not
+// its own memory.
 function watchCopies() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") {
@@ -1993,8 +2027,9 @@ function watchCopies() {
 }
 
 function startClock() {
-  // Кадровый колбэк точнее timeupdate: тот срабатывает четыре раза в секунду
-  // и оставляет субтитр отставать от картинки на четверть секунды.
+  // A frame callback is more precise than timeupdate: that one fires four
+  // times a second and leaves the subtitle lagging a quarter second behind
+  // the picture.
   if (typeof els.video.requestVideoFrameCallback === "function") {
     const tick = () => {
       paint();
@@ -2015,8 +2050,9 @@ function reportPlayhead() {
       return;
     }
 
-    // Место запоминаем и на паузе: именно тогда зритель уходит, а вернувшись,
-    // должен попасть туда же, а не в начало.
+    // The position is remembered on pause too: that is exactly when the
+    // viewer leaves, and on return they should land in the same place, not at
+    // the beginning.
     savePosition();
 
     if (els.video.paused) {
@@ -2038,7 +2074,7 @@ function savePosition() {
   store(POSITIONS_KEY, JSON.stringify(positions));
 }
 
-// --- Выключатели строк ----------------------------------------------------
+// --- Line switches --------------------------------------------------------
 
 function drawSwitches() {
   els.toggleTarget.setAttribute("aria-pressed", String(switches.target));
@@ -2049,18 +2085,18 @@ function flipLine(name) {
   switches = flipSwitch(switches, name);
   store(SWITCHES_KEY, JSON.stringify(switches));
   drawSwitches();
-  // Перерисовываем сразу: на паузе кадров нет, и слой сам не обновился бы до
-  // возобновления.
+  // Redraw at once: on pause there are no frames, and the layer would not
+  // update itself until the resume.
   paintedKey = null;
   paint();
 }
 
-// --- Размер строк ---------------------------------------------------------
+// --- Line size ------------------------------------------------------------
 
 function drawFontSize() {
   els.fontSize.value = fontSize;
-  // Слой живёт в shadow root, но признак стоит на сцене: правило для .line
-  // в LAYER_CSS находит его через унаследованную переменную.
+  // The layer lives in a shadow root, but the attribute stands on the stage:
+  // the rule for .line in LAYER_CSS finds it through an inherited variable.
   els.stage.dataset.font = fontSize;
 }
 
@@ -2070,15 +2106,15 @@ function pickFontSize() {
   drawFontSize();
 }
 
-// --- Уход со сцены --------------------------------------------------------
+// --- Leaving the stage ----------------------------------------------------
 
-/** Вернуться к списку: браузерная кнопка «назад» зовёт то же самое. */
+/** Return to the list: the browser's "back" button calls the same thing. */
 /**
- * Вернуть полосу со статусом и название и завести таймер их ухода.
+ * Bring back the status bar and the title and start the timer for their exit.
  *
- * Уходят они ровно через столько же, сколько родные контролы плеера после
- * последнего касания, — и только пока ролик играет: на паузе контролы тоже не
- * исчезают, и прятать тогда нечего.
+ * They leave after exactly the same time as the player's own controls after
+ * the last touch — and only while the video is playing: on pause the controls
+ * do not disappear either, and then there is nothing to hide.
  */
 function wakeStage() {
   clearTimeout(idleTimer);
@@ -2097,9 +2133,9 @@ function leaveStage() {
     return;
   }
 
-  // Уходим — запоминаем место и отпускаем ролик. Исключение — идущее на нём
-  // копирование: без подписки сохранённые титры оборвались бы на моменте
-  // ухода, поэтому их сбор продолжается до конца копии.
+  // We leave — remember the position and let the video go. The exception is
+  // copying running on it: without the subscription the saved cues would break
+  // at the moment of leaving, so their collection goes on until the copy ends.
   savePosition();
 
   const copying = Boolean(copy && copy.videoId === state.videoId);
@@ -2133,25 +2169,26 @@ function leaveStage() {
 
   els.stage.hidden = true;
   els.home.hidden = false;
-  // Ушли со сцены — гасить уже нечего, а таймер не должен пережить уход.
+  // We left the stage — there is nothing to dim anymore, and the timer must
+  // not outlive the exit.
   clearTimeout(idleTimer);
   idleTimer = null;
   els.stage.classList.remove("idle");
   render();
 
-  // Пока зритель был на сцене, демон мог докачать картинку, а копию могли
-  // удалить в другой вкладке или через DevTools. Поэтому сначала перечитываем
-  // базу устройства — дискета обещает копию, — а с демоном заодно спрашиваем
-  // свежую готовность. Без демона спрашивать некого, и сообщение об этом
-  // важнее списка.
+  // While the viewer was on the stage, the daemon could finish downloading the
+  // picture, and the copy could be deleted in another tab or through DevTools.
+  // So first we reread the device database — the floppy promises a copy — and
+  // at the same time ask the daemon for fresh readiness. Without the daemon
+  // there is no one to ask, and the message about that matters more than the list.
   openCache()
     .then(() => (daemonAlive ? loadLinks() : drawLinks(knownLinks, "")))
     .catch(() => {});
 }
 
-// --- Запуск ---------------------------------------------------------------
+// --- Launch ---------------------------------------------------------------
 
-/** Оболочка на устройстве: без неё страница открывается только с живым демоном. */
+/** Shell on the device: without it the page opens only with a live daemon. */
 async function registerWorker() {
   if (!("serviceWorker" in navigator)) {
     workerMissing = true;
@@ -2162,14 +2199,15 @@ async function registerWorker() {
   try {
     await navigator.serviceWorker.register("/sw.js");
   } catch {
-    // Регистрация падает на http без сертификата, в старых браузерах и без сети.
-    // «Без сети» — не приговор браузеру: если оболочка уже стоит, страница
-    // офлайн открылась именно из неё, и обещать, что её не сохранят, нельзя.
+    // Registration fails on http without a certificate, in old browsers and
+    // without the network. "Without the network" is not a verdict on the
+    // browser: if the shell is already installed, the page opened offline
+    // precisely from it, and one must not promise that it will not be saved.
     workerMissing = !navigator.serviceWorker.controller;
   }
 }
 
-/** Предупреждение о пропавшем воркере: один раз за запуск и один раз за устройство. */
+/** Warning about the missing worker: once per launch and once per device. */
 function workerNote() {
   if (!workerMissing) {
     return "";
@@ -2177,11 +2215,11 @@ function workerNote() {
 
   if (!workerWarning && !store(WORKER_KEY)) {
     store(WORKER_KEY, "1");
-    workerWarning = "браузер не сохранит страницу для офлайна — нужен https и современный браузер";
+    workerWarning = "the browser will not keep the page for offline — https and a modern browser are required";
   }
 
-  // Запоминается до конца запуска: список перерисовывается (ответ демона,
-  // возвращение в окно), и каждый раз терять предупреждение нельзя.
+  // Remembered until the end of the launch: the list is redrawn (a daemon
+  // answer, a return to the window), and the warning must not be lost every time.
   return workerWarning;
 }
 
@@ -2189,36 +2227,35 @@ async function boot() {
   els.linkForm.addEventListener("submit", addLink);
   els.linksFilter.addEventListener("input", () => {
     linksQuery = els.linksFilter.value;
-    // Новый запрос — новые совпадения: прежнее «свернул» к ним не относится.
+    // A new query means new matches: the earlier "collapsed" does not apply to them.
     searchClosed = new Set();
     drawLinks(knownLinks, "");
   });
   els.toggleTarget.addEventListener("click", () => flipLine("target"));
   els.toggleStudy.addEventListener("click", () => flipLine("study"));
   els.back.innerHTML = iconMarkup("back");
-  // Тем же путём, что и браузерная кнопка: шаг истории, положенный при входе
-  // в ролик, снимается, а не остаётся висеть за спиной.
+  // Same way as the browser button: the history step laid down on entering
+  // the video is removed rather than left hanging behind.
   els.back.addEventListener("click", () => history.back());
   els.fullscreen.addEventListener("click", toggleFullscreen);
   els.cache.addEventListener("click", toggleCache);
   els.fontSize.addEventListener("change", pickFontSize);
-  // Полоса со статусом и название гаснут от покоя и возвращаются от любого
-  // прикосновения, клавиши или движения миши — там же, где просыпаются родные
-  // контролы плеера. Слушаем окно: нажатия на родные контролы до сцены не
-  // доходят.
+  // The status bar and the title fade on rest and return on any touch, key or
+  // mouse movement — where the player's own controls wake up. We listen on the
+  // window: presses on the native controls do not reach the stage.
   for (const type of ["pointermove", "pointerdown", "keydown"]) {
     window.addEventListener(type, wakeStage, { passive: true, capture: true });
   }
   els.video.addEventListener("play", wakeStage);
-  // Пауза и перемотка — тоже повод показать полосу: на паузе контролы видны.
+  // Pause and seeking are also a reason to show the bar: on pause the controls are visible.
   els.video.addEventListener("pause", wakeStage);
   els.video.addEventListener("seeked", wakeStage);
   drawSwitches();
   drawFontSize();
 
-  // Список эпизодов и сцена — один адрес, поэтому «назад» в браузере сам по себе
-  // ничего не менял бы. Свой шаг истории кладётся при входе в ролик, а возврат
-  // по нему возвращает к списку.
+  // The episode list and the stage are one address, so the browser's "back"
+  // on its own would change nothing. Our own history step is laid down on
+  // entering a video, and returning along it brings back the list.
   window.addEventListener("popstate", leaveStage);
   watchFullscreen();
   watchCopies();
@@ -2226,15 +2263,16 @@ async function boot() {
   startClock();
   reportPlayhead();
 
-  // Приложение видно сразу: ключа у демона нет, спрашивать нечего.
+  // The app is visible at once: the daemon has no key, there is nothing to ask.
   els.app.hidden = false;
   start();
 
-  // Регистрация идёт следом и не задерживает ни экран, ни сохранённое.
+  // Registration follows and delays neither the screen nor the saved data.
   await registerWorker();
 
-  // Список ссылок мог быть нарисован раньше её ответа: предупреждение
-  // появляется поверх уже нарисованного, а не пропадает вместе с регистрацией.
+  // The list of links could have been drawn before its answer: the warning
+  // appears on top of what is already drawn rather than disappearing with the
+  // registration.
   const warning = workerNote();
 
   if (warning) {

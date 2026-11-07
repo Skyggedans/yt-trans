@@ -1,4 +1,4 @@
-"""Ключ кэша несёт закрепление человека, запись — решение о языке, пустая дорожка не кэшируется."""
+"""The cache key carries the human pin, the record carries the language decision, an empty track is not cached."""
 
 import hashlib
 import json
@@ -15,45 +15,45 @@ from helper.jobs import Stage
 from helper.language import LanguageVerdict
 from helper.sources.ytdlp import CaptionTrack, YtDlpError
 
-# Ролик тестов конвейера: кэш фикстуры pipeline свой у каждого теста. Тесты
-# восстановления пишут в общий на прогон manager.cache, и у каждого свой ролик.
+# The video of the pipeline tests: the pipeline fixture's cache is per test. The restore
+# tests write to the manager.cache shared for the run, and each has its own video.
 VIDEO = "cacheflow01"
 
-# 3XJLfTSZy6I: сербская речь без метаданных, английский сверху в пяти окнах из восьми,
-# доля сербского семейства 0.44 — решил порог BCMS_FLOOR.
+# 3XJLfTSZy6I: Serbian speech without metadata, English on top in five windows out of eight,
+# Serbian-family share 0.44 — BCMS_FLOOR decided.
 FLOOR = LanguageVerdict(
     effective="sr", declared=None, declared_by=None,
     detected="sr", confidence=0.44, reason="floor",
 )
-# Juske, Q2QcYOBk0Jo: YouTube пометил en, речь сербская.
+# Juske, Q2QcYOBk0Jo: YouTube marked it en, the speech is Serbian.
 JUSKE = LanguageVerdict(
     effective="sr", declared="en", declared_by="metadata",
     detected="sr", confidence=0.97, reason="detector",
 )
-# Человек закрепил sr в [asr] language.
+# A human pinned sr in [asr] language.
 PINNED = LanguageVerdict(
     effective="sr", declared="sr", declared_by="config",
     detected="sr", confidence=0.97, reason="pin",
 )
-# Ни одно окно не голосовало, подсказки нет.
+# No window voted, there is no hint.
 SILENT = LanguageVerdict(
     effective="sr", declared=None, declared_by=None,
     detected=None, confidence=None, reason="fallback",
 )
 CUES = [{"start": 0.0, "end": 1.5, "text": "Dobar dan.", "words": []}]
-# Готовые реплики в записи — так их кладёт _finish_translation (JobCue.payload()).
+# Ready cues in the record — this is how _finish_translation (JobCue.payload()) puts them.
 STORED = [
     {
         "i": 0, "start": 0.0, "end": 1.5, "src": "Dobar dan.", "lines": ["Добрый день."],
         "study": "Dobar dan.", "failed": False,
     },
 ]
-# Значение для rewrite: поля в записи нет вовсе.
+# A value for rewrite: the field is absent from the record entirely.
 ABSENT = object()
 
 
 def answer(verdict, cues=CUES):
-    """Ответ воркера по протоколу задачи 5."""
+    """The worker's answer according to the task 5 protocol."""
     return {
         "language": verdict.effective,
         "verdict": verdict.wire(),
@@ -65,7 +65,7 @@ def answer(verdict, cues=CUES):
 
 
 def key_of(stored):
-    """Ключ записи по её же полям: тест попадает ровно туда, куда писал конвейер."""
+    """The record's key from its own fields: the test lands exactly where the pipeline wrote."""
     return CacheKey(
         video_id=stored["video_id"], pin=stored["pin"], asr_model=stored["asr_model"],
         translator_model=stored["translator_model"], study_lang=stored["study_lang"],
@@ -74,7 +74,7 @@ def key_of(stored):
 
 
 def rewrite(store, key, **changes):
-    """Поправить запись на диске; поле со значением ABSENT удаляется."""
+    """Edit the record on disk; a field with the value ABSENT is removed."""
     path = store._path(key)
     payload = json.loads(path.read_text(encoding="utf-8"))
 
@@ -87,7 +87,7 @@ def rewrite(store, key, **changes):
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-# ── ключ ─────────────────────────────────────────────────────────────────
+# ── key ──────────────────────────────────────────────────────────────────
 
 
 def test_the_key_is_the_pin_recipe_without_the_target_language():
@@ -130,13 +130,13 @@ def test_a_pin_goes_into_both_keys(manager, monkeypatch):
 
 
 def test_restore_reads_a_broken_pin_as_no_pin(manager, monkeypatch):
-    # Отказ по негодному закреплению — дело конвейера (задача 4). Восстановление только
-    # читает: ролики, закэшированные без закрепа, по-прежнему открываются — негодный код
-    # читается как «не закреплено»; сделанные при прежнем годном закрепе не находятся,
-    # пока код не исправлен.
+    # Refusing over an invalid pin is the pipeline's business (task 4). Restore only
+    # reads: videos cached without a pin still open — an invalid code
+    # reads as "not pinned"; those made under a previously valid pin are not found
+    # until the code is fixed.
     manager.cache.put(manager._key_for("brokenpin01", "asr"), STORED, 10.0)
     broken = Config(asr=AsrConfig(language="serbian"), translator=TranslatorConfig())
-    # Настройка у демона одна на реестр и бегун: подменяются обе.
+    # The daemon has one config for the registry and the runner: both are replaced.
     monkeypatch.setattr(manager, "config", broken)
     monkeypatch.setattr(manager.runner, "_config", broken)
 
@@ -144,7 +144,7 @@ def test_restore_reads_a_broken_pin_as_no_pin(manager, monkeypatch):
     assert manager.restore("brokenpin01", "ru", True, 10.0).stage is Stage.DONE
 
 
-# ── запись ───────────────────────────────────────────────────────────────
+# ── record ───────────────────────────────────────────────────────────────
 
 
 def test_put_records_the_verdict_and_the_pin(tmp_path, monkeypatch):
@@ -184,7 +184,7 @@ async def test_a_second_view_hears_the_verdict_before_the_cues(manager, connecti
     assert [event["type"] for event in heard] == ["state", "language", "cues", "state"]
     assert heard[1] == {"type": "language", "language": JUSKE.wire(), "videoId": VIDEO}
     assert heard[-1] == {"type": "state", "stage": "done", "cached": True, "total": 1, "videoId": VIDEO}
-    assert job.snapshot()["language"]["note"] == "YouTube указал en, по речи sr"
+    assert job.snapshot()["language"]["note"] == "YouTube indicated en, by speech sr"
     assert len(pipeline.workers) == 1
     assert (stored["pin"], stored["language"]) == ("", JUSKE.wire())
 
@@ -241,7 +241,7 @@ async def test_a_result_without_cues_is_not_cached(manager, pipeline):
         "type": "state", "stage": "done", "total": 0, "cached": False, "videoId": VIDEO,
     }
     assert pipeline.cache.variants(VIDEO) == []
-    assert job.snapshot()["language"]["note"] == "речи почти нет, язык принят за sr"
+    assert job.snapshot()["language"]["note"] == "almost no speech, the language was assumed to be sr"
 
 
 async def test_an_entry_without_cues_is_a_miss_for_the_pipeline_too(manager, pipeline):
@@ -310,7 +310,7 @@ async def test_an_author_track_entry_keeps_its_verdict(manager, pipeline):
 
 
 async def test_a_failed_author_track_serves_the_cached_asr_verdict_once(manager, pipeline):
-    # Сначала в кэш ложится распознавание: без дорожки автора ответ воркера идёт под ключом asr.
+    # Recognition goes into the cache first: without an author track the worker's answer goes under the asr key.
     pipeline.asr_result = answer(JUSKE)
     await pipeline.run(jobs.Job(VIDEO))
 
@@ -330,7 +330,7 @@ async def test_a_failed_author_track_serves_the_cached_asr_verdict_once(manager,
     assert types.index("language") < types.index("cues")
 
 
-# ── восстановление ───────────────────────────────────────────────────────
+# ── restore ──────────────────────────────────────────────────────────────
 
 
 async def test_restore_brings_the_verdict_back_before_the_cues(client, manager):
@@ -390,7 +390,7 @@ def test_restore_never_takes_versions_or_models_from_the_entry(manager, monkeypa
     )
 
     assert manager.restore(video, "ru", True, 10.0) is None
-    # Обе записи на месте: восстановление их не видит, но и не трогает.
+    # Both records are in place: restore does not see them, but does not touch them either.
     assert len(manager.cache.variants(video)) == 2
 
 
@@ -410,8 +410,8 @@ def test_restore_prefers_the_newest_author_track(manager):
 
 
 def test_restore_survives_a_string_created_at_on_an_author_track(manager):
-    # Правленная руками запись может нести строку вместо времени: max() сравнил бы
-    # её с числом и уронил бы TypeError на каждом восстановлении и опросе ролика.
+    # A hand-edited record may carry a string instead of a time: max() would compare
+    # it with a number and crash with TypeError on every restore and video poll.
     video = "reststamp01"
     older = manager._key_for(video, "manual:sr")
     newer = manager._key_for(video, "manual:sr-Latn")

@@ -1,8 +1,9 @@
-"""Проводка расширения: протокол до демона, разрешения и поля настроек.
+"""Extension wiring: the protocol to the daemon, permissions and settings fields.
 
-Демон с сертификатом ([server] tls_cert в config.toml) слушает только https.
-Расширение обязано уметь оба протокола: жёсткий http:// молча получал пустой
-ответ от TLS-порта, и зритель читал «демон не отвечает» при живом демоне.
+A daemon with a certificate ([server] tls_cert in config.toml) listens only over
+https. The extension must support both protocols: hard-coded http:// silently got
+an empty response from the TLS port, and the viewer read "the daemon does not
+respond" while the daemon was alive.
 """
 
 import json
@@ -33,8 +34,8 @@ def test_every_element_the_options_page_looks_for_exists():
 
 
 def test_the_extension_may_speak_https():
-    # Без разрешения на https://127.0.0.1 расширение не вправе туда ходить,
-    # даже когда демон сам предлагает CORS для своего источника.
+    # Without permission for https://127.0.0.1 the extension has no right to go
+    # there, even when the daemon itself offers CORS for its origin.
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
     permissions = set(manifest["host_permissions"])
 
@@ -53,8 +54,9 @@ def defaults(path):
 
 
 def test_the_scheme_is_the_same_on_both_sides():
-    # Фон и страница настроек читают одни и те же настройки из хранилища;
-    # разойдись умолчания — проверка связи говорила бы одно, а опрос делал другое.
+    # The background and the settings page read the same settings from storage;
+    # if the defaults diverged, the connection check would say one thing while the
+    # poll did another.
     background = defaults(EXTENSION / "background.js")
     options = defaults(EXTENSION / "options.js")
 
@@ -69,8 +71,8 @@ def function_body(path, name):
 
 
 def test_the_extension_sends_no_credentials():
-    # Токена установки больше нет: расширение не хранит его и не шлёт
-    # Authorization, иначе старый ключ жил бы в хранилище и в заголовках.
+    # There is no install token anymore: the extension neither stores it nor sends
+    # Authorization, otherwise the old key would live in storage and in headers.
     background = (EXTENSION / "background.js").read_text(encoding="utf-8")
     options = (EXTENSION / "options.js").read_text(encoding="utf-8")
 
@@ -84,7 +86,7 @@ def test_the_options_page_asks_for_no_token():
     html = (EXTENSION / "options.html").read_text(encoding="utf-8")
 
     assert 'id="token"' not in html
-    assert "токен" not in html.lower()
+    assert "token" not in html.lower()
 
 
 def test_the_address_is_built_with_the_chosen_scheme():
@@ -102,13 +104,14 @@ def test_the_connection_check_uses_the_chosen_scheme():
 
 
 def test_every_request_can_fall_back_to_the_other_scheme():
-    # Протокол у временного дополнения сбрасывается вместе с браузером, поэтому
-    # настройке верить нельзя: демон с сертификатом слушает только https, а
-    # умолчание — http, и зритель видел «демон не отвечает» при живом демоне.
+    # The protocol of a temporary add-on is reset together with the browser, so the
+    # setting cannot be trusted: a daemon with a certificate listens only over https,
+    # while the default is http, and the viewer saw "the daemon does not respond"
+    # while the daemon was alive.
     source = (EXTENSION / "background.js").read_text(encoding="utf-8")
 
     assert "function call(" in source
-    # Запрос в файле один: все остальные идут через него.
+    # There is one request in the file: all the others go through it.
     assert source.count("fetch(") == 1
 
     for name in ("pollLoop", "waitForDaemon", "restore", "retry", "sendPlayhead"):

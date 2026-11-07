@@ -1,28 +1,28 @@
-# Прямые зависимости. Транзитивные подтянутся сами.
+# Direct dependencies. Transitive ones will be pulled in automatically.
 #
-# yt-dlp именно с extras: без [default] не встанет yt-dlp-ejs, и извлечение
-# на YouTube молча деградирует. Нужен также внешний JS-рантайм (node ≥22).
+# yt-dlp specifically with extras: without [default], yt-dlp-ejs will not install, and extraction
+# on YouTube silently degrades. An external JS runtime is also needed (node ≥22).
 yt-dlp[default]>=2026.8.19
 
-# Распознавание. CTranslate2 берёт CUDA-библиотеки из колёс nvidia-*-cu12:
-# системного рантайма на целевой машине может не быть, а подгружает он их
-# через dlopen только на первом реальном проходе энкодера.
+# Recognition. CTranslate2 takes CUDA libraries from the nvidia-*-cu12 wheels:
+# the system runtime may be absent on the target machine, and it loads them
+# via dlopen only on the first real encoder pass.
 faster-whisper>=1.2.1
 nvidia-cublas-cu12
 nvidia-cudnn-cu12
 
-# Демон
+# Daemon
 fastapi
 uvicorn[standard]
 websockets
 httpx
 nvidia-ml-py
 
-# Обработка текста
+# Text processing
 cyrtranslit>=1.2.0
 pysubs2
 
-# Только для спайков
+# Only for spikes
 jiwer
 sacrebleu
 datasets

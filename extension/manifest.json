@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "yt-trans — субтитры",
-  "description": "Субтитры к роликам YouTube локальными моделями: перевод и вторая строка для изучения языка",
+  "name": "yt-trans — subtitles",
+  "description": "Subtitles for YouTube videos with local models: translation and a second line for language learning",
   "version": "0.1.0",
   "minimum_chrome_version": "128",
 

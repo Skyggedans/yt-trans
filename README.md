@@ -1,106 +1,106 @@
 # yt-trans
 
-Русские субтитры к сербским роликам YouTube локальными моделями. Расширение
-браузера показывает субтитры поверх плеера, а работу делает демон на этой же
-машине: звук берёт через yt-dlp, распознаёт Whisper, переводит модель в ollama.
-Вторая строка — черногорский текст той же реплики, для изучения языка.
+Russian subtitles for Serbian YouTube videos with local models. A browser
+extension shows subtitles over the player, and the work is done by a daemon on the same
+machine: it takes the audio via yt-dlp, recognizes it with Whisper, translates with an ollama model.
+The second line is the Montenegrin text of the same utterance, for language learning.
 
-Настройки демона — `~/.config/yt-trans/config.toml`, образец с пояснениями —
-[config.example.toml](config.example.toml). Демон работает как пользовательская
-служба systemd: [packaging/yt-trans.service](packaging/yt-trans.service).
+Daemon settings — `~/.config/yt-trans/config.toml`, a sample with explanations —
+[config.example.toml](config.example.toml). The daemon runs as a user
+systemd service: [packaging/yt-trans.service](packaging/yt-trans.service).
 
-## Страница для планшета
+## Page for the tablet
 
-Демон раздаёт и страницу с плеером: на планшете в другой комнате те же две строки
-идут поверх ролика без расширения и без плеера YouTube, а титры в картинку не
-запекаются. Как включить сеть и что делать с диском —
+The daemon also serves a page with a player: on the tablet in another room the same two lines
+run over the video without an extension and without the YouTube player, and subtitles are not
+burned into the picture. How to enable the network and what to do with the disk —
 [docs/tablet.md](docs/tablet.md).
 
-## Аккаунт для роликов 18+
+## Account for 18+ videos
 
-Ролик с возрастным ограничением YouTube отдаёт только вошедшему пользователю.
-Демон ходит к YouTube анонимно, и без аккаунта такие ролики не переводятся:
-зритель видит отказ «ролик 18+: … аккаунт для таких роликов не подключён».
+YouTube serves an age-restricted video only to a signed-in user.
+The daemon talks to YouTube anonymously, and without an account such videos are not translated:
+the viewer sees the refusal “the video is 18+: … no account is connected for such videos”.
 
-Аккаунт подставляется только туда, где без него никак. Каждый ролик демон
-сначала запрашивает анонимно, и лишь если YouTube отказал именно возрастным
-ограничением, повторяет запрос с аккаунтом — тогда уже весь этот ролик идёт
-под ним. Все остальные ролики аккаунта не касаются.
+The account is substituted only where there is no way around it. Each video the daemon
+first requests anonymously, and only if YouTube refused specifically because of the age
+restriction, repeats the request with the account — then the whole video goes
+under it. All other videos do not involve the account.
 
-### Только отдельный аккаунт
+### A separate account only
 
-Свой основной аккаунт сюда не ставят. yt-dlp прямо предупреждает: аккаунт,
-через который он ходит, YouTube может забанить, временно или навсегда
+Do not use your main account here. yt-dlp warns directly: the account
+through which it talks can be banned by YouTube, temporarily or permanently
 ([Exporting YouTube cookies](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)).
-Нужен аккаунт, который не жалко потерять.
+You need an account you don't mind losing.
 
-### Подключение
+### Connecting
 
-1. **Завести аккаунт и подтвердить возраст.** Проверить можно в браузере:
-   войти под этим аккаунтом и открыть любой ролик 18+. Если YouTube просит
-   подтвердить возраст — подтвердить. Ролик должен воспроизводиться.
+1. **Create an account and confirm the age.** You can check in a browser:
+   sign in with this account and open any 18+ video. If YouTube asks you to
+   confirm the age — confirm it. The video must play.
 
-2. **Выгрузить cookies из приватного окна.** Открытые вкладки YouTube регулярно
-   перевыпускает cookies, и выгруженные из обычного окна быстро перестают
-   действовать. Поэтому так:
-   1. Открыть приватное окно и войти в этот аккаунт на youtube.com.
-   2. В той же вкладке открыть <https://www.youtube.com/robots.txt>. Других
-      приватных вкладок быть не должно.
-   3. Выгрузить cookies youtube.com в файл формата Netscape расширением,
-      которому разрешено работать в приватном режиме. yt-dlp
-      [советует](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)
-      «Get cookies.txt LOCALLY» для Chrome и «cookies.txt» для Firefox.
-      Первая строка файла — `# Netscape HTTP Cookie File`.
-   4. Закрыть приватное окно, больше никуда в нём не заходя.
+2. **Export cookies from a private window.** YouTube regularly reissues cookies for open
+   tabs, and those exported from a regular window quickly stop
+   working. So this way:
+   1. Open a private window and sign in to this account on youtube.com.
+   2. In the same tab open <https://www.youtube.com/robots.txt>. There must be no other
+      private tabs.
+   3. Export youtube.com cookies to a Netscape-format file with an extension
+      that is allowed to work in private mode. yt-dlp
+      [advises](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)
+      “Get cookies.txt LOCALLY” for Chrome and “cookies.txt” for Firefox.
+      The first line of the file is `# Netscape HTTP Cookie File`.
+   4. Close the private window without going anywhere else in it.
 
-3. **Положить файл и закрыть доступ.** В файле вход в аккаунт:
+3. **Put the file and close access.** The file contains the account sign-in:
 
    ```sh
-   mv <выгруженный файл> ~/.config/yt-trans/youtube-18.txt
+   mv <exported file> ~/.config/yt-trans/youtube-18.txt
    chmod 600 ~/.config/yt-trans/youtube-18.txt
    ```
 
-   Файл должен быть доступен демону на запись: yt-dlp после каждого вызова
-   дописывает в него обновлённые cookies, и сессия от этого живёт дольше.
+   The file must be writable by the daemon: after each call yt-dlp
+   appends updated cookies to it, and the session lives longer because of that.
 
-4. **Прописать в `~/.config/yt-trans/config.toml`:**
+4. **Add to `~/.config/yt-trans/config.toml`:**
 
    ```toml
    [youtube]
    cookies = "~/.config/yt-trans/youtube-18.txt"
    ```
 
-5. **Перезапустить демон** — настройки читаются только при старте:
+5. **Restart the daemon** — settings are read only at startup:
 
    ```sh
    systemctl --user restart yt-trans
    ```
 
-### Проверка
+### Verification
 
-Открыть ролик 18+ и включить перевод. В журнале демона должна появиться
-строка о переходе на аккаунт:
+Open an 18+ video and enable translation. The daemon log should show
+a line about switching to the account:
 
 ```sh
 journalctl --user -u yt-trans -f | grep '18+'
 ```
 
 ```
-… helper.jobs <id ролика>: ролик 18+, иду за ним с аккаунтом из настроек
+… helper.jobs <video id>: 18+ video, going for it with the account from the settings
 ```
 
-### Если не работает
+### If it doesn't work
 
-| Что видит зритель | Причина | Что делать |
+| What the viewer sees | Cause | What to do |
 |---|---|---|
-| «ролик 18+: … аккаунт для таких роликов не подключён» | секции `[youtube]` нет или демон не перезапущен | шаги 4–5 |
-| «ролик 18+, а файла cookies из настроек нет: …» | неверный путь в `cookies` | исправить путь, перезапустить демон |
-| «ролик 18+, и аккаунт из настроек YouTube его не открыл» | cookies устарели или у аккаунта не подтверждён возраст | проверить шаг 1, заново выгрузить cookies (шаги 2–3), перезапустить демон |
+| “the video is 18+: … no account is connected for such videos” | the `[youtube]` section is missing or the daemon was not restarted | steps 4–5 |
+| “the video is 18+, and the cookies file from the settings is missing: …” | wrong path in `cookies` | fix the path, restart the daemon |
+| “the video is 18+, and the account from the settings did not open it on YouTube” | the cookies are stale or the account's age is not confirmed | check step 1, export the cookies again (steps 2–3), restart the daemon |
 
-Если путь указан, а файла нет, демон предупреждает об этом ещё при запуске:
-`[youtube] cookies: файла … нет, ролики 18+ открываться не будут`.
+If the path is set but the file is missing, the daemon warns about it already at startup:
+`[youtube] cookies: file … does not exist, 18+ videos will not open`.
 
-Все эти отказы окончательные: демон не повторяет их сам, чтобы не обращаться
-к YouTube под аккаунтом раз в минуту, пока открыта вкладка. Поэтому после
-исправления нужен перезапуск демона — без него ролик, уже получивший отказ,
-так и останется с ним.
+All these refusals are final: the daemon does not repeat them itself, so as not to hit
+YouTube under the account once a minute while the tab is open. Therefore after
+fixing, a daemon restart is needed — without it, a video that has already received a refusal
+will stay that way.

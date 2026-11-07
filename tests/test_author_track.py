@@ -1,4 +1,4 @@
-"""Дорожка автора: какая метка годится и в какой письменности её текст идёт дальше."""
+"""The author's track: which label qualifies and in which script its text goes on."""
 
 import pytest
 
@@ -7,7 +7,7 @@ from helper.jobs import Job, Stage
 from helper.script import normalize_cues
 from helper.sources.ytdlp import CaptionTrack, usable_manual_track
 
-# yt-dlp отдаёт каждую дорожку семью форматами, и probe кладёт по записи на каждый.
+# yt-dlp returns every track in seven formats, and probe stores one record per format.
 FORMATS = ("json3", "srv1", "srv2", "srv3", "ttml", "srt", "vtt")
 
 CYRILLIC = [
@@ -29,7 +29,7 @@ def test_any_spelling_of_the_serbian_family_is_an_author_track(label):
     track = usable_manual_track(metadata(manual_tracks=tracks(label)))
 
     assert track is not None
-    # В yt-dlp метка уходит как есть: --sub-langs ищет ровно этот ключ.
+    # In yt-dlp the label goes as is: --sub-langs looks for exactly this key.
     assert track.lang == label
 
 
@@ -52,7 +52,7 @@ def test_seven_formats_are_one_track_and_the_first_serbian_label_wins():
 
 
 def test_youtube_metadata_never_refuses_a_serbian_track():
-    # Случай Juske: YouTube называет речь английской, а она сербская.
+    # Juske's case: YouTube calls the speech English, but it is Serbian.
     info = metadata(audio_language="en", manual_tracks=tracks("sr"))
 
     assert usable_manual_track(info).lang == "sr"
@@ -65,7 +65,7 @@ def test_a_serbian_family_pin_keeps_the_track(pin):
 
 @pytest.mark.parametrize("pin", ["en", "ru", "mk"])
 def test_a_pin_outside_the_serbian_family_refuses_the_track(pin):
-    # Хозяин сказал, что речь не сербская: сербская дорожка у такого ролика — перевод.
+    # The owner said the speech is not Serbian: a Serbian track on such a video is a translation.
     assert usable_manual_track(metadata(manual_tracks=tracks("sr")), pin) is None
 
 
@@ -105,6 +105,6 @@ async def test_a_pin_outside_the_serbian_family_sends_the_video_to_asr(pipeline)
     await pipeline.run(job)
 
     assert job.source == "asr"
-    # Дорожку не брали вовсе, а не взяли и уронили.
+    # The track was never taken at all, rather than taken and dropped.
     assert job.track_failed is False
     assert len(pipeline.workers) == 1

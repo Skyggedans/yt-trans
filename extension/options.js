@@ -1,11 +1,11 @@
 /**
- * Настройки и диагностика связи с демоном.
+ * Settings and connection diagnostics for the daemon.
  *
- * Проверяется ровно тот транспорт, которым идёт работа, — обычный HTTP или
- * HTTPS. WebSocket отсюда убран не для простоты: браузер повышает ws:// до
- * wss:// при обращении из контекста расширения, поэтому проверять его смысла
- * нет, а рабочий поток событий везут длинные опросы поверх того же протокола,
- * который эта диагностика и щупает.
+ * We check exactly the transport the work goes over — plain HTTP or
+ * HTTPS. WebSocket was removed from here not for simplicity: the browser upgrades
+ * ws:// to wss:// when called from an extension context, so there is no point
+ * checking it, and the working event stream is carried by long polling over the
+ * same protocol this diagnostic probes.
  */
 
 const api = globalThis.browser ?? globalThis.chrome;
@@ -39,51 +39,51 @@ function show(ok, text) {
   status.textContent = text;
 }
 
-/** Распознать причину отказа по тексту ошибки fetch. */
+/** Recognise the cause of a failure from the fetch error text. */
 function explain(error, base, scheme) {
   const text = String(error && error.message ? error.message : error).toLowerCase();
 
   if (text.includes("local network") || text.includes("address space") || text.includes("loopback")) {
     return (
-      "Браузер заблокировал обращение к локальной сети.\n\n" +
-      "Chrome: chrome://extensions → yt-trans → Подробности →\n" +
-      "Настройки сайта → Доступ к локальной сети → Разрешить.\n\n" +
-      "Firefox и форки: ограничение включено по умолчанию с версии 151,\n" +
-      `настраивается в разрешениях для ${base}.`
+      "The browser blocked access to the local network.\n\n" +
+      "Chrome: chrome://extensions → yt-trans → Details →\n" +
+      "Site settings → Local network access → Allow.\n\n" +
+      "Firefox and forks: the restriction is on by default since version 151,\n" +
+      `and is configured in the permissions for ${base}.`
     );
   }
 
   const other = scheme === "https" ? "http" : "https";
 
-  // curl не читает хранилище сертификатов браузера, поэтому свой CA ему
-  // указывается файлом — иначе ручная проверка падала бы на недоверии.
+  // curl does not read the browser's certificate store, so its own CA is given
+  // to it as a file — otherwise a manual check would fail on distrust.
   const manual =
     scheme === "https"
       ? `curl --cacert ~/.config/yt-trans/tls/ca.crt ${base}/v1/health`
       : `curl ${base}/v1/health`;
 
   let protocolHint =
-    `Демон с сертификатом ([server] tls_cert в config.toml) слушает только https,\n` +
-    `без сертификата — только http. Сейчас выбрано ${scheme}; возможно, нужно ${other}.`;
+    `A daemon with a certificate ([server] tls_cert in config.toml) listens only over https,\n` +
+    `without a certificate — only over http. Currently selected: ${scheme}; you may need ${other}.`;
 
   if (scheme === "https") {
     protocolHint +=
-      "\n\nСертификату демона должен доверять браузер: ca.crt из\n" +
-      "~/.config/yt-trans/tls/ ставится в хранилище сертификатов браузера —\n" +
-      "Chrome: chrome://settings/certificates → «Центры сертификации»;\n" +
-      "Firefox и Zen: Настройки → Приватность и защита → Сертификаты →\n" +
-      "«Просмотр сертификатов» → «Центры сертификации» → «Импорт».";
+      "\n\nThe browser must trust the daemon's certificate: ca.crt from\n" +
+      "~/.config/yt-trans/tls/ is installed into the browser's certificate store —\n" +
+      "Chrome: chrome://settings/certificates → \"Authorities\";\n" +
+      "Firefox and Zen: Settings → Privacy & Security → Certificates →\n" +
+      "\"View Certificates\" → \"Authorities\" → \"Import\".";
   }
 
   return (
-    `Демон не отвечает по адресу ${base}.\n\n` +
-    "Запусти его:  python -m helper.app\n" +
-    "Проверь вручную:  " + manual + "\n\n" +
+    `The daemon is not responding at ${base}.\n\n` +
+    "Start it:  python -m helper.app\n" +
+    "Check manually:  " + manual + "\n\n" +
     protocolHint
   );
 }
 
-/** Запрос здоровья по одному протоколу. Отказ сети — исключение, как у fetch. */
+/** A health request over one protocol. A network refusal is an exception, like with fetch. */
 async function healthAt(scheme, values) {
   const base = `${scheme}://${values.host}:${values.port}`;
   const response = await fetch(`${base}/v1/health`, { cache: "no-store" });
@@ -107,10 +107,10 @@ async function check() {
   try {
     found = await healthAt(values.scheme, values);
   } catch (error) {
-    // Демон с сертификатом слушает только https, и наоборот: выбранный протокол
-    // молчит, а второй отвечает. Это единичная проверка по нажатию кнопки, а не
-    // догадка на горячем пути; рабочий протокол запоминается, и длинные опросы
-    // дальше идут уже им.
+    // A daemon with a certificate listens only over https, and vice versa: the
+    // chosen protocol is silent while the other one answers. This is a one-off
+    // check on a button press, not a guess on the hot path; the working protocol
+    // is remembered, and long polls then go over it.
     const other = values.scheme === "https" ? "http" : "https";
 
     try {
@@ -124,7 +124,7 @@ async function check() {
     values.scheme = other;
     fields.scheme.value = other;
     await api.storage.local.set({ scheme: other });
-    switched = `Демон ответил по ${other}, а не по ${tried} — переключил настройку.\n\n`;
+    switched = `The daemon answered over ${other}, not ${tried} — switched the setting.\n\n`;
   }
 
   const base = found.base;
@@ -132,7 +132,7 @@ async function check() {
   let health;
 
   if (!response.ok) {
-    show(false, `Демон ответил кодом ${response.status} (${base}).`);
+    show(false, `The daemon answered with code ${response.status} (${base}).`);
 
     return;
   }
@@ -153,29 +153,29 @@ async function check() {
   show(
     true,
     switched +
-      "Связь есть.\n\n" +
-      `Распознавание: ${asr.model} (${asr.compute_type}, ~${asr.vram_mib} МиБ)\n` +
-      `Перевод: ${translator.model} (~${translator.vram_mib} МиБ)\n` +
-      `Язык источника: ${asr.language}\n` +
-      `Вторая строка: ${translator.study_language || "выключена"}\n` +
-      `Свободно на карте: ${gpu.free_mib} МиБ${gpu.busy ? " (занята пользователем)" : ""}\n` +
-      `В кэше дорожек: ${(health.cache || {}).tracks ?? 0}\n\n` +
-      "Модели задаются в конфиге демона, не здесь: расход видеопамяти\n" +
-      "неотделим от имени модели, и менять его из браузера нельзя.",
+      "Connection works.\n\n" +
+      `Recognition: ${asr.model} (${asr.compute_type}, ~${asr.vram_mib} MiB)\n` +
+      `Translation: ${translator.model} (~${translator.vram_mib} MiB)\n` +
+      `Source language: ${asr.language}\n` +
+      `Second line: ${translator.study_language || "off"}\n` +
+      `Free on the GPU: ${gpu.free_mib} MiB${gpu.busy ? " (busy with a user)" : ""}\n` +
+      `Tracks in cache: ${(health.cache || {}).tracks ?? 0}\n\n` +
+      "Models are set in the daemon config, not here: video memory usage\n" +
+      "is inseparable from the model name, and it cannot be changed from the browser.",
   );
 }
 
 function syncPositionRow() {
-  // Выбор места бессмыслен, пока сам оригинал выключен.
+  // Choosing the place is meaningless while the original itself is off.
   positionRow.hidden = !showOriginal.checked;
 }
 
 /**
- * Настройки показа сохраняются сразу, а не по кнопке.
+ * Display settings are saved at once, not on a button press.
  *
- * Кнопка проверяет связь с демоном — к тому, как рисуется текст, она отношения
- * не имеет. Content script слушает изменения хранилища и перерисовывает текущую
- * реплику на месте, так что действие видно на открытом ролике мгновенно.
+ * The button checks the connection to the daemon — it has nothing to do with how
+ * the text is drawn. The content script listens for storage changes and repaints
+ * the current cue in place, so the action is visible on an open video instantly.
  */
 async function saveDisplay() {
   syncPositionRow();
@@ -187,10 +187,10 @@ async function saveDisplay() {
 }
 
 /**
- * Источник реплик. В отличие от настроек показа, это меняет работу демона,
- * поэтому задание для открытого ролика начинается заново — иначе переключатель
- * выглядел бы сломанным: готовый результат никуда бы не делся. Оба варианта
- * лежат в кэше под разными ключами, так что возврат к прежнему мгновенный.
+ * Cue source. Unlike the display settings, this changes the daemon's work,
+ * so the job for an open video starts over — otherwise the switch would look
+ * broken: the finished result would stay. Both variants are cached under
+ * different keys, so going back to the previous one is instant.
  */
 async function saveSource() {
   await api.storage.local.set({ useAuthorTrack: useAuthorTrack.checked });

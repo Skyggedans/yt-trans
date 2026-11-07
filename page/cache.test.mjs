@@ -1,5 +1,5 @@
-// Скачивание копии проверяется настоящим Response и настоящими потоками:
-// подделанная сеть здесь — только `fetch`, всё остальное живёт по-настоящему.
+// Downloading a copy is checked with a real Response and real streams: the
+// faked network here is only `fetch`, everything else lives for real.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -8,16 +8,17 @@ import { collectBody, downloadVideo, readJson } from "./cache.js";
 const bytes = (text) => new TextEncoder().encode(text);
 
 test("an interrupted body is an error, not an empty answer", async () => {
-  // Тело оборвалось посреди ответа: демон умер или вышел срок. Пустой ответ
-  // здесь — это ошибка, иначе страница приняла бы обрыв за «ничего нет».
+  // The body broke in the middle of the response: the daemon died or the
+  // deadline passed. An empty answer here is an error, otherwise the page
+  // would take the break for "nothing there".
   const stream = new ReadableStream({
     start(controller) {
       controller.enqueue(bytes('{"links"'));
-      controller.error(new Error("обрыв"));
+      controller.error(new Error("interrupted"));
     },
   });
 
-  await assert.rejects(() => readJson(new Response(stream)), /обрыв/);
+  await assert.rejects(() => readJson(new Response(stream)), /interrupted/);
 });
 
 test("an empty body is an empty answer", async () => {
@@ -25,8 +26,8 @@ test("an empty body is an empty answer", async () => {
 });
 
 test("the body is handed on as a stream, not a pile of chunks", async () => {
-  // Свой массив кусков держал бы весь mp4 в памяти страницы. Тело уходит
-  // дальше по мере чтения, и до первого чтения потока оно не тронуто.
+  // Our own array of chunks would keep the whole mp4 in the page memory. The
+  // body goes on as it is read, and before the first stream read it is untouched.
   let pulls = 0;
   const body = new ReadableStream({
     pull(controller) {
@@ -49,7 +50,7 @@ test("the body is handed on as a stream, not a pile of chunks", async () => {
   const reader = out.getReader();
 
   assert.deepEqual([...(await reader.read()).value], [97, 98]);
-  assert.ok(pulls < 100, `прочитано ${pulls} кусков из 101`);
+  assert.ok(pulls < 100, `read ${pulls} chunks of 101`);
 });
 
 test("a finished copy is the whole file and its size", async () => {
@@ -94,13 +95,13 @@ test("a file without a length is still a copy", async () => {
 });
 
 test("a daemon that refuses does not become a copy", async () => {
-  globalThis.fetch = async () => new Response("нет", { status: 404 });
+  globalThis.fetch = async () => new Response("no", { status: 404 });
 
-  await assert.rejects(downloadVideo("/v1/videos/x/file"), /демон ответил 404/);
+  await assert.rejects(downloadVideo("/v1/videos/x/file"), /daemon answered 404/);
 });
 
 test("cancelling stops the copy and leaves nothing behind", async () => {
-  // Поток, который сам никогда не кончится: остановить его может только отмена.
+  // A stream that never ends by itself: only cancellation can stop it.
   const stream = new ReadableStream({
     pull(controller) {
       controller.enqueue(bytes("abcd"));

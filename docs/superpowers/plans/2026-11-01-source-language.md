@@ -1,108 +1,108 @@
-# Язык источника: определитель всегда, коды проверены, кэш помнит решение — план реализации
+# Source language: the detector always runs, codes are validated, the cache remembers the decision — implementation plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Задачи 1–11 — исполнителям по одной; задача 12 — ручная, для хозяина: исполнителю её не отдавать, после задачи 11 остановиться и передать её хозяину.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Tasks 1–11 — one per implementer; task 12 is manual, for the owner: do not hand it to an implementer, stop after task 11 and pass it to the owner.
 
-**Goal:** демон верно определяет язык речи любого ролика и не прячет решение за строкой `auto` в ключе кэша: определитель работает всегда, метаданные YouTube — только подсказка, коды языков проверяются, а решение видно клиентам и лежит в кэше вместе с дорожкой.
+**Goal:** the daemon correctly determines the speech language of any video and does not hide the decision behind the string `auto` in the cache key: the detector always runs, YouTube metadata is only a hint, language codes are validated, and the decision is visible to clients and lives in the cache together with the track.
 
-**Architecture:** новый чистый модуль `helper/language.py` (только стандартная библиотека) держит коды, правило определителя и решение о языке; его импортируют и воркер распознавания, и демон. Воркер всегда меряет язык по окнам с речью, решает по правилу, сам составляет затравку под решённый язык и возвращает решение вместе с метриками сегментов. Демон отсекает тишину, повторы и эхо затравки, кладёт решение на задание, в снимок и в запись кэша. Ключ кэша несёт язык, объявленный человеком, а не строку `"auto"`; старые дорожки перестают находиться уже с новым ключом (задача 7: без `target_lang`, `SCHEMA_VERSION` 2), а `PROMPT_VERSION` 2 (задача 11) метит смену правил языка.
+**Architecture:** a new pure module `helper/language.py` (standard library only) holds the codes, the detector rule and the language decision; both the recognition worker and the daemon import it. The worker always measures the language over windows with speech, decides by the rule, composes the initial prompt for the decided language itself, and returns the decision together with the segment metrics. The daemon cuts off silence, repeats and prompt echo, and puts the decision on the job, into the snapshot and into the cache record. The cache key carries the language declared by a human, not the string `"auto"`; old tracks stop being found as soon as the key changes (task 7: without `target_lang`, `SCHEMA_VERSION` 2), and `PROMPT_VERSION` 2 (task 11) marks the change of the language rules.
 
-**Tech Stack:** Python 3.14, FastAPI, faster-whisper 1.2.1 (пакетный режим), yt-dlp 2026.08.19, pytest + pytest-asyncio, httpx ASGITransport.
+**Tech Stack:** Python 3.14, FastAPI, faster-whisper 1.2.1 (batch mode), yt-dlp 2026.08.19, pytest + pytest-asyncio, httpx ASGITransport.
 
-**Spec:** `docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md` — разделы «4. Языки: вход любой, выход всегда один», «Исследование языков: что оказалось неверно и что реально ломается» (поломки 3–9 и «Решения»), «Что надо поправить прямо сейчас», «Вторая строка: решение хозяина», «Язык источника: внутренняя величина, а не настройка». Поломки 1, 2 и 10 — план «Проверка перевода».
+**Spec:** `docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md` — sections “4. Languages: any input, always one output”, “Language research: what turned out to be wrong and what actually breaks” (breakages 3–9 and “Decisions”), “What must be fixed right now”, “The second line: the owner's decision”, “Source language: an internal quantity, not a setting”. Breakages 1, 2 and 10 — the “Translation check” plan.
 
-**Основа:** ветка `source-language` от вершины PR #1 (`ba274ea`) с влитым `main` (`98a3ad2`: ролики 18+ и README). Номера строк — на `98a3ad2`; каждая ссылка называет и функцию, искать по имени: задачи меняют одни и те же файлы, и номера после первых задач поедут. PR #1 ещё не влит; если его поправят по отзывам, ветку надо догнать слиянием. План закоммичен в ветку отдельным коммитом до задачи 1. Если в нём отмечают шаги, строка ` M docs/superpowers/plans/2026-11-01-source-language.md` в `git status` — не дефект; в коммиты задач план не добавлять.
+**Basis:** branch `source-language` from the tip of PR #1 (`ba274ea`) with `main` merged in (`98a3ad2`: 18+ videos and README). Line numbers are on `98a3ad2`; every reference also names the function — search by name: tasks change the same files, and the numbers will drift after the first tasks. PR #1 is not merged yet; if it is amended in response to review, the branch must be caught up by merging. The plan is committed to the branch in a separate commit before task 1. If steps are ticked in it, the line ` M docs/superpowers/plans/2026-11-01-source-language.md` in `git status` is not a defect; do not add the plan to task commits.
 
 ## Global Constraints
 
-- `extension/` не меняется ни строкой. Протокол меняется только добавлением. Новых значений `Stage` нет. Новых ключей верхнего уровня в снимке и в событиях `state` с именами `source`, `message`, `waiting`, `retry` нет: `extension/content.js` читает их (строки 250, 364–370) и переделает надпись бейджа. Решение о языке живёт только под ключом снимка `language` и в новом событии `{"type": "language", ...}`; незнакомые типы событий и ключи снимка расширение пропускает.
-- На выходе всегда те же две строки, русская и черногорская; `targetLang` выход не меняет.
-- Определение языка идёт внутри того же запуска воркера под тем же пропуском на карту: без второй загрузки модели, второго пропуска, скачивания моделей и второй модели в памяти карты.
-- Семантика аккаунта 18+ в `JobRunner._fetch` не меняется.
-- Тесты не касаются сети, карты и настоящих путей кэша; изоляция `YT_TRANS_CACHE`/`YT_TRANS_CONFIG` в `tests/conftest.py` остаётся первой: `JobManager.__init__` стирает каталог отложенного звука.
-- `helper/language.py` импортирует только стандартную библиотеку: его грузят и демон, и воркер.
-- У воркера `--language` по умолчанию остаётся `"sr"`: на это опирается `helper/measure.py`.
-- Русский язык в комментариях, строках журнала и отказах. Фразы, которые доходят до бейджа, — не длиннее 60 знаков, главное в начале.
-- Коммиты: сообщение по-русски, без строк `Co-Authored-By` и других подписей. `--no-verify` не использовать никогда. Хук перед коммитом гоняет обзор диффа локальной моделью до 300 с — таймаут команды не меньше 360000 мс. Git — через `/usr/bin/git`.
-- Тесты: `.venv/bin/python -m pytest -q` (на `98a3ad2` — 143 passed).
+- `extension/` does not change by a single line. The protocol changes only by addition. There are no new `Stage` values. There are no new top-level keys in the snapshot and in `state` events named `source`, `message`, `waiting`, `retry`: `extension/content.js` reads them (lines 250, 364–370) and would rework the badge caption. The language decision lives only under the snapshot key `language` and in the new event `{"type": "language", ...}`; the extension skips unknown event types and snapshot keys.
+- On output there are always the same two lines, Russian and Montenegrin; `targetLang` does not change the output.
+- Language detection happens inside the same worker run under the same card lease: no second model load, no second lease, no model downloads and no second model in the card's memory.
+- The semantics of the 18+ account in `JobRunner._fetch` do not change.
+- Tests do not touch the network, the card or real cache paths; the `YT_TRANS_CACHE`/`YT_TRANS_CONFIG` isolation in `tests/conftest.py` stays first: `JobManager.__init__` wipes the paused-audio directory.
+- `helper/language.py` imports only the standard library: both the daemon and the worker load it.
+- In the worker, `--language` still defaults to `"sr"`: `helper/measure.py` relies on that.
+- Russian in comments, log lines and refusals. Phrases that reach the badge are no longer than 60 characters, with the main point first.
+- Commits: the message is in Russian, without `Co-Authored-By` lines and other signatures. Never use `--no-verify`. The pre-commit hook runs a diff review with a local model for up to 300 s — the command timeout is at least 360000 ms. Git — via `/usr/bin/git`.
+- Tests: `.venv/bin/python -m pytest -q` (on `98a3ad2` — 143 passed).
 
-## Правила языка
+## Language rules
 
-- **Закреплённый язык решает.** Значение `[asr] language`, отличное от `auto`, идёт в декодер как есть (`hr` и `bs` не сворачиваются в `sr`); определитель всё равно работает, а расхождение помечается сравнением по семье языков. Так велит замысел: объявление человека — «защита от неверного угадывания» («Язык источника: внутренняя величина»), «канал на английском помечается один раз, и дальше распознавание не угадывает» (раздел 4), а определитель при нём работает «как сверка, а не как запасной путь» («Решения»). «Подсказка» из «Решений» здесь — метка YouTube (`--hint`): будь подсказкой и закреп, его перевешивали бы те же голоса окон, от ошибки которых он защищает.
-- **Негодный закреплённый язык не роняет демон.** При загрузке настроек — `log.error` с человеческой фразой; каждое новое задание получает `PermanentJobError` до первого обращения к YouTube и без пропуска на карту, а ролики, закэшированные без закрепа, по-прежнему открываются: восстановление читает негодный код как «не закреплено»; сделанные при прежнем годном закрепе не находятся, пока код не исправлен.
-- **Решение с низкой уверенностью тоже кэшируется.** Повторное распознавание стоило бы карты при каждом просмотре; лекарство — видимая пометка на проводе и закрепление языка человеком (действует на все ролики и на ключ кэша).
+- **A pinned language decides.** A `[asr] language` value other than `auto` goes to the decoder as is (`hr` and `bs` are not folded into `sr`); the detector still runs, and a mismatch is marked by comparison over the language family. This is what the design demands: a human declaration is “protection against wrong guessing” (“Source language: an internal quantity”), “an English channel is marked once, and after that recognition does not guess” (section 4), and with it the detector works “as a cross-check, not as a fallback” (“Decisions”). The “hint” from “Decisions” here is the YouTube label (`--hint`): if the hint were also a pin, the same window votes it protects against errors of would outweigh it.
+- **An invalid pinned language does not bring the daemon down.** On settings load — `log.error` with a human phrase; every new job gets a `PermanentJobError` before the first request to YouTube and without a card lease, while videos cached without a pin still open: restore reads the invalid code as “not pinned”; those made under a previously valid pin are not found until the code is fixed.
+- **A low-confidence decision is cached too.** Re-running recognition would cost the card on every view; the remedy is a visible mark on the wire and pinning the language by a human (applies to all videos and to the cache key).
 
-## Решения, расходящиеся с буквой замысла
+## Decisions that diverge from the letter of the design
 
-1. **Ключ кэша несёт язык, объявленный человеком, а не действующий** (замысел, «Решения»: «В ключ кэша идёт действующий язык… Поиск по объявленному, запись под действующим»). Кэш обязан ответить до любой работы на карте (`helper/cache.py:4-5`), а действующий язык появляется только после воркера. Когда язык закрепил человек, действующий с ним совпадает — закрепление решает токен декодера, — так что «поиск по объявленному, запись под действующим» выполняется буквально. Когда не объявил никто, в ключе пустая строка, а решение определителя лежит в записи и видно на проводе. Ошибку определителя исправляет закрепление языка человеком (другой ключ — другая запись) или смена правила с поднятием `PROMPT_VERSION`. Пока объявления на ролик нет («Отложено»), а закреп действует на все ролики, ошибка определителя на незакреплённом ролике в библиотеке на нескольких языках живёт в кэше до следующего `PROMPT_VERSION` (снятый закреп снова находит запись с `pin=""`); без объявления `mismatch` не загорается — видны только `effective`, `reason` и `confidence`.
-2. **Метаданные YouTube в ключ не входят и голосующие окна не перевешивают:** канал Juske помечен `en` при сербской речи. Подсказка решает, только когда речи не нашлось ни в одном окне.
-3. **«Реплика, совпадающая с затравкой»** понимается как «состоит только из слов затравки» (`is_echo`): буквальное равенство не встретилось ни разу на 66 620 закэшированных репликах, а записанное эхо — обрывки фразы затравки и списка имён. Одних слов затравки мало: среди них должно быть необиходное слово фразы или вводки имён (для `sr` — transkript, snimka, pominju) либо два разных имени из списка, не считая обиходных слов фразы (заголовок «OVO JE …» делает именем и OVO). Иначе одно имя из заголовка в обиходной фразе («Šta je ovo?» под заголовком «ŠTA SE KRILO…», «Ovo je Beograd.») уходило бы как эхо. «Сегменты фильтруются по полям» тоже понимается не буквально: «тишина» выбрасывает сегмент целиком, а «повтор» его только помечает, и внутри выбрасываются одни зациклившиеся предложения — со своей степенью сжатия (формула библиотеки) выше порога или повторяющие уже сказанное в этом сегменте. Сегмент пакетного режима — кусок речи до 30 с, и петля посреди него иначе уносила бы диалог перед ней (в кэше хозяина — у 20 роликов из 163).
-4. **Дорожка автора на любом языке и тридцатисекундный зонд отложены** (замысел, «Решения»: «Авторская дорожка открывается для любого языка… на одном тридцатисекундном зонде»). Дешёвого определителя без карты на машине нет (среди скачанных моделей только large-v3 и turbo), зонд на карте противоречит «снимает и карту», а брать не сербскую дорожку без зонда — значит вернуть случай Juske, где английский перевод автора стал бы источником, то есть перевод перевода. В этом плане метки дорожек нормализуются, сербская дорожка берётся при любой записи метки, а закреплённый не сербский язык запрещает сербскую дорожку. Условия следующего шага — в «Отложено». Обратный случай остаётся, как и на 98a3ad2: английский ролик с сербским переводом от автора без закрепа берёт этот перевод источником. Видно это, только когда YouTube дал метку языка: `mismatch` («YouTube указал en, дорожка автора sr») и предупреждение в журнале; без метки — никак. Закрыть его может только зонд («Отложено»).
-5. **Промпт переводчика не меняется.** Рабочий путь — `translate_dual` с `montenegrin.SYSTEM_PROMPT`, который язык источника не называет; строка «с сербского языка на русский» (`translate.py:83`) живёт в спящем одностроковом пути.
+1. **The cache key carries the language declared by a human, not the effective one** (design, “Decisions”: “The effective language goes into the cache key… Lookup by the declared one, writing under the effective one”). The cache must answer before any work on the card (`helper/cache.py:4-5`), and the effective language appears only after the worker. When a human has pinned the language, the effective one matches it — the pin decides the decoder token — so “lookup by the declared one, writing under the effective one” holds literally. When nobody declared it, the key holds an empty string, and the detector's decision lies in the record and is visible on the wire. A detector error is fixed by a human pinning the language (a different key — a different record) or by a rule change with a `PROMPT_VERSION` bump. While there is no per-video declaration (“Deferred”), and the pin applies to all videos, a detector error on an unpinned video in a multilingual library lives in the cache until the next `PROMPT_VERSION` (a removed pin finds the record with `pin=""` again); without a declaration `mismatch` does not light up — only `effective`, `reason` and `confidence` are visible.
+2. **YouTube metadata does not enter the key and does not outweigh the voting windows:** the Juske channel is labelled `en` while the speech is Serbian. The hint decides only when speech was found in no window.
+3. **“A cue matching the prompt”** is understood as “consists only of the prompt's words” (`is_echo`): literal equality never occurred across 66 620 cached cues, and the recorded echo is fragments of the prompt phrase and the list of names. The prompt's words alone are not enough: among them there must be an uncommon word of the phrase or of the names intro (for `sr` — transkript, snimka, pominju) or two different names from the list, not counting the common words of the phrase (the title “OVO JE …” makes OVO a name too). Otherwise one name from the title in a common phrase (“Šta je ovo?” under the title “ŠTA SE KRILO…”, “Ovo je Beograd.”) would go out as echo. “Segments are filtered by fields” is also not to be taken literally: “silence” throws the segment away entirely, while “repeat” only marks it, and inside it only the looping sentences are thrown away — with their own compression ratio (the library's formula) above the threshold or repeating what has already been said in this segment. A batch-mode segment is a piece of speech up to 30 s, and a loop in the middle of it would otherwise carry away the dialogue before it (in the owner's cache — in 20 videos out of 163).
+4. **The author's track in any language and the thirty-second probe are deferred** (design, “Decisions”: “The author's track opens for any language… on a single thirty-second probe”). There is no cheap detector without the card on this machine (among the downloaded models there are only large-v3 and turbo), a probe on the card contradicts “releases the card too”, and taking a non-Serbian track without a probe means bringing back the Juske case, where the author's English translation would become the source, that is, a translation of a translation. In this plan track labels are normalised, the Serbian track is taken under any spelling of the label, and a pinned non-Serbian language forbids the Serbian track. The conditions for the next step are in “Deferred”. The reverse case remains, as on 98a3ad2: an English video with a Serbian translation by the author and without a pin takes that translation as the source. That is visible only when YouTube gave a language label: `mismatch` (“YouTube indicated en, author track sr”) and a warning in the log; without a label — not at all. Only a probe can close it (“Deferred”).
+5. **The translator prompt does not change.** The working path is `translate_dual` with `montenegrin.SYSTEM_PROMPT`, which does not name the source language; the line “from the Serbian language to Russian” (`translate.py:83`) lives in the dormant single-line path.
 
-## Отложено
+## Deferred
 
-- **Дорожка автора на любом языке с зондом.** Условия: не сербская дорожка не выбирается без вердикта зонда; до зонда в кэше ищутся все кандидаты-отпечатки и `asr`, в порядке восстановления; у зонда есть ручка отмены, как `_asr_proc` у распознавания; окно без речи даёт `verified: false`, а не вердикт; выбор детектора (модель на процессоре, её скачивание и память) — по замеру времени на этой машине.
-- **Объявление языка на ролик и на ссылку.** Читать только через `JobRunner._declaration(job)`; место в ключе уже есть (`CacheKey.pin`). Следствие для реестра: ключ задания `(video_id, use_author_track)` выдаст готовое задание, сделанное при другом объявлении, — при вводе поля это надо учесть. Исключения — проверка закрепления в начале `_pipeline` и `JobManager._key_for`: у восстановления нет задания, оно читает `[asr] language` через `hint` и меняется вместе с `_declaration`.
-- **Видимые пометки «выравнивание не проверено» и «вторая строка не удостоверена»** — условие готовности страницы планшета. Языконезависимая защита от съезда реплик, соблюдение приговора проверяльщиков, типизированная вторая строка, `montenegrin.check` только для sr/cnr — план «Проверка перевода».
-- **Сторона страницы планшета** (замысел, «Вторая строка: решение хозяина», «Язык источника: внутренняя величина»): решение о языке на экране; оригинальная звуковая дорожка в склейке (та же сортировка `-S lang,+size`, готовность — язык дорожки равен `language.effective`); скрытие второй строки только при совпадении её языка с первой, в том числе на источнике по-русски или по-черногорски. Демон отдаёт для них `language.effective`, `mismatch` и `note`; `lang` второй строки — «Проверка перевода».
-- **Перенос строк по союзам других языков** (`CONJUNCTIONS` в `helper/segment.py`) — косметика внутри реплики, на кэш не влияет.
-- **Удаление старых записей кэша** (около 18 МБ после смены версии) — решение хозяина.
-- **`has_automatic_captions`** намеренно остаётся непрочитанным: это та же дорожка распознавания YouTube, что и `audio_language`, то есть второй сигнал из того же источника.
-- **Другие места удаления отложенного звука** (`helper/jobs.py`, около строк 922, 545, 770) и **осиротевший yt-dlp при отмене** — без изменений.
-- **Лишние проходы VAD в определителе**: на файле без речи — один лишний проход по всему файлу (около 13 с на трёхчасовом). Речь окна можно считать один раз и звать `detect_language` с `vad_filter=False`.
-- **«Task exception was never retrieved … Preempted» в журнале** при каждой отмене во время распознавания: `_run_asr_watched` не дожидается `work` после `CancelledError`. Было и до этого плана; шум, а не поломка.
+- **The author's track in any language with a probe.** Conditions: a non-Serbian track is not selected without a probe verdict; before the probe, all candidate fingerprints and `asr` are looked up in the cache, in restore order; the probe has a cancel handle like `_asr_proc` in recognition; a window without speech gives `verified: false`, not a verdict; the choice of detector (a CPU model, its download and memory) is by timing on this machine.
+- **Language declaration per video and per link.** Read only through `JobRunner._declaration(job)`; the slot in the key already exists (`CacheKey.pin`). Consequence for the registry: the job key `(video_id, use_author_track)` will hand out a finished job made under a different declaration — this must be taken into account when the field is introduced. The exceptions are the pin check at the start of `_pipeline` and `JobManager._key_for`: restore has no job, it reads `[asr] language` through `hint` and changes together with `_declaration`.
+- **Visible marks “alignment not checked” and “second line not certified”** — a readiness condition for the tablet page. Language-independent protection against drifting cues, compliance with the reviewers' verdict, a typed second line, `montenegrin.check` only for sr/cnr — the “Translation check” plan.
+- **The tablet page side** (design, “The second line: the owner's decision”, “Source language: an internal quantity”): the language decision on screen; the original audio track in the mux (the same `-S lang,+size` ordering, readiness — the track language equals `language.effective`); hiding the second line only when its language matches the first, including on a source in Russian or Montenegrin. For them the daemon provides `language.effective`, `mismatch` and `note`; the `lang` of the second line — “Translation check”.
+- **Line wrapping at conjunctions of other languages** (`CONJUNCTIONS` in `helper/segment.py`) — cosmetics inside a cue, does not affect the cache.
+- **Deleting old cache records** (about 18 MB after the version change) — the owner's decision.
+- **`has_automatic_captions`** deliberately remains unread: it is the same YouTube recognition track as `audio_language`, that is, a second signal from the same source.
+- **Other places where paused audio is deleted** (`helper/jobs.py`, around lines 922, 545, 770) and **the orphaned yt-dlp on cancel** — unchanged.
+- **Extra VAD passes in the detector**: on a file without speech — one extra pass over the whole file (about 13 s on a three-hour one). The speech of a window could be counted once and `detect_language` called with `vad_filter=False`.
+- **“Task exception was never retrieved … Preempted” in the log** on every cancel during recognition: `_run_asr_watched` does not await `work` after `CancelledError`. It existed before this plan too; noise, not a breakage.
 
 ## Review Focus
 
-- Ролик почти без речи (клип, тихое вступление): ни одно окно не голосует → один дополнительный проход → подсказка → `"sr"` с причиной `fallback`; в Whisper никогда не уходит пустая строка, воркер не падает. Тест в задаче 5.
-- Звук длиной от 30 до 37,5 с: смещения окон не уходят в минус; звук до 30 с — одно окно тем же путём. Тест в задаче 5.
-- Закреплённый язык с регионом, письменностью или старым кодом (`sr-Latn`, `SR`, `sh`, `cnr`) нормализуется; мусор (`serbian`) отказывает задание один раз, без петли пересоздания, а ролики, закэшированные без закрепа, по-прежнему открываются: восстановление читает негодный код как «не закреплено»; сделанные при прежнем годном закрепе не находятся, пока код не исправлен. Тесты в задаче 4 (отказ до YouTube и без пересоздания) и в задаче 7 (негодный закреп при восстановлении читается как «не закреплено», закэшированный ролик открывается).
-- Запись кэша без поля `language` (повреждённая или правленная руками) или с `language: null` отдаётся с `language: null` без падения; запись без реплик не отдаётся. Тест в задаче 7.
-- Русская, украинская или македонская речь, у которой доля сербского семейства перешла порог: язык остаётся своим (страж славянских соседей). Тест в задаче 5.
+- A video with almost no speech (a clip, a quiet intro): no window votes → one extra pass → hint → `"sr"` with reason `fallback`; an empty string never goes to Whisper, the worker does not crash. Test in task 5.
+- Audio from 30 to 37.5 s long: window offsets do not go negative; audio under 30 s — one window the same way. Test in task 5.
+- A pinned language with a region, script or old code (`sr-Latn`, `SR`, `sh`, `cnr`) is normalised; garbage (`serbian`) refuses the job once, without a recreation loop, while videos cached without a pin still open: restore reads the invalid code as “not pinned”; those made under a previously valid pin are not found until the code is fixed. Tests in task 4 (refusal before YouTube and without recreation) and in task 7 (an invalid pin on restore is read as “not pinned”, the cached video opens).
+- A cache record without the `language` field (corrupted or edited by hand) or with `language: null` is served with `language: null` without crashing; a record without cues is not served. Test in task 7.
+- Russian, Ukrainian or Macedonian speech whose Serbian-family share has crossed the threshold: the language stays its own (the Slavic-neighbours guard). Test in task 5.
 
 ---
-### Task 1: Отмена не оставляет зомби
+### Task 1: Cancellation leaves no zombies
 
-Сегодня `Job.cancel()` сначала стирает отложенный звук паузы и только потом убивает
-распознавание и отменяет задачу. `discard_audio` снимает ручку и зовёт
-`path.unlink(missing_ok=True)`, а `missing_ok` глотает только ENOENT: ошибка диска
-(EACCES, EPERM, EROFS, EIO) вылетает из `cancel()` раньше `kill_asr()`. `JobManager._remove`
-к этому моменту уже вынул задание из реестра. Возобновлённое задание посреди распознавания
-так и держит карту, но уже без хозяина: Whisper доходит до конца, задание снова берёт пропуск
-под переводчика, пишет дорожку в кэш и заканчивается DONE. Цикл в `drop` обрывается на нём и
-не доходит до соседнего варианта ролика. `/drop` отвечает 500. Та же ошибка в сбросе звука
-сразу после распознавания (`_pipeline`, строка 928) выбрасывает готовый транскрипт: задание
-падает повторяемым отказом раньше, чем присвоены `job.cues`, и через минуту распознаёт
-ролик заново.
+Today `Job.cancel()` first wipes the paused audio and only then kills
+recognition and cancels the task. `discard_audio` clears the handle and calls
+`path.unlink(missing_ok=True)`, and `missing_ok` swallows only ENOENT: a disk error
+(EACCES, EPERM, EROFS, EIO) escapes from `cancel()` before `kill_asr()`. `JobManager._remove`
+by that moment has already taken the job out of the registry. A resumed job in the middle of recognition
+thus keeps the card, but already without an owner: Whisper runs to the end, the job takes the lease
+for the translator again, writes the track to the cache and ends DONE. The loop in `drop` breaks on it and
+does not reach the neighbouring variant of the video. `/drop` answers 500. The same error in the audio reset
+right after recognition (`_pipeline`, line 928) throws away the finished transcript: the job
+fails with a retryable refusal before `job.cues` are assigned, and a minute later recognizes
+the video again.
 
 **Files:**
-- Modify: `helper/jobs.py:555-565` (`Job.cancel`), `helper/jobs.py:926-928` (`JobRunner._pipeline`: сброс звука после распознавания), `helper/jobs.py:1781-1784` (комментарий в `JobManager._evict`)
-- Modify: `tests/conftest.py:3-12` (импорты), после фикстуры `clock` (`:81-100`) — фикстуры `audio_dir` и `refuse_in_audio_dir`
-- Modify: `tests/test_limits.py:301-312` (фикстура `audio_dir` уходит в conftest), `tests/test_limits.py:472-488` (функция `refuse_in_audio_dir` уходит в conftest), `tests/test_limits.py:491-494` и `:510` (`test_disk_errors_in_audio_housekeeping_do_not_fail_a_request` берёт фикстуру)
-- Test: `tests/test_drop.py` (импорты `:4-7`; три теста в конец файла)
+- Modify: `helper/jobs.py:555-565` (`Job.cancel`), `helper/jobs.py:926-928` (`JobRunner._pipeline`: audio reset after recognition), `helper/jobs.py:1781-1784` (comment in `JobManager._evict`)
+- Modify: `tests/conftest.py:3-12` (imports), after the `clock` fixture (`:81-100`) — the `audio_dir` and `refuse_in_audio_dir` fixtures
+- Modify: `tests/test_limits.py:301-312` (the `audio_dir` fixture moves to conftest), `tests/test_limits.py:472-488` (the `refuse_in_audio_dir` function moves to conftest), `tests/test_limits.py:491-494` and `:510` (`test_disk_errors_in_audio_housekeeping_do_not_fail_a_request` takes the fixture)
+- Test: `tests/test_drop.py` (imports `:4-7`; three tests at the end of the file)
 
 **Interfaces:**
-- Consumes: фикстуры `manager` и `client` из `tests/conftest.py`.
+- Consumes: the `manager` and `client` fixtures from `tests/conftest.py`.
 - Produces:
-  - фикстура `audio_dir(manager) -> Path`: это `helper.jobs.PAUSED_AUDIO_DIR`, созданный к началу теста и убранный после (`shutil.rmtree(..., ignore_errors=True)`). Перенесена из `tests/test_limits.py`, поведение то же.
-  - фикстура `refuse_in_audio_dir(monkeypatch) -> Callable[[str], None]`. Вызов `refuse_in_audio_dir("unlink")` (или `"stat"`, `"iterdir"`) подменяет этот метод `pathlib.Path` до конца теста. Для пути, который сам `PAUSED_AUDIO_DIR` или лежит прямо в нём, метод бросает `PermissionError(errno.EACCES, "Permission denied", str(path))`, для остальных путей работает как обычно. Было функцией `refuse_in_audio_dir(monkeypatch, method)` в `tests/test_limits.py`. Фикстура-фабрика, потому что подмене нужен `monkeypatch` теста; простые помощники conftest (как `metadata` из задачи 3) тесты берут `from conftest import …` — это работает в режиме импорта по умолчанию, который `pytest.ini` не меняет.
-  - `Job.cancel(self) -> None` больше не бросает `OSError`. Порядок такой: `self._audio_dead = True`, потом `self.kill_asr()`, потом `self._task.cancel()` (если задача есть), и только потом `self.discard_audio()` под `except OSError as exc: log.warning("звук %s не убран при сбросе: %s", self.video_id, exc)`.
-  - `JobRunner._pipeline` после успешного распознавания сбрасывает звук под `except OSError as exc: log.warning("звук %s не убран после распознавания: %s", job.video_id, exc)` и идёт дальше: реплики присваиваются, задание переходит к переводу.
+  - fixture `audio_dir(manager) -> Path`: this is `helper.jobs.PAUSED_AUDIO_DIR`, created by the start of the test and removed afterwards (`shutil.rmtree(..., ignore_errors=True)`). Moved from `tests/test_limits.py`, behaviour the same.
+  - fixture `refuse_in_audio_dir(monkeypatch) -> Callable[[str], None]`. A call `refuse_in_audio_dir("unlink")` (or `"stat"`, `"iterdir"`) replaces this method of `pathlib.Path` until the end of the test. For a path that is `PAUSED_AUDIO_DIR` itself or lies directly in it, the method raises `PermissionError(errno.EACCES, "Permission denied", str(path))`, for other paths it works as usual. It used to be the function `refuse_in_audio_dir(monkeypatch, method)` in `tests/test_limits.py`. A factory fixture, because the replacement needs the test's `monkeypatch`; simple conftest helpers (like `metadata` from task 3) are taken by tests with `from conftest import …` — this works in the default import mode, which `pytest.ini` does not change.
+  - `Job.cancel(self) -> None` no longer raises `OSError`. The order is: `self._audio_dead = True`, then `self.kill_asr()`, then `self._task.cancel()` (if there is a task), and only then `self.discard_audio()` under `except OSError as exc: log.warning("звук %s не убран при сбросе: %s", self.video_id, exc)`.
+  - `JobRunner._pipeline` after successful recognition resets the audio under `except OSError as exc: log.warning("звук %s не убран после распознавания: %s", job.video_id, exc)` and moves on: the cues are assigned, the job goes on to translation.
 
-- [ ] **Step 1: Перенести `audio_dir` и `refuse_in_audio_dir` в `tests/conftest.py`**
+- [ ] **Step 1: Move `audio_dir` and `refuse_in_audio_dir` into `tests/conftest.py`**
 
-В импорты `tests/conftest.py` добавить, сохраняя алфавитный порядок, `import errno` и
-`from pathlib import Path` (стандартная библиотека, импорт наверху безопасен). `helper.*`
-по-прежнему импортируется только внутри фикстур. Сразу после фикстуры `clock` вставить:
+To the imports of `tests/conftest.py` add, keeping alphabetical order, `import errno` and
+`from pathlib import Path` (standard library, importing at the top is safe). `helper.*`
+is still imported only inside fixtures. Right after the `clock` fixture insert:
 
 ```python
 @pytest.fixture
 def audio_dir(manager):
-    """Каталог отложенного звука: к началу теста чистый, по окончании убранный.
+    """The paused-audio directory: clean at the start of the test, removed at the end.
 
-    После manager, а не раньше: JobManager() при создании сносит этот каталог.
-    Убирать надо и ради разреженных файлов на гигабайты: места они не занимают, но
-    остались бы в каталоге кэша до конца прогона.
+    After manager, not before: JobManager() wipes this directory when created.
+    It has to be removed even for sparse multi-gigabyte files: they take no space, but
+    they would remain in the cache directory until the end of the run.
     """
     from helper.jobs import PAUSED_AUDIO_DIR
 
@@ -115,12 +115,12 @@ def audio_dir(manager):
 
 @pytest.fixture
 def refuse_in_audio_dir(monkeypatch):
-    """Фабрика refuse(method): метод Path внутри каталога звука пауз отказывает правами.
+    """Factory refuse(method): a Path method inside the paused-audio directory fails with permissions.
 
-    Отказ такой же, как у настоящего каталога без прав: PermissionError с именем пути.
-    Права на сам каталог тесту не годятся: под root их не проверяет никто, и тест
-    проходил бы там, где ничего не проверил. Пути вне каталога работают как обычно, чтобы
-    подмена не задела ни остальной демон, ни pytest. Подмена держится до конца теста.
+    The failure is the same as a real directory without permissions: PermissionError with the path name.
+    Directory permissions themselves are not good for the test: under root nobody checks them, and the test
+    would pass where it checked nothing. Paths outside the directory work as usual, so that
+    the replacement touches neither the rest of the daemon nor pytest. The replacement lasts until the end of the test.
     """
     from helper.jobs import PAUSED_AUDIO_DIR
 
@@ -138,19 +138,19 @@ def refuse_in_audio_dir(monkeypatch):
     return refuse
 ```
 
-В `tests/test_limits.py`:
-- удалить фикстуру `audio_dir` (301-312) и функцию `refuse_in_audio_dir` (472-488);
-- в `test_disk_errors_in_audio_housekeeping_do_not_fail_a_request` (491-494) добавить параметр `refuse_in_audio_dir` после `caplog`: `(manager, audio_dir, clock, monkeypatch, caplog, refuse_in_audio_dir, method)`. Вызов на строке 510 `refuse_in_audio_dir(monkeypatch, method)` заменить на `refuse_in_audio_dir(method)`;
-- импорты `errno`, `shutil`, `Path` и `PAUSED_AUDIO_DIR` оставить: ими пользуются `test_evict_without_a_paused_audio_directory_is_quiet` и `test_audio_that_cannot_be_removed_still_counts_against_the_budget`.
+In `tests/test_limits.py`:
+- delete the `audio_dir` fixture (301-312) and the function `refuse_in_audio_dir` (472-488);
+- in `test_disk_errors_in_audio_housekeeping_do_not_fail_a_request` (491-494) add the parameter `refuse_in_audio_dir` after `caplog`: `(manager, audio_dir, clock, monkeypatch, caplog, refuse_in_audio_dir, method)`. Replace the call on line 510 `refuse_in_audio_dir(monkeypatch, method)` with `refuse_in_audio_dir(method)`;
+- keep the imports `errno`, `shutil`, `Path` and `PAUSED_AUDIO_DIR`: they are used by `test_evict_without_a_paused_audio_directory_is_quiet` and `test_audio_that_cannot_be_removed_still_counts_against_the_budget`.
 
-- [ ] **Step 2: Убедиться, что перенос ничего не сломал**
+- [ ] **Step 2: Make sure the move broke nothing**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 143 passed
 
-- [ ] **Step 3: Написать падающие тесты**
+- [ ] **Step 3: Write the failing tests**
 
-Импорты `tests/test_drop.py` (4-7) становятся такими:
+The imports of `tests/test_drop.py` (4-7) become:
 
 ```python
 import logging
@@ -162,14 +162,14 @@ from helper import jobs
 from helper.jobs import PLAYHEAD_TTL, Stage
 ```
 
-В конец файла:
+At the end of the file:
 
 ```python
-# ── сброс, когда звук паузы не стирается ─────────────────────────────────
+# ── dropping when the paused audio cannot be erased ──────────────────────
 
 
 class LiveTask:
-    """Задача задания, что ещё идёт: отмену запоминает, done() отвечает после неё."""
+    """A job's task that is still running: it remembers cancellation, done() answers after it."""
 
     def __init__(self) -> None:
         self.cancelled = False
@@ -184,7 +184,7 @@ class LiveTask:
 
 
 class RunningWhisper:
-    """Процесс распознавания, что ещё работает: poll() — None, пока его не убили."""
+    """A recognition process that is still running: poll() is None until it is killed."""
 
     def __init__(self) -> None:
         self.killed = False
@@ -197,10 +197,10 @@ class RunningWhisper:
 
 
 def resumed_in_asr(job):
-    """Возобновлённое задание посреди распознавания: звук паузы на диске, задача и Whisper живы.
+    """A resumed job in the middle of recognition: paused audio on disk, the task and Whisper alive.
 
-    Только такое держит и карту, и звук: при первом проходе звук в памяти, а у паузы нет
-    ни задачи, ни процесса.
+    Only such a one holds both the card and the audio: on the first pass the audio is in memory, and a pause has
+    neither a task nor a process.
     """
     job.stage = Stage.ASR
     job.stash_audio(np.zeros(1000, dtype="<f4"))
@@ -217,7 +217,7 @@ def test_cancel_frees_the_card_even_if_the_paused_audio_stays(
     path = resumed_in_asr(job)
     refuse_in_audio_dir("unlink")
     caplog.set_level(logging.WARNING, logger="helper.jobs")
-    # Что держало карту в тот миг, когда сброс дошёл до звука.
+    # What held the card at the moment the drop reached the audio.
     seen = []
     discard = job.discard_audio
 
@@ -229,12 +229,12 @@ def test_cancel_frees_the_card_even_if_the_paused_audio_stays(
 
     job.cancel()
 
-    # Карту держат процесс и задача, и сброс снимает обоих раньше звука, что бы с ним
-    # ни случилось: иначе задание, которое реестр уже забыл, распознавало бы и переводило дальше.
+    # The process and the task hold the card, and the drop takes both off before the audio, whatever
+    # happens to it: otherwise a job the registry has already forgotten would go on recognizing and translating.
     assert seen == [(True, True)]
     assert job._asr_proc.killed
     assert job._task.cancelled
-    # Звук не стёрся и остался без хозяина; отказ диска — строка в журнале, а не исключение.
+    # The audio was not erased and stayed without an owner; the disk failure is a log line, not an exception.
     assert job._audio_path is None
     assert path.exists()
     assert any(
@@ -251,9 +251,9 @@ def test_drop_with_undeletable_audio_still_stops_every_variant(
     steady._task = LiveTask()
     stuck = manager.get_or_create(VIDEO, "ru", True)
     resumed_in_asr(stuck)
-    # Тронуто последним: jobs_for отдаёт его сбросу первым, и отказ на нём не должен
-    # оставить соседний вариант неотменённым. Явно, а не по часам: два вызова подряд
-    # могли бы получить одно показание, и порядок решила бы вставка в реестр.
+    # Touched last: jobs_for hands it to the drop first, and a failure on it must not
+    # leave the neighbouring variant uncancelled. Explicitly, not by the clock: two calls in a row
+    # could get one reading, and the insertion into the registry would decide the order.
     stuck.touched_at = steady.touched_at + 1.0
     refuse_in_audio_dir("unlink")
 
@@ -274,60 +274,60 @@ async def test_drop_endpoint_answers_even_if_the_paused_audio_cannot_be_removed(
 
     response = await client.post(f"/v1/jobs/{VIDEO}/drop")
 
-    # Настоящий сервер на исключение отсюда отвечал 500; ASGITransport тестов
-    # отдаёт его самому тесту.
+    # The real server answered 500 to an exception from here; the tests' ASGITransport
+    # hands it to the test itself.
     assert response.status_code == 200
     assert response.json() == {"dropped": VIDEO, "cancelled": True}
     assert job._asr_proc.killed
     assert job._task.cancelled
 ```
 
-- [ ] **Step 4: Запустить и убедиться, что падают**
+- [ ] **Step 4: Run and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_drop.py -v`
-Expected: FAIL, 3 failed, 22 passed. Все три новых теста падают на
+Expected: FAIL, 3 failed, 22 passed. All three new tests fail on
 `PermissionError: [Errno 13] Permission denied: '/tmp/yt-trans-cache-…/paused-audio/abcdefghijk-….f32'`,
-поднятом в `Job.discard_audio` (`helper/jobs.py:553`) из `Job.cancel`. В первом тесте его
-бросает `job.cancel()`, во втором `manager.drop`, в третьем `client.post`:
-`httpx.ASGITransport` по умолчанию отдаёт исключение приложения тесту, а настоящий сервер
-ответил бы 500 (проверено с `raise_app_exceptions=False`).
+raised in `Job.discard_audio` (`helper/jobs.py:553`) from `Job.cancel`. In the first test it is
+thrown by `job.cancel()`, in the second by `manager.drop`, in the third by `client.post`:
+`httpx.ASGITransport` by default hands the application's exception to the test, while the real server
+would answer 500 (checked with `raise_app_exceptions=False`).
 
-- [ ] **Step 5: Переставить сброс в `Job.cancel` и охранить оба сброса звука**
+- [ ] **Step 5: Reorder the drop in `Job.cancel` and guard both audio resets**
 
-`helper/jobs.py:555-565`, `Job.cancel` целиком:
+`helper/jobs.py:555-565`, `Job.cancel` in full:
 
 ```python
     def cancel(self) -> None:
-        # Приостановленное задание своей задачи не имеет — она уже завершилась
-        # паузой, — и убрать его звук, кроме как здесь, некому. Флаг ставится
-        # до сброса ручки, а запись читает его после того, как ручку выставила:
-        # так файл, дописанный уже после сброса, тоже не останется ничьим.
+        # A paused job has no task of its own — it has already finished
+        # with a pause, — and nobody but this place can remove its audio. The flag is set
+        # before the handle is cleared, and the writer reads it after the handle has been set:
+        # this way a file written after the drop does not remain ownerless either.
         self._audio_dead = True
 
-        # Сначала то, что держит карту, — процесс распознавания и задача, — и только
-        # потом звук. Сбрасываемое задание реестр уже забыл (JobManager._remove), и
-        # ошибка диска, вылетавшая отсюда раньше, оставляла его работать без хозяина:
-        # Whisper на карте, за ним перевод и запись в кэш, а /drop отвечал 500.
+        # First what holds the card — the recognition process and the task — and only
+        # then the audio. The registry has already forgotten the dropped job (JobManager._remove), and
+        # a disk error escaping from here earlier left it running without an owner:
+        # Whisper on the card, then translation and a cache write, while /drop answered 500.
         self.kill_asr()
 
         if self._task:
             self._task.cancel()
 
-        # Не стёршийся звук остаётся на диске без хозяина: discard_audio снимает ручку
-        # до удаления. Его уберёт бюджет (_trim_paused_audio), когда звука станет
-        # больше PAUSED_AUDIO_MAX_BYTES, или перезапуск демона. Сброс от этого не зависит.
+        # Audio that was not erased stays on disk without an owner: discard_audio clears the handle
+        # before deleting. The budget (_trim_paused_audio) will remove it when the audio exceeds
+        # PAUSED_AUDIO_MAX_BYTES, or a daemon restart will. The drop does not depend on it.
         try:
             self.discard_audio()
         except OSError as exc:
             log.warning("звук %s не убран при сбросе: %s", self.video_id, exc)
 ```
 
-`helper/jobs.py:926-928`, `JobRunner._pipeline`: строку `job.discard_audio()` после
-комментария «Распознано — отложенный звук больше не нужен…» заменить на:
+`helper/jobs.py:926-928`, `JobRunner._pipeline`: replace the line `job.discard_audio()` after
+the comment “Recognized — the paused audio is no longer needed…” with:
 
 ```python
-            # Ошибка диска здесь не повод выбросить готовый транскрипт: файл
-            # остаётся без хозяина, как в cancel, а задание идёт дальше.
+            # A disk error here is no reason to throw away the finished transcript: the file
+            # stays without an owner, as in cancel, and the job moves on.
             try:
                 job.discard_audio()
             except OSError as exc:
@@ -335,32 +335,32 @@ Expected: FAIL, 3 failed, 22 passed. Все три новых теста пад�
 
 ```
 
-Двухстрочный комментарий над ней остаётся. Тестом эта охрана здесь не покрыта: строку 928
-проходит только настоящий конвейер, а оснастка для него появится в задаче 3. Там её проверяет
-`test_a_resumed_asr_keeps_its_transcript_when_the_paused_audio_stays`. На коде 98a3ad2 этот
-тест падает: задание умирает на этой строке, и до перевода дело не доходит.
+The two-line comment above it stays. This guard is not covered by a test here: line 928
+is only reached by the real pipeline, and the harness for it appears in task 3. There it is checked by
+`test_a_resumed_asr_keeps_its_transcript_when_the_paused_audio_stays`. On the 98a3ad2 code this
+test fails: the job dies on this line, and it never gets to translation.
 
-`helper/jobs.py:1781-1784`, `JobManager._evict`: последняя фраза комментария, «Звук, что
-не убрался, останется до следующего обхода.», неверна. `discard_audio` снимает ручку до
-удаления, и следующий обход к такому файлу не вернётся. Весь абзац заменить на:
+`helper/jobs.py:1781-1784`, `JobManager._evict`: the last sentence of the comment, “Audio that
+was not removed will remain until the next sweep.”, is wrong. `discard_audio` clears the handle before
+deleting, and the next sweep will not come back to such a file. Replace the whole paragraph with:
 
 ```python
-        # Отказ диска здесь запрос не роняет. _evict идёт в конце get_or_create (опрос
-        # с create=true, watch, POST /v1/jobs) и restore, когда задание уже заведено, а
-        # новое и запущено, — исключение отсюда превращало бы в 500 ответ о работающем
-        # задании. Звук, что не убрался, остаётся на диске без хозяина: discard_audio
-        # снимает ручку до удаления, и следующий обход к нему не вернётся. Такой файл
-        # уберёт бюджет (_trim_paused_audio), когда звука станет больше
-        # PAUSED_AUDIO_MAX_BYTES, или перезапуск демона.
+        # A disk failure here does not drop the request. _evict runs at the end of get_or_create (a poll
+        # with create=true, watch, POST /v1/jobs) and restore, when the job has already been created and a
+        # new one started too, — an exception from here would turn the answer about a running
+        # job into a 500. Audio that was not removed stays on disk without an owner: discard_audio
+        # clears the handle before deleting, and the next sweep will not come back to it. Such a file
+        # will be removed by the budget (_trim_paused_audio) when the audio exceeds
+        # PAUSED_AUDIO_MAX_BYTES, or by a daemon restart.
 ```
 
-Не трогать: `JobManager._remove` (сначала вынуть из реестра, потом `cancel`), `drop`,
-`drop_job` в `helper/app.py:311-324`, `discard_audio` (ручка по-прежнему снимается до
-удаления). `kill_asr()` не бросает (`Popen.kill` сам глотает `ProcessLookupError`),
-`Task.cancel()` тоже. Поздний сброс из `finally` в `JobRunner.run` (770) после этого ничего
-не делает: ручки уже нет.
+Do not touch: `JobManager._remove` (remove from the registry first, then `cancel`), `drop`,
+`drop_job` in `helper/app.py:311-324`, `discard_audio` (the handle is still cleared before
+deleting). `kill_asr()` does not raise (`Popen.kill` swallows `ProcessLookupError` itself),
+`Task.cancel()` does not either. The late drop from `finally` in `JobRunner.run` (770) does nothing
+after that: the handle is already gone.
 
-- [ ] **Step 6: Запустить и убедиться, что проходят**
+- [ ] **Step 6: Run and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_drop.py -v`
 Expected: PASS, 25 passed
@@ -368,46 +368,46 @@ Expected: PASS, 25 passed
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 146 passed
 
-- [ ] **Step 7: Коммит**
+- [ ] **Step 7: Commit**
 
 ```bash
 /usr/bin/git add helper/jobs.py tests/conftest.py tests/test_limits.py tests/test_drop.py
 /usr/bin/git commit -m "Сброс задания сначала снимает распознавание и задачу, а звук паузы, что не стёрся, — строка в журнале, а не 500 и не зомби на карте"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command — in a separate Bash call, via `/usr/bin/git`; timeout at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message in Russian, without `Co-Authored-By` lines and other signatures.
 
 ---
 
-### Task 2: Путь к отложенному звуку читается один раз
+### Task 2: The path to the paused audio is read once
 
-`stash_audio` и `take_audio` выполняются в рабочем потоке (`asyncio.to_thread`, `_pipeline`
-894 и 919). Уборка бюджета звука (`JobManager._trim_paused_audio` → `owner.discard_audio()`
-на каждом `get_or_create` и `restore`) идёт в цикле событий и может сбросить `_audio_path`
-между двумя чтениями. Второе чтение тогда даёт `None.exists()`. Это `AttributeError`, а не
-`OSError`, поэтому задание падает в `JobRunner.run` повторяемым отказом (`except Exception`),
-вместо того чтобы взять звук или скачать его заново. `stash_audio` читает ручку дважды
-(строка 507), `take_audio` трижды (538 и 542).
+`stash_audio` and `take_audio` run in a worker thread (`asyncio.to_thread`, `_pipeline`
+894 and 919). The audio budget cleanup (`JobManager._trim_paused_audio` → `owner.discard_audio()`
+on every `get_or_create` and `restore`) runs in the event loop and can clear `_audio_path`
+between two reads. The second read then yields `None.exists()`. That is an `AttributeError`, not
+`OSError`, so the job fails in `JobRunner.run` with a retryable refusal (`except Exception`),
+instead of taking the audio or downloading it again. `stash_audio` reads the handle twice
+(line 507), `take_audio` three times (538 and 542).
 
 **Files:**
-- Modify: `helper/jobs.py:497-528` (`Job.stash_audio`, чтения на 507), `helper/jobs.py:530-547` (`Job.take_audio`, чтения на 538 и 542). Задача 1 эти строки не сдвигает: её правки начинаются с 555.
-- Test: `tests/test_limits.py` (в конец файла, после `test_a_handle_cleared_between_two_reads_does_not_fail_a_request`, 564-586). `tests/test_limits.py` после задачи 1 короче: искать по имени.
+- Modify: `helper/jobs.py:497-528` (`Job.stash_audio`, reads on 507), `helper/jobs.py:530-547` (`Job.take_audio`, reads on 538 and 542). Task 1 does not shift these lines: its edits start at 555.
+- Test: `tests/test_limits.py` (at the end of the file, after `test_a_handle_cleared_between_two_reads_does_not_fail_a_request`, 564-586). After task 1 `tests/test_limits.py` is shorter: search by name.
 
 **Interfaces:**
-- Consumes: фикстура `audio_dir` (задача 1); `stash(job, mtime)` и `CHUNK` из `tests/test_limits.py` (315-321 и 297).
-- Produces: `Job.stash_audio(self, audio) -> None` и `Job.take_audio(self) -> np.ndarray | None` читают `self._audio_path` ровно один раз, в локальную `path`, и дальше работают только с ней. Ветка `except OSError` в `take_audio` по-прежнему зовёт `self.discard_audio()`.
+- Consumes: the `audio_dir` fixture (task 1); `stash(job, mtime)` and `CHUNK` from `tests/test_limits.py` (315-321 and 297).
+- Produces: `Job.stash_audio(self, audio) -> None` and `Job.take_audio(self) -> np.ndarray | None` read `self._audio_path` exactly once, into the local `path`, and work only with it from then on. The `except OSError` branch in `take_audio` still calls `self.discard_audio()`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write the failing tests**
 
-В конец `tests/test_limits.py`:
+At the end of `tests/test_limits.py`:
 
 ```python
 def handle_gone_after_first_read(monkeypatch, path) -> None:
-    """Ручка задания видит файл только при первом чтении, дальше она None.
+    """The job's handle sees the file only on the first read, after that it is None.
 
-    Так выглядит уборка бюджета (_trim_paused_audio → discard_audio в цикле событий),
-    сбросившая ручку, пока take_audio или stash_audio шли в рабочем потоке. Свойство на
-    классе заслоняет поле экземпляра, запись в него глотается.
+    This is what the budget cleanup looks like (_trim_paused_audio → discard_audio in the event loop)
+    when it cleared the handle while take_audio or stash_audio were running in a worker thread. A property on
+    the class shadows the instance field, writes into it are swallowed.
     """
     reads = []
 
@@ -426,9 +426,9 @@ def test_take_audio_survives_a_handle_cleared_between_two_reads(manager, audio_d
     path = stash(job, mtime=1000)
     handle_gone_after_first_read(monkeypatch, path)
 
-    # Ручка прочитана один раз: файл, что был на месте при проверке, и прочитан. Второе
-    # чтение после сброса упало бы AttributeError, и возобновление провалилось бы
-    # повторяемым отказом вместо того, чтобы взять звук или скачать его заново.
+    # The handle is read once: the file that was in place at the check is the one read. The second
+    # read after the clear would fail with AttributeError, and the resume would fail with a
+    # retryable refusal instead of taking the audio or downloading it again.
     assert job.take_audio().size == CHUNK
 
 
@@ -441,41 +441,41 @@ def test_stash_audio_survives_a_handle_cleared_between_two_reads(
 
     job.stash_audio(np.zeros(CHUNK, dtype="<f4"))
 
-    # Файл застан при первом и единственном чтении ручки, и звук не пишется второй раз.
+    # The file was caught on the first and only read of the handle, and the audio is not written a second time.
     assert list(audio_dir.iterdir()) == [path]
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_limits.py -v`
 Expected: FAIL, 2 failed, 34 passed:
-`test_take_audio_survives_a_handle_cleared_between_two_reads` падает на
-`AttributeError: 'NoneType' object has no attribute 'exists'` в `helper/jobs.py:538`,
-`test_stash_audio_survives_a_handle_cleared_between_two_reads` — на том же в
+`test_take_audio_survives_a_handle_cleared_between_two_reads` fails on
+`AttributeError: 'NoneType' object has no attribute 'exists'` in `helper/jobs.py:538`,
+`test_stash_audio_survives_a_handle_cleared_between_two_reads` — on the same one in
 `helper/jobs.py:507`.
 
-- [ ] **Step 3: Читать ручку один раз**
+- [ ] **Step 3: Read the handle once**
 
-`Job.stash_audio`: проверку на 507 заменить на
+`Job.stash_audio`: replace the check on 507 with
 
 ```python
-        # Ручку читаем один раз: запись идёт в рабочем потоке, а уборка бюджета в цикле
-        # событий может сбросить её между проверкой на None и проверкой файла.
+        # Read the handle once: the write runs in a worker thread, and the budget cleanup in the
+        # event loop may clear it between the None check and the file check.
         path = self._audio_path
 
         if path is not None and path.exists():
             return
 ```
 
-Остальное тело (`mkstemp`, `self._audio_path = Path(name)`, запись, проверка `_audio_dead`)
-не меняется.
+The rest of the body (`mkstemp`, `self._audio_path = Path(name)`, the write, the `_audio_dead` check)
+does not change.
 
-`Job.take_audio`: сразу после `self.touched_at = time.monotonic()` прочитать
-`path = self._audio_path` с комментарием «Один раз, по той же причине, что в stash_audio:
-чтение идёт в рабочем потоке.». Проверку на 538 сделать `if path is None or not path.exists():`,
-чтение на 542 — `np.fromfile(path, dtype="<f4")`. Ветка `except OSError` остаётся как есть.
+`Job.take_audio`: right after `self.touched_at = time.monotonic()` read
+`path = self._audio_path` with the comment “Once, for the same reason as in stash_audio:
+the read runs in a worker thread.”. Make the check on 538 `if path is None or not path.exists():`,
+the read on 542 — `np.fromfile(path, dtype="<f4")`. The `except OSError` branch stays as is.
 
-- [ ] **Step 4: Запустить и убедиться, что проходят**
+- [ ] **Step 4: Run and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_limits.py -v`
 Expected: PASS, 36 passed
@@ -483,52 +483,52 @@ Expected: PASS, 36 passed
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 148 passed
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 /usr/bin/git add helper/jobs.py tests/test_limits.py
 /usr/bin/git commit -m "Ручка отложенного звука читается один раз: уборка бюджета посреди take_audio и stash_audio больше не роняет задание"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command — in a separate Bash call, via `/usr/bin/git`; timeout at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message in Russian, without `Co-Authored-By` lines and other signatures.
 
 ---
 
-### Task 3: Оснастка конвейера
+### Task 3: The pipeline harness
 
-Сегодня ни один тест не гоняет `JobRunner.run` / `_pipeline` и `helper.asr.worker.transcribe`,
-а задачи 4–10 меняют именно их. Здесь появляется оснастка: настоящий конвейер на подделках
-сети, карты и ollama, со своим кэшем у каждого теста, и настоящий воркер на подделке
-faster_whisper. Тесты оснастки доказывают, что работает настоящий код. Цепочку стадий
-`state` выдаёт только сам `_pipeline`. argv воркеру собирает настоящий `_run_asr`, его ответ
-разбирается настоящим кодом. Пропуск берётся в настоящем порядке. Дорожка ложится в
-настоящий `TrackCache` и читается с диска. На стороне воркера `transcribe` строит модель с
-`device="cuda"`, передаёт язык пакетному распознавателю и чистит текст сегментов; окна
-определителя проверяет задача 5 своими тестами. Сегодняшнее поведение языка тесты не
-закрепляют: ни флагов воркера, ни ключа кэша, ни затравки, которые меняют следующие задачи.
-Все их проверки остаются верны после задач 4–10, поэтому переворачивать их позже не придётся.
+Today no test runs `JobRunner.run` / `_pipeline` and `helper.asr.worker.transcribe`,
+yet tasks 4–10 change exactly them. The harness appears here: the real pipeline on fakes of
+the network, the card and ollama, with its own cache for each test, and the real worker on a fake
+faster_whisper. The harness tests prove that the real code works. The chain of `state`
+stages is emitted only by `_pipeline` itself. argv for the worker is assembled by the real `_run_asr`, and its reply
+is parsed by the real code. The lease is taken in the real order. The track lands in the
+real `TrackCache` and is read from disk. On the worker side `transcribe` builds the model with
+`device="cuda"`, passes the language to the batch recognizer and cleans the segment text; the detector
+windows are checked by task 5 with its own tests. Today's language behaviour is not pinned by the tests:
+neither the worker flags, nor the cache key, nor the initial prompt, which the following tasks change.
+All their checks stay valid after tasks 4–10, so they will not have to be flipped later.
 
 **Files:**
-- Modify: `tests/conftest.py` (в импорты — `contextlib`, `json`, `subprocess`, `threading`, `types`, `numpy as np`; всё остальное в конец файла, после фикстуры `connection`)
-- Test: `tests/test_harness.py` (импорты в начало, пять тестов в конец)
+- Modify: `tests/conftest.py` (to the imports — `contextlib`, `json`, `subprocess`, `threading`, `types`, `numpy as np`; everything else at the end of the file, after the `connection` fixture)
+- Test: `tests/test_harness.py` (imports at the top, five tests at the end)
 
 **Interfaces:**
-- Consumes: фикстура `manager`; `audio_dir` и `refuse_in_audio_dir` (задача 1); охрана сброса звука после распознавания (задача 1), её проверяет третий тест.
-- Produces. Всё в `tests/conftest.py`, `helper.*` там по-прежнему импортируется только внутри функций.
-  - **Функция `metadata(**overrides) -> VideoInfo`** — обычная функция модуля, не фикстура: тесты импортируют её `from conftest import metadata`. Импорт работает, потому что `pytest.ini` не задаёт `--import-mode`, а у `tests/` нет `__init__.py`: в режиме по умолчанию (`prepend`) pytest кладёт `tests/` в начало `sys.path` и грузит conftest под именем `conftest`, и `from conftest import …` получает тот же уже загруженный модуль из `sys.modules['conftest']`, а не второй экземпляр. Любое поле `VideoInfo` переопределяется по имени; `manual_tracks` принимает и строки, и готовые `CaptionTrack`.
-  - **Фикстура `pipeline(manager, monkeypatch) -> Pipeline`.** В `helper.jobs` подменены `probe`, `audio_pcm`, `fetch_manual_track`, `translate_dual`, `translate_batch`, `FETCH_BACKOFF = (0.0, 0.0)` и `subprocess`: пространство имён с `Popen`, которое строит `FakeWorker`, и настоящими `PIPE` и `TimeoutExpired`. yt-dlp и asyncio видят настоящий `subprocess`. Настоящими остаются `usable_manual_track`, `normalize_cues`, `build_cues`, `validate_dual`, весь `JobRunner`.
-    - Кэш у каждого теста свой. Каталог `<tmp> = tempfile.mkdtemp(prefix="pipeline-", dir=helper.env.CACHE_DIR)`, `helper.cache.CACHE_DIR` подменён на него до конструктора, поэтому `index.sqlite` тоже свой. Хранилище — настоящий `TrackCache(root=<tmp>/tracks)`. На время теста `manager.cache` указывает на тот же объект, так что `manager.restore` читает этот кэш. После теста прежний кэш возвращается раньше, чем фикстура `manager` закроет его индекс; индекс теста закрывается, `<tmp>` удаляется.
-    - Сценарий (`info`, `audio`, `track`, `asr_result`, `asr_exit`, `asr_stderr`, `gate`) тест ставит до `run`, записи (`calls`, `names()`, `workers`, `worker_started`, `lease`, `cache`, `runner`, `config`) читает после; имена, умолчания и записи — как в коде шага 3 (докстроки `Pipeline`, `FakeWorker`, `FakeLease`). С задачи 5 argv воркера разбирается его собственным парсером: `worker.build_parser().parse_args(pipeline.workers[-1].args[3:])`.
-    - Методы:
-      - `configure(**asr) -> None` собирает `Config(asr=AsrConfig(**asr), translator=TranslatorConfig())` и новый `JobRunner(lease, cache, config)`. Тот же `Config` и бегун получают `manager.config` и `manager.runner`, поэтому restore считает ключ по той же настройке. Запись пропуска начинается заново: сразу после вызова `lease.calls == [("claim", "qwen3.8:27b")]`. Конструктор `Pipeline` уже позвал `configure()` без аргументов. Значение `language` идёт в `AsrConfig` как есть, мимо `config.load()`.
-      - `async run(job) -> None` — это `await runner.run(job)`, настоящий `JobRunner.run` → `_pipeline`.
-    - Как пользоваться. Задание заводится через `job = manager.get_or_create("abcdefghijk", "ru", True)`: оно в реестре, но не запущено, потому что `Job.start` фикстуры `manager` только записывает. Можно и `jobs.Job("abcdefghijk")` вне реестра, тогда `manager.restore` идёт в кэш. Затем `await pipeline.run(job)`. Возобновление после паузы: `job.info = metadata()`, `job.stage = Stage.PAUSED`, `job.stash_audio(pipeline.audio)`, с фикстурой `audio_dir`. Вытеснение посреди распознавания: `pipeline.gate = threading.Event()`, запуск через `asyncio.create_task(pipeline.run(job))`, потом `await asyncio.to_thread(pipeline.worker_started.wait, 5)` и `pipeline.lease.holders[-1].preempt()`.
-  - **Фикстура `whisper(monkeypatch) -> FakeWhisper`.** Сначала импортирует `helper.env` (HF_HOME до faster_whisper, как в воркере), затем подменяет ровно два имени: `faster_whisper.WhisperModel` на `whisper.build_model` и `faster_whisper.BatchedInferencePipeline` на `whisper.build_pipeline`. `helper.asr.worker.transcribe` и `_detect` остаются настоящими, VAD тоже: `faster_whisper.vad.get_speech_timestamps` фикстура не трогает, и настоящий Silero идёт на процессоре, без сети и карты (около 0,1 с на пять секунд тишины; в нулях речи он не находит). До подмены доходит код, который берёт эти имена из модуля в момент вызова, как `transcribe` берёт классы.
-    - Сценарий (`segments`), записи (`model`, `kwargs`) и строитель `segment(start, end, text, *, ...)` с метриками сегмента — имена, умолчания и записи как в коде шага 3 (докстроки `FakeWhisper` и `segment`).
+- Consumes: the `manager` fixture; `audio_dir` and `refuse_in_audio_dir` (task 1); the guard on the audio reset after recognition (task 1), checked by the third test.
+- Produces. Everything in `tests/conftest.py`; `helper.*` there is still imported only inside functions.
+  - **Function `metadata(**overrides) -> VideoInfo`** — a regular module function, not a fixture: tests import it with `from conftest import metadata`. The import works because `pytest.ini` does not set `--import-mode`, and `tests/` has no `__init__.py`: in the default mode (`prepend`) pytest puts `tests/` at the start of `sys.path` and loads conftest under the name `conftest`, and `from conftest import …` gets the same already-loaded module from `sys.modules['conftest']`, not a second instance. Any `VideoInfo` field is overridden by name; `manual_tracks` accepts both strings and ready-made `CaptionTrack`.
+  - **Fixture `pipeline(manager, monkeypatch) -> Pipeline`.** In `helper.jobs`, `probe`, `audio_pcm`, `fetch_manual_track`, `translate_dual`, `translate_batch`, `FETCH_BACKOFF = (0.0, 0.0)` and `subprocess` are replaced: a namespace with `Popen`, which `FakeWorker` builds, and the real `PIPE` and `TimeoutExpired`. yt-dlp and asyncio see the real `subprocess`. Left real: `usable_manual_track`, `normalize_cues`, `build_cues`, `validate_dual`, the whole `JobRunner`.
+    - Each test has its own cache. The directory `<tmp> = tempfile.mkdtemp(prefix="pipeline-", dir=helper.env.CACHE_DIR)`, `helper.cache.CACHE_DIR` is replaced with it before the constructor, so `index.sqlite` is its own too. The store is the real `TrackCache(root=<tmp>/tracks)`. For the duration of the test `manager.cache` points to the same object, so `manager.restore` reads this cache. After the test the previous cache is returned before the `manager` fixture closes its index; the test's index is closed, `<tmp>` is deleted.
+    - The scenario (`info`, `audio`, `track`, `asr_result`, `asr_exit`, `asr_stderr`, `gate`) is set by the test before `run`, the records (`calls`, `names()`, `workers`, `worker_started`, `lease`, `cache`, `runner`, `config`) are read after; names, defaults and records — as in the step 3 code (docstrings of `Pipeline`, `FakeWorker`, `FakeLease`). From task 5 the worker argv is parsed by its own parser: `worker.build_parser().parse_args(pipeline.workers[-1].args[3:])`.
+    - Methods:
+      - `configure(**asr) -> None` assembles `Config(asr=AsrConfig(**asr), translator=TranslatorConfig())` and a new `JobRunner(lease, cache, config)`. The registry gets the same `Config` and the same runner into `manager.config` and `manager.runner`, so restore computes the key by the same setting. The lease record starts over: right after the call `lease.calls == [("claim", "qwen3.8:27b")]`. The `Pipeline` constructor has already called `configure()` without arguments. The `language` value goes into `AsrConfig` as is, past `config.load()`.
+      - `async run(job) -> None` — this is `await runner.run(job)`, the real `JobRunner.run` → `_pipeline`.
+    - How to use it. A job is created with `job = manager.get_or_create("abcdefghijk", "ru", True)`: it is in the registry but not started, because `Job.start` of the `manager` fixture only records. One can also use `jobs.Job("abcdefghijk")` outside the registry, then `manager.restore` goes to the cache. Then `await pipeline.run(job)`. Resume after a pause: `job.info = metadata()`, `job.stage = Stage.PAUSED`, `job.stash_audio(pipeline.audio)`, with the `audio_dir` fixture. Preemption in the middle of recognition: `pipeline.gate = threading.Event()`, launch via `asyncio.create_task(pipeline.run(job))`, then `await asyncio.to_thread(pipeline.worker_started.wait, 5)` and `pipeline.lease.holders[-1].preempt()`.
+  - **Fixture `whisper(monkeypatch) -> FakeWhisper`.** It first imports `helper.env` (HF_HOME before faster_whisper, as in the worker), then replaces exactly two names: `faster_whisper.WhisperModel` with `whisper.build_model` and `faster_whisper.BatchedInferencePipeline` with `whisper.build_pipeline`. `helper.asr.worker.transcribe` and `_detect` stay real, and so does VAD: the fixture does not touch `faster_whisper.vad.get_speech_timestamps`, and the real Silero runs on the CPU, without network and card (about 0.1 s for five seconds of silence; in zeros it finds no speech). The replacement reaches only code that takes these names from the module at call time, the way `transcribe` takes the classes.
+    - The scenario (`segments`), records (`model`, `kwargs`) and the builder `segment(start, end, text, *, ...)` with segment metrics — names, defaults and records as in the step 3 code (docstrings of `FakeWhisper` and `segment`).
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write the failing tests**
 
-Начало `tests/test_harness.py` (сейчас там только `from pathlib import Path`):
+The beginning of `tests/test_harness.py` (currently it only has `from pathlib import Path`):
 
 ```python
 import asyncio
@@ -545,11 +545,11 @@ from helper.jobs import Stage
 VIDEO = "abcdefghijk"
 ```
 
-Импорт `Stage` внутри `test_manager_records_a_resume_without_launching_it` можно не трогать.
-В конец файла:
+The `Stage` import inside `test_manager_records_a_resume_without_launching_it` can be left alone.
+At the end of the file:
 
 ```python
-# ── конвейер на подделках ────────────────────────────────────────────────
+# ── the pipeline on fakes ────────────────────────────────────────────────
 
 
 async def test_pipeline_runs_an_asr_video_to_done(manager, pipeline):
@@ -557,24 +557,24 @@ async def test_pipeline_runs_an_asr_video_to_done(manager, pipeline):
 
     await pipeline.run(job)
 
-    # Настоящий _pipeline: те же стадии, что видит зритель, и ни одного выхода в сеть.
+    # The real _pipeline: the same stages the viewer sees, and not a single trip to the network.
     assert job.stage is Stage.DONE
     assert [event["stage"] for event in job.events if event["type"] == "state"] == [
         "probing", "queued", "fetching", "asr", "translating", "done",
     ]
     assert pipeline.names() == ["probe", "audio", "asr", "translate"]
-    # Воркер запущен настоящим _run_asr со звуком задания, его ответ разобран настоящим кодом.
+    # The worker was started by the real _run_asr with the job's audio, its reply parsed by the real code.
     worker = pipeline.workers[-1]
     assert worker.args[:3] == [sys.executable, "-m", "helper.asr.worker"]
     assert worker.input == pipeline.audio.tobytes()
     assert [(cue.src, cue.lines, cue.study) for cue in job.cues] == [
         ("Dobar dan.", ["ru Dobar dan."], "cnr Dobar dan."),
     ]
-    # Дисциплина карты: переводчик выгружен до пропуска под Whisper, фазы берут его по очереди.
+    # Card discipline: the translator is unloaded before the lease for Whisper, the phases take it in turn.
     assert [call[0] for call in pipeline.lease.calls] == [
         "claim", "unload", "acquire", "release", "acquire", "release",
     ]
-    # Дорожка легла в настоящий кэш теста и читается с диска.
+    # The track landed in the test's real cache and is read from disk.
     assert [key.track_fingerprint for key in pipeline.cache.puts] == ["asr"]
     assert [cue["src"] for cue in pipeline.cache.variants(VIDEO)[0]["cues"]] == ["Dobar dan."]
 
@@ -590,7 +590,7 @@ async def test_pipeline_takes_a_serbian_author_track_without_asr(manager, pipeli
     assert pipeline.calls[:2] == [("probe", VIDEO), ("track", VIDEO, "sr")]
     assert pipeline.names() == ["probe", "track", "translate"]
     assert pipeline.workers == []
-    # Без распознавания карта нужна только переводчику.
+    # Without recognition the card is needed only by the translator.
     assert [call[0] for call in pipeline.lease.calls] == ["claim", "acquire", "release"]
     assert [key.track_fingerprint for key in pipeline.cache.puts] == ["manual:sr"]
     assert [cue.src for cue in job.cues] == ["Zdravo svima."]
@@ -600,7 +600,7 @@ async def test_a_resumed_asr_keeps_its_transcript_when_the_paused_audio_stays(
     manager, pipeline, audio_dir, refuse_in_audio_dir, caplog
 ):
     job = manager.get_or_create(VIDEO, "ru", True)
-    # Пауза после загрузки звука: метаданные есть, звук отложен на диск, реплик нет.
+    # A pause after the audio download: metadata present, audio stashed on disk, no cues.
     job.info = metadata()
     job.stage = Stage.PAUSED
     job.stash_audio(pipeline.audio)
@@ -610,10 +610,10 @@ async def test_a_resumed_asr_keeps_its_transcript_when_the_paused_audio_stays(
 
     await pipeline.run(job)
 
-    # Возобновление взяло отложенный звук, а не скачало его заново.
+    # The resume took the paused audio instead of downloading it again.
     assert pipeline.names() == ["asr", "translate"]
     assert pipeline.workers[-1].input == pipeline.audio.tobytes()
-    # Звук не стёрся, но распознанное не выброшено: задание дошло до конца и до кэша.
+    # The audio was not erased, but what was recognized was not thrown away: the job reached the end and the cache.
     assert job.stage is Stage.DONE
     assert [cue.src for cue in job.cues] == ["Dobar dan."]
     assert len(pipeline.cache.puts) == 1
@@ -633,7 +633,7 @@ async def test_preemption_during_asr_kills_the_worker_and_keeps_the_audio(
     job = manager.get_or_create(VIDEO, "ru", True)
     running = asyncio.create_task(pipeline.run(job))
 
-    # Воркер запущен и держит карту, пока его не отпустят; сторож видит пользователя.
+    # The worker is running and holding the card until it is released; the watcher sees the user.
     assert await asyncio.to_thread(pipeline.worker_started.wait, 5)
     pipeline.lease.holders[-1].preempt()
     await asyncio.wait_for(running, 5)
@@ -646,7 +646,7 @@ async def test_preemption_during_asr_kills_the_worker_and_keeps_the_audio(
     assert [call[0] for call in pipeline.lease.calls] == ["claim", "unload", "acquire", "release"]
 
 
-# ── воркер на подделке faster_whisper ────────────────────────────────────
+# ── the worker on a fake faster_whisper ──────────────────────────────────
 
 
 def test_whisper_fixture_runs_the_real_worker_transcribe(whisper):
@@ -656,7 +656,7 @@ def test_whisper_fixture_runs_the_real_worker_transcribe(whisper):
 
     result = worker.transcribe(np.zeros(5 * worker.SAMPLE_RATE, dtype="<f4"), language="sr")
 
-    # Подменены только модель и пакетный распознаватель; всё вокруг них — настоящий transcribe.
+    # Only the model and the batch recognizer are replaced; everything around them is the real transcribe.
     assert (whisper.model.name, whisper.model.device, whisper.model.compute_type) == (
         "large-v3", "cuda", "float16",
     )
@@ -667,42 +667,40 @@ def test_whisper_fixture_runs_the_real_worker_transcribe(whisper):
     ]
 ```
 
-Почему эти проверки не перевернутся в задачах 4–10. Цепочку стадий, порядок пропуска
-(`claim, unload, acquire, release, acquire, release`) и `names()` не меняет ни одна задача:
-новых стадий план не вводит, а определитель работает внутри того же запуска воркера под тем
-же пропуском. Событие `language` из задачи 6 имеет тип не `state`. Ответ по умолчанию без
-`verdict` проходит запасную ветку `_accept_asr`: решение строится из `result["language"]`.
-После задачи 5 `transcribe(..., language="sr")` определяет язык всегда, но решает
-закреплённый код. В пяти секундах нулей настоящий VAD речи не находит, и `detect_language`
-модели не зовётся вовсе. Тест воркера не читает `result["detected"]` и
-`result["confidence"]`: задача 5 уносит их под `result["verdict"]`. Новые поля реплик и
-флаги задачи 8 тесты не читают.
+Why these checks will not flip in tasks 4–10. The stage chain, the lease order
+(`claim, unload, acquire, release, acquire, release`) and `names()` are not changed by any task:
+the plan introduces no new stages, and the detector runs inside the same worker run under the same
+lease. The `language` event from task 6 has a type other than `state`. The default reply without
+`verdict` takes the fallback branch of `_accept_asr`: the decision is built from `result["language"]`.
+After task 5 `transcribe(..., language="sr")` always detects the language, but the pinned code decides.
+In five seconds of zeros the real VAD finds no speech, and the model's `detect_language` is not called at all.
+The worker test does not read `result["detected"]` and `result["confidence"]`: task 5 moves them under
+`result["verdict"]`. The new cue fields and the task 8 flags are not read by the tests.
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_harness.py -v`
-Expected: FAIL — ошибка сбора `tests/test_harness.py`, ни один тест не запущен:
-`ImportError: cannot import name 'metadata' from 'conftest'` и
+Expected: FAIL — a collection error in `tests/test_harness.py`, not a single test run:
+`ImportError: cannot import name 'metadata' from 'conftest'` and
 `Interrupted: 1 error during collection`.
 
-- [ ] **Step 3: Завести оснастку**
+- [ ] **Step 3: Set up the harness**
 
-В импорты `tests/conftest.py` добавить, сохраняя порядок: `import contextlib`, `import json`,
-`import subprocess`, `import threading`, `import types` (к стандартным) и `import numpy as np`
-(после `import httpx`). В конец файла, после фикстуры `connection`, дописать код ниже. Он и
-есть контракт, на котором задачи 4–10 пишут свои тесты, поэтому имена, умолчания и записи
-переносить точно.
+To the imports of `tests/conftest.py` add, keeping the order: `import contextlib`, `import json`,
+`import subprocess`, `import threading`, `import types` (to the standard ones) and `import numpy as np`
+(after `import httpx`). At the end of the file, after the `connection` fixture, append the code below. It is
+the contract on which tasks 4–10 write their tests, so transfer the names, defaults and records exactly.
 
 ```python
-# ── конвейер на подделках ────────────────────────────────────────────────
+# ── the pipeline on fakes ────────────────────────────────────────────────
 
 
 def metadata(**overrides):
-    """VideoInfo ролика abcdefghijk: все поля по умолчанию, overrides — поля по имени.
+    """VideoInfo of the video abcdefghijk: all fields at their defaults, overrides — fields by name.
 
-    Обычная функция, а не фикстура: тесты берут её `from conftest import metadata`.
-    manual_tracks принимает и строки: "sr" — это CaptionTrack(lang="sr", url="",
-    ext="json3", name=""); готовый CaptionTrack идёт как есть.
+    A regular function, not a fixture: tests take it with `from conftest import metadata`.
+    manual_tracks also accepts strings: "sr" is CaptionTrack(lang="sr", url="",
+    ext="json3", name=""); a ready-made CaptionTrack goes as is.
     """
     from helper.sources.ytdlp import CaptionTrack, VideoInfo
 
@@ -729,11 +727,11 @@ def metadata(**overrides):
 
 
 class FakeLease:
-    """Пропуск на карту без NVML и ollama: записывает обращения и выдаёт настоящий _Holder.
+    """A card lease without NVML and ollama: records calls and yields the real _Holder.
 
-    calls по порядку: ("claim", модель), ("unload", модель), ("acquire", МиБ, модель),
-    ("release", МиБ). holders — выданные ручки; holders[-1].preempt() — то, что сделал бы
-    сторож, увидев пользователя на карте.
+    calls in order: ("claim", model), ("unload", model), ("acquire", MiB, model),
+    ("release", MiB). holders — the handed-out handles; holders[-1].preempt() — what the
+    watcher would have done on seeing a user on the card.
     """
 
     def __init__(self) -> None:
@@ -761,10 +759,10 @@ class FakeLease:
 
 
 class RecordingCache:
-    """Настоящий TrackCache, который помнит ключи: под какими искали (gets) и писали (puts).
+    """The real TrackCache that remembers keys: with which one it looked up (gets) and wrote (puts).
 
-    Пишет по-настоящему, в каталог теста, и variants() читает записанное с диска. Всё,
-    кроме get и put, уходит к нему как есть.
+    It writes for real, into the test directory, and variants() reads what was written from disk. Everything
+    except get and put goes to it as is.
     """
 
     def __init__(self, store) -> None:
@@ -786,16 +784,16 @@ class RecordingCache:
 
 
 class FakeWorker:
-    """subprocess.Popen для `python -m helper.asr.worker`: запоминает вызов, отвечает сценарием.
+    """subprocess.Popen for `python -m helper.asr.worker`: remembers the call, answers by scenario.
 
-    args — argv целиком, как его собрал JobRunner._run_asr; options — флаги после
-    `-m helper.asr.worker` парами; input — байты звука из communicate; killed — звали kill().
-    Ответ берётся у конвейера в момент communicate: stdout — asr_result (dict уходит
-    JSON-ом, bytes — как есть), код выхода — asr_exit, stderr — asr_stderr. Убитый
-    отвечает кодом -9 и пустым выводом, как после SIGKILL.
+    args — the whole argv as JobRunner._run_asr assembled it; options — the flags after
+    `-m helper.asr.worker` in pairs; input — the audio bytes from communicate; killed — kill() was called.
+    The reply is taken from the pipeline at communicate time: stdout — asr_result (a dict goes out
+    as JSON, bytes — as is), exit code — asr_exit, stderr — asr_stderr. A killed one
+    answers with code -9 and empty output, as after SIGKILL.
 
-    gate держит communicate, как долгий Whisper, а kill() его отпускает. communicate
-    идёт в рабочем потоке (asyncio.to_thread), поэтому gate — threading.Event, не asyncio.
+    gate holds communicate, like a long Whisper, and kill() releases it. communicate
+    runs in a worker thread (asyncio.to_thread), so gate is a threading.Event, not asyncio.
     """
 
     def __init__(self, rig, args, **kwargs) -> None:
@@ -844,23 +842,23 @@ class FakeWorker:
 
 
 class Pipeline:
-    """Настоящий JobRunner на подделках: сети, карты и ollama нет, конвейер свой.
+    """The real JobRunner on fakes: no network, card or ollama, the pipeline its own.
 
-    Сценарий (тест задаёт до run):
-      info        — VideoInfo, которую отдаёт probe; по умолчанию metadata();
-      audio       — звук от audio_pcm: две секунды нулей, float32, 16 кГц;
-      track       — реплики дорожки автора от fetch_manual_track или исключение, которое
-                    она бросит (YtDlpError уводит конвейер в распознавание);
-      asr_result  — stdout воркера: dict уходит JSON-ом, bytes — как есть;
-      asr_exit    — код выхода воркера (0); asr_stderr — его stderr (b"");
-      gate        — threading.Event или None: держит воркер до set() или kill().
-    Записи (тест читает после):
-      calls          — обращения наружу по порядку: ("probe", id), ("track", id, язык),
-                       ("audio", id), ("asr", флаги воркера), ("translate", реплики);
-      workers        — запущенные FakeWorker; worker_started — Popen уже позван;
-      lease          — FakeLease: calls и holders;
-      cache          — RecordingCache: gets и puts (CacheKey), variants(id) с диска;
-      runner, config — бегун и его настройка; их пересобирает configure().
+    Scenario (the test sets it before run):
+      info        — the VideoInfo that probe returns; metadata() by default;
+      audio       — the audio from audio_pcm: two seconds of zeros, float32, 16 kHz;
+      track       — the author track cues from fetch_manual_track, or the exception it
+                    will raise (YtDlpError sends the pipeline to recognition);
+      asr_result  — the worker's stdout: a dict goes out as JSON, bytes — as is;
+      asr_exit    — the worker's exit code (0); asr_stderr — its stderr (b"");
+      gate        — threading.Event or None: holds the worker until set() or kill().
+    Records (the test reads them after):
+      calls          — outward calls in order: ("probe", id), ("track", id, language),
+                       ("audio", id), ("asr", worker flags), ("translate", cues);
+      workers        — the started FakeWorker instances; worker_started — Popen has been called;
+      lease          — FakeLease: calls and holders;
+      cache          — RecordingCache: gets and puts (CacheKey), variants(id) from disk;
+      runner, config — the runner and its setting; configure() reassembles them.
     """
 
     def __init__(self, manager, cache) -> None:
@@ -885,10 +883,10 @@ class Pipeline:
         self.configure()
 
     def configure(self, **asr) -> None:
-        """Бегун на Config(asr=AsrConfig(**asr)); тот же Config и бегун получает реестр.
+        """A runner on Config(asr=AsrConfig(**asr)); the registry gets the same Config and runner.
 
-        Запись пропуска начинается заново: сразу после вызова в lease.calls только
-        ("claim", модель переводчика) нового бегуна.
+        The lease record starts over: right after the call lease.calls contains only
+        ("claim", translator model) of the new runner.
         """
         from helper import jobs
         from helper.config import AsrConfig, Config, TranslatorConfig
@@ -896,33 +894,33 @@ class Pipeline:
         self.config = Config(asr=AsrConfig(**asr), translator=TranslatorConfig())
         self.lease.calls.clear()
         self.runner = jobs.JobRunner(self.lease, self.cache, self.config)
-        # restore считает ключ по manager.config: та же настройка, что у бегуна.
+        # restore computes the key by manager.config: the same setting as the runner's.
         self.manager.config = self.config
         self.manager.runner = self.runner
 
     def names(self) -> list[str]:
-        """Имена обращений наружу по порядку: ["probe", "audio", "asr", "translate"]."""
+        """Outward call names in order: ["probe", "audio", "asr", "translate"]."""
         return [call[0] for call in self.calls]
 
     async def run(self, job) -> None:
-        """Настоящий JobRunner.run(job): _pipeline со всеми его ветками и отказами."""
+        """The real JobRunner.run(job): _pipeline with all its branches and refusals."""
         await self.runner.run(job)
 
 
 @pytest.fixture
 def pipeline(manager, monkeypatch):
-    """JobRunner на подделках: настоящий конвейер без сети, карты и ollama. См. Pipeline."""
+    """JobRunner on fakes: the real pipeline without network, card or ollama. See Pipeline."""
     from helper import cache as track_cache
     from helper import env, jobs
 
-    # Свой кэш у каждого теста. Общий кэш прогона наполнился бы готовыми дорожками, и
-    # restore в чужих тестах их находил бы. CACHE_DIR подменён до TrackCache(): индекс
-    # index.sqlite открывается в конструкторе.
+    # Each test has its own cache. The shared run cache would fill with finished tracks, and
+    # restore in other tests would find them. CACHE_DIR is replaced before TrackCache(): the
+    # index.sqlite index is opened in the constructor.
     base = Path(tempfile.mkdtemp(prefix="pipeline-", dir=env.CACHE_DIR))
     monkeypatch.setattr(track_cache, "CACHE_DIR", base)
     rig = Pipeline(manager, RecordingCache(track_cache.TrackCache(root=base / "tracks")))
-    # Простым присваиванием, не monkeypatch: его откат пришёл бы уже после того, как
-    # manager закроет индекс своего кэша, и закрыл бы он тогда этот.
+    # By plain assignment, not monkeypatch: its rollback would come after
+    # manager has closed the index of its cache, and it would then close this one.
     shared = manager.cache
     manager.cache = rig.cache
 
@@ -960,7 +958,7 @@ def pipeline(manager, monkeypatch):
     monkeypatch.setattr(jobs, "translate_dual", translate_dual)
     monkeypatch.setattr(jobs, "translate_batch", translate_batch)
     monkeypatch.setattr(jobs, "FETCH_BACKOFF", (0.0, 0.0))
-    # Подменён только subprocess модуля helper.jobs: yt-dlp и asyncio видят настоящий.
+    # Only the subprocess of the helper.jobs module is replaced: yt-dlp and asyncio see the real one.
     monkeypatch.setattr(
         jobs,
         "subprocess",
@@ -978,11 +976,11 @@ def pipeline(manager, monkeypatch):
     shutil.rmtree(base, ignore_errors=True)
 
 
-# ── воркер на подделке faster_whisper ────────────────────────────────────
+# ── the worker on a fake faster_whisper ──────────────────────────────────
 
 
 class FakeWhisperModel:
-    """WhisperModel без карты: помнит, с чем её построили, и всегда слышит сербский."""
+    """WhisperModel without the card: remembers what it was built with, and always hears Serbian."""
 
     def __init__(self, name, device, compute_type) -> None:
         self.name = name
@@ -990,14 +988,14 @@ class FakeWhisperModel:
         self.compute_type = compute_type
 
     def detect_language(self, audio=None, features=None, vad_filter=False, **kwargs):
-        # С задачи 5 определитель работает при каждом transcribe. Ответ — как у настоящей:
-        # лучший язык, его доля и всё распределение. Окна и голоса проверяет задача 5
-        # своими тестами, на своей заглушке модели.
+        # From task 5 the detector runs on every transcribe. The reply is like the real one's:
+        # the best language, its share and the whole distribution. Windows and votes are checked by task 5
+        # with its own tests, on its own model stub.
         return "sr", 1.0, [("sr", 1.0)]
 
 
 class FakeBatchedPipeline:
-    """BatchedInferencePipeline без карты: запоминает аргументы, отдаёт сегменты сценария."""
+    """BatchedInferencePipeline without the card: remembers the arguments, yields the scenario segments."""
 
     def __init__(self, whisper, model) -> None:
         self.whisper = whisper
@@ -1022,15 +1020,15 @@ class FakeBatchedPipeline:
 
 
 class FakeWhisper:
-    """faster_whisper без карты для тестов воркера: transcribe и _detect настоящие.
+    """faster_whisper without the card for worker tests: transcribe and _detect are real.
 
-    Сценарий (задаёт тест):
-      segments — что вернёт BatchedInferencePipeline.transcribe; строить через segment().
-    Записи (читает тест):
-      model  — последняя модель, что построил воркер: name, device, compute_type;
-      kwargs — именованные аргументы последнего BatchedInferencePipeline.transcribe.
-    VAD не подменён: faster_whisper.vad.get_speech_timestamps — настоящий Silero, на
-    процессоре и без сети; в нулях речи он не находит.
+    Scenario (the test sets it):
+      segments — what BatchedInferencePipeline.transcribe returns; build it via segment().
+    Records (the test reads them):
+      model  — the last model the worker built: name, device, compute_type;
+      kwargs — the keyword arguments of the last BatchedInferencePipeline.transcribe.
+    VAD is not replaced: faster_whisper.vad.get_speech_timestamps — the real Silero, on
+    the CPU and without network; in zeros of speech it finds nothing.
     """
 
     def __init__(self) -> None:
@@ -1057,9 +1055,9 @@ class FakeWhisper:
         compression_ratio=1.5,
         words=(),
     ):
-        """Настоящий faster_whisper.transcribe.Segment: имена полей проверяет сама библиотека.
+        """The real faster_whisper.transcribe.Segment: the field names are checked by the library itself.
 
-        words — faster_whisper.transcribe.Word, как их отдаёт word_timestamps=True.
+        words — faster_whisper.transcribe.Word, as returned by word_timestamps=True.
         """
         from faster_whisper.transcribe import Segment
 
@@ -1080,23 +1078,23 @@ class FakeWhisper:
 
 @pytest.fixture
 def whisper(monkeypatch):
-    """Подделка faster_whisper для тестов воркера, см. FakeWhisper. Карта не нужна."""
-    # Сначала helper.env, как в самом воркере: он ставит HF_HOME во временный кэш до того,
-    # как faster_whisper потянет huggingface_hub.
+    """A fake faster_whisper for worker tests, see FakeWhisper. The card is not needed."""
+    # First helper.env, as in the worker itself: it sets HF_HOME to a temporary cache before
+    # faster_whisper pulls in huggingface_hub.
     import helper.env  # noqa: F401
 
     import faster_whisper
 
     fake = FakeWhisper()
-    # transcribe импортирует оба класса внутри себя, при каждом вызове: подмена в модуле
-    # faster_whisper до него доходит. VAD остаётся настоящим.
+    # transcribe imports both classes inside itself, on every call: a replacement in the
+    # faster_whisper module reaches it. VAD stays real.
     monkeypatch.setattr(faster_whisper, "WhisperModel", fake.build_model)
     monkeypatch.setattr(faster_whisper, "BatchedInferencePipeline", fake.build_pipeline)
 
     return fake
 ```
 
-- [ ] **Step 4: Запустить и убедиться, что проходят**
+- [ ] **Step 4: Run and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_harness.py -v`
 Expected: PASS, 10 passed
@@ -1104,42 +1102,42 @@ Expected: PASS, 10 passed
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 153 passed
 
-`python -X dev -m pytest` после зелёного прогона падает при выходе интерпретатора: это
-несовпадение аллокаторов в C-расширении faster_whisper. Обычный прогон это не задевает;
-не разбираться.
+`python -X dev -m pytest` after a green run fails on interpreter exit: this is
+a mismatch of allocators in the faster_whisper C extension. A normal run is not affected;
+do not investigate.
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 /usr/bin/git add tests/conftest.py tests/test_harness.py
 /usr/bin/git commit -m "Оснастка конвейера: настоящие JobRunner и воркер в тестах, на подделках сети, карты, ollama и faster_whisper"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command — in a separate Bash call, via `/usr/bin/git`; timeout at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message in Russian, without `Co-Authored-By` lines and other signatures.
 
 ---
-### Task 4: Коды языков: проверка, приведение и отказ до YouTube
+### Task 4: Language codes: validation, reduction and refusal before YouTube
 
-**Files:** номера строк — на `98a3ad2`, предыдущие задачи их сдвинули: искать по имени функции.
-- Create: `helper/language.py` — часть кодов (часть определителя допишет задача 5)
-- Modify: `helper/config.py:23-26` (импорты), `helper/config.py:66-72` (комментарий к `AsrConfig.language`), `helper/config.py:179-206` (`load`: сразу после сборки `AsrConfig` на строке 189)
+**Files:** line numbers are on `98a3ad2`, previous tasks shifted them: search by function name.
+- Create: `helper/language.py` — the codes part (task 5 will append the detector part)
+- Modify: `helper/config.py:23-26` (imports), `helper/config.py:66-72` (comment on `AsrConfig.language`), `helper/config.py:179-206` (`load`: right after `AsrConfig` is assembled on line 189)
 - Modify: `config.example.toml:21-24`
-- Modify: `helper/jobs.py:30-33` (импорты); `helper/jobs.py:772-786` (`JobRunner._pipeline`: между возобновлением, 775-778, и запросом метаданных, 784-786); `helper/jobs.py:1195-1209` (`JobRunner._run_asr`: ненулевой код выхода, между строками 1207 и 1209); `helper/jobs.py:1218-1242` (`JobRunner._source_language`: ветка конфига 1229-1232; новый метод `JobRunner._pin` — прямо перед ним)
-- Test: `tests/test_language.py`, `tests/test_config.py`, `tests/test_job_language.py` — все три новые
+- Modify: `helper/jobs.py:30-33` (imports); `helper/jobs.py:772-786` (`JobRunner._pipeline`: between the resume, 775-778, and the metadata request, 784-786); `helper/jobs.py:1195-1209` (`JobRunner._run_asr`: non-zero exit code, between lines 1207 and 1209); `helper/jobs.py:1218-1242` (`JobRunner._source_language`: config branch 1229-1232; the new method `JobRunner._pin` — right before it)
+- Test: `tests/test_language.py`, `tests/test_config.py`, `tests/test_job_language.py` — all three new
 
 **Interfaces:**
-- Consumes: фикстура `manager` (`tests/conftest.py`). Из задачи 3: построитель `metadata(**overrides) -> VideoInfo` (тесты импортируют его `from conftest import metadata`; без аргументов — ролик без дорожек автора и без `audio_language`) и фикстура `pipeline`: `pipeline.configure(**asr)` собирает бегун на `AsrConfig(**asr)`, `await pipeline.run(job)` гонит настоящий `JobRunner.run`, `pipeline.workers` — поддельные процессы воркера по порядку, у каждого `.args` — полный argv, как у `subprocess.Popen.args`: `[sys.executable, "-m", "helper.asr.worker", ...]`; ответ поддельного воркера задают `pipeline.asr_result` (stdout: dict уходит JSON-ом, bytes — как есть), `pipeline.asr_exit` (код выхода) и `pipeline.asr_stderr`.
+- Consumes: the `manager` fixture (`tests/conftest.py`). From task 3: the builder `metadata(**overrides) -> VideoInfo` (tests import it with `from conftest import metadata`; without arguments — a video without author tracks and without `audio_language`) and the `pipeline` fixture: `pipeline.configure(**asr)` assembles the runner on `AsrConfig(**asr)`, `await pipeline.run(job)` drives the real `JobRunner.run`, `pipeline.workers` — the fake worker processes in order, each with `.args` — the full argv, as in `subprocess.Popen.args`: `[sys.executable, "-m", "helper.asr.worker", ...]`; the fake worker's reply is set by `pipeline.asr_result` (stdout: a dict goes out as JSON, bytes — as is), `pipeline.asr_exit` (exit code) and `pipeline.asr_stderr`.
 - Produces:
-  - `helper/language.py`, только стандартная библиотека: `WHISPER_CODES: frozenset[str]`, `SUBSTITUTES: dict[str, str]`, `NO_LANGUAGE: frozenset[str]`, `BCMS: frozenset[str]`, `class UnknownLanguage(ValueError)` с атрибутом `raw: str`, `normalize(raw: str | None) -> str | None`, `hint(raw: str | None) -> str | None`, `family(code: str | None) -> str | None`, `is_bcms(code: str | None) -> bool`, `refusal(raw: str) -> str`.
-  - `JobRunner._pin(self) -> str | None` — код Whisper из `[asr] language` или `None` для auto; негодный код → `PermanentJobError(language.refusal(raw))`.
-  - `helper.config.load()`: `asr.language` — код Whisper, `"auto"` или, если код негодный, исходная строка (плюс `log.error`). `Config.describe()["asr"]["language"]` остаётся строкой: её печатает `extension/options.js:125`.
-  - `JobRunner._run_asr`, ненулевой выход воркера не по сигналу: stdout разбирается раньше хвоста stderr. Словарь с `"error"` и `"permanent": true` → `PermanentJobError(error)`; словарь с `"error"` без этого флага → `RuntimeError(f"ASR не справился: {error}")`; всё остальное — прежний `RuntimeError` с хвостом stderr.
+  - `helper/language.py`, standard library only: `WHISPER_CODES: frozenset[str]`, `SUBSTITUTES: dict[str, str]`, `NO_LANGUAGE: frozenset[str]`, `BCMS: frozenset[str]`, `class UnknownLanguage(ValueError)` with a `raw: str` attribute, `normalize(raw: str | None) -> str | None`, `hint(raw: str | None) -> str | None`, `family(code: str | None) -> str | None`, `is_bcms(code: str | None) -> bool`, `refusal(raw: str) -> str`.
+  - `JobRunner._pin(self) -> str | None` — the Whisper code from `[asr] language` or `None` for auto; an invalid code → `PermanentJobError(language.refusal(raw))`.
+  - `helper.config.load()`: `asr.language` — a Whisper code, `"auto"`, or, if the code is invalid, the original string (plus `log.error`). `Config.describe()["asr"]["language"]` stays a string: it is printed by `extension/options.js:125`.
+  - `JobRunner._run_asr`, non-zero worker exit not by signal: stdout is parsed before the stderr tail. A dict with `"error"` and `"permanent": true` → `PermanentJobError(error)`; a dict with `"error"` without that flag → `RuntimeError(f"ASR не справился: {error}")`; everything else — the previous `RuntimeError` with the stderr tail.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_language.py
-"""helper/language.py: коды языков, правило определителя и решение о языке."""
+"""helper/language.py: language codes, the detector rule and the language decision."""
 
 import ast
 import sys
@@ -1294,7 +1292,7 @@ def test_language_module_imports_only_the_standard_library():
 
 ```python
 # tests/test_config.py
-"""[asr] language в config.toml: что написал хозяин и что получает демон."""
+"""[asr] language in config.toml: what the owner wrote and what the daemon gets."""
 
 import logging
 import tomllib
@@ -1359,7 +1357,7 @@ def test_example_config_ships_auto():
 
 ```python
 # tests/test_job_language.py
-"""Язык на стороне демона: закрепление хозяина, отказ и разговор с воркером."""
+"""Language on the daemon side: the owner's pinning, refusal and the conversation with the worker."""
 
 import pytest
 from conftest import metadata
@@ -1410,8 +1408,8 @@ async def test_unknown_pin_refuses_the_job_before_youtube(manager, pipeline):
     assert job.stage is jobs.Stage.ERROR
     assert job.error == language.refusal("serbian")
     assert job.retryable is False
-    # Метаданных не спрашивали (job.info пуст), звука и воркера не было: отказ
-    # не стоит ничего ни YouTube, ни карте.
+    # Metadata was not requested (job.info is empty), there was no audio and no worker: the refusal
+    # costs nothing to YouTube or to the card.
     assert job.info is None
     assert pipeline.workers == []
 
@@ -1420,7 +1418,7 @@ async def test_language_refusal_is_not_recreated_after_cooldown(manager, pipelin
     pipeline.configure(language="serbian")
     job = manager.get_or_create(VIDEO, "ru", True)
     await pipeline.run(job)
-    # Остывание повторяемого отказа прошло бы: окончательный отказ оно не трогает.
+    # The cooldown of a retryable refusal would have passed: it does not touch a final refusal.
     job.failed_at -= jobs.RETRY_COOLDOWN
 
     assert manager.get_or_create(VIDEO, "ru", True) is job
@@ -1434,7 +1432,7 @@ async def test_language_refusal_is_not_recreated_after_cooldown(manager, pipelin
 async def test_pin_reaches_the_worker_normalised(manager, pipeline, raw, sent):
     pipeline.configure(language=raw)
     job = manager.get_or_create(VIDEO, "ru", True)
-    # Ролик без дорожек автора и без метки языка: путь распознавания.
+    # A video without author tracks and without a language label: the recognition path.
     job.info = metadata()
 
     await pipeline.run(job)
@@ -1469,8 +1467,8 @@ async def test_worker_crash_keeps_the_stderr_tail(manager, pipeline):
 
 
 async def test_worker_error_reply_reaches_the_viewer(manager, pipeline):
-    # Воркер отказал сам, фразой в stdout, а stderr пуст: сегодня зритель видел
-    # «ASR не справился: » с пустым хвостом.
+    # The worker refused itself, with a phrase in stdout, and stderr is empty: today the viewer saw
+    # «ASR не справился: » with an empty tail.
     pipeline.asr_result = {"error": "аудио короче половины секунды"}
     pipeline.asr_exit = 1
     pipeline.asr_stderr = b""
@@ -1483,23 +1481,23 @@ async def test_worker_error_reply_reaches_the_viewer(manager, pipeline):
     assert job.retryable is True
 ```
 
-Все три теста ответа воркера идут через настоящий конвейер, а не зовут `_run_asr` напрямую: `job.info` им ставит поддельный `probe`, а с задачи 8 `_run_asr` читает из него заголовок и теги. `test_worker_crash_keeps_the_stderr_tail` проходит и до правки: он сторожит, что падение воркера без JSON-ответа остаётся прежним повторяемым `RuntimeError` с хвостом stderr, а не становится окончательным.
+All three worker-reply tests go through the real pipeline, not by calling `_run_asr` directly: `job.info` is set for them by the fake `probe`, and from task 8 `_run_asr` reads the title and tags from it. `test_worker_crash_keeps_the_stderr_tail` passes before the edit too: it guards that a worker crash without a JSON reply stays the previous retryable `RuntimeError` with the stderr tail, and does not become final.
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_language.py tests/test_config.py tests/test_job_language.py -q`
-Expected: FAIL — `3 errors during collection`, у всех трёх `ImportError: cannot import name 'language' from 'helper'`
+Expected: FAIL — `3 errors during collection`, in all three `ImportError: cannot import name 'language' from 'helper'`
 
-- [ ] **Step 3: Модуль кодов `helper/language.py`**
+- [ ] **Step 3: The codes module `helper/language.py`**
 
-Новый файл. Докстрока модуля: коды языков, общие для демона и воркера распознавания; **только стандартная библиотека** — модуль грузят и демон, и воркер, а `faster_whisper` тянет ctranslate2, av и tokenizers, которым в процессе демона делать нечего (сторожит `test_language_module_imports_only_the_standard_library`). Первой строкой кода — `from __future__ import annotations`.
+A new file. Module docstring: language codes shared by the daemon and the recognition worker; **standard library only** — the module is loaded by both the daemon and the worker, while `faster_whisper` pulls in ctranslate2, av and tokenizers, which have no business in the daemon process (guarded by `test_language_module_imports_only_the_standard_library`). First line of code — `from __future__ import annotations`.
 
-Таблицы — ровно такие (комментарии по-русски, как ниже):
+The tables are exactly these (comments in Russian, as below):
 
 ```python
-# Ровно сто кодов faster-whisper 1.2.1 (faster_whisper.tokenizer._LANGUAGE_CODES).
-# Копия, а не импорт: имя закрытое, а импорт втянул бы в демон весь faster_whisper.
-# Разойдётся с установленной версией — упадёт тест.
+# Exactly one hundred codes of faster-whisper 1.2.1 (faster_whisper.tokenizer._LANGUAGE_CODES).
+# A copy, not an import: the name is private, and an import would drag all of faster_whisper into the daemon.
+# If it diverges from the installed version, a test fails.
 WHISPER_CODES: frozenset[str] = frozenset({
     "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs",
     "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu",
@@ -1511,59 +1509,59 @@ WHISPER_CODES: frozenset[str] = frozenset({
     "yue", "zh",
 })
 
-# Написания, которых Whisper не знает, но которые значат его код. sh, me и cnr —
-# сербский под другими именами; остальные — старые или альтернативные коды ISO,
-# которыми пользуются YouTube и таблицы языков.
+# Spellings Whisper does not know, but which mean its code. sh, me and cnr —
+# Serbian under other names; the rest — old or alternative ISO codes
+# used by YouTube and language tables.
 SUBSTITUTES: dict[str, str] = {
     "sh": "sr", "me": "sr", "cnr": "sr",
     "iw": "he", "jv": "jw", "fil": "tl", "nb": "no", "in": "id",
 }
 
-# «Языка нет»: пусто и auto в config.toml, und, zxx, mul и mis из ISO 639.
+# “No language”: empty and auto in config.toml, und, zxx, mul and mis from ISO 639.
 NO_LANGUAGE: frozenset[str] = frozenset({"", "auto", "und", "zxx", "mul", "mis"})
 
-# Три токена Whisper для одного языка. bs, hr и sr попали в его обучение из VoxLingua107
-# по недосмотру, и выбор между ними произволен; family() сводит их к sr.
+# Three Whisper tokens for one language. bs, hr and sr got into its training from VoxLingua107
+# by oversight, and the choice between them is arbitrary; family() folds them into sr.
 BCMS: frozenset[str] = frozenset({"sr", "hr", "bs"})
 
 
 class UnknownLanguage(ValueError):
-    """Код, которого Whisper не знает и который не сводится ни к одному его коду."""
+    """A code Whisper does not know and which does not reduce to any of its codes."""
 
     def __init__(self, raw: str) -> None:
         super().__init__(raw)
         self.raw = raw
 ```
 
-Функции (поведение закреплено тестами шага 1):
+Functions (behaviour pinned by the step 1 tests):
 
-- `normalize(raw: str | None) -> str | None`, по порядку: `None` → `None`; `code = raw.strip().lower().replace("_", "-")`; `code in NO_LANGUAGE` → `None`; значение режется по `+` (так yt-dlp склеивает языки дорожек), и каждая часть приводится отдельно: первичный подтег до первого `-`, затем `SUBSTITUTES.get(...)`, затем проверка `in WHISPER_CODES`, иначе `raise UnknownLanguage(raw)` — с **исходной** строкой; части сошлись в один код — он и возвращается, разошлись (`en+sr`) — `UnknownLanguage(raw)`. `hr` и `bs` остаются собой: это настоящие коды Whisper, сводит их только `family`.
-- `hint(raw)` — `normalize`, но `UnknownLanguage` → `None`: для меток YouTube, где незнакомое — просто «не знаем».
-- `family(code)` — `hint(code)`, затем любой код из `BCMS` → `"sr"`. Для сравнения языков, не для декодера.
+- `normalize(raw: str | None) -> str | None`, in order: `None` → `None`; `code = raw.strip().lower().replace("_", "-")`; `code in NO_LANGUAGE` → `None`; the value is split at `+` (that is how yt-dlp joins track languages), and each part is reduced separately: the primary subtag up to the first `-`, then `SUBSTITUTES.get(...)`, then a check `in WHISPER_CODES`, otherwise `raise UnknownLanguage(raw)` — with the **original** string; the parts agreed on one code — that is returned, they diverged (`en+sr`) — `UnknownLanguage(raw)`. `hr` and `bs` stay themselves: they are real Whisper codes, only `family` folds them.
+- `hint(raw)` — `normalize`, but `UnknownLanguage` → `None`: for YouTube labels, where an unfamiliar one is simply “we don't know”.
+- `family(code)` — `hint(code)`, then any code from `BCMS` → `"sr"`. For comparing languages, not for the decoder.
 - `is_bcms(code)` — `family(code) == "sr"`.
-- `refusal(raw)` — ровно `f"неизвестный язык «{raw}»: [asr] language в config.toml"` (56 знаков для `serbian`, умещается на бейдж); значение длиннее 11 знаков выводит фразу за 60 (`serbo-croatian` — 63): бейдж обрежет хвост многоточием, полная фраза останется в подсказке, а главное, «неизвестный язык «…»», стоит первым; шаблон закреплён — не резать.
+- `refusal(raw)` — exactly `f"неизвестный язык «{raw}»: [asr] language в config.toml"` (56 characters for `serbian`, fits on the badge); a value longer than 11 characters pushes the phrase past 60 (`serbo-croatian` — 63): the badge will cut the tail with an ellipsis, the full phrase will remain in the tooltip, and, most importantly, “unknown language «…»” comes first; the template is pinned — do not shorten it.
 
-Три прежних определения BCMS (`helper/asr/worker.py:48`, `helper/script.py:25`, `helper/sources/ytdlp.py:35`) в этой задаче не трогать: их заменяют задачи, что меняют эти файлы (воркер — задача 5).
+The three previous BCMS definitions (`helper/asr/worker.py:48`, `helper/script.py:25`, `helper/sources/ytdlp.py:35`) are not touched in this task: they are replaced by the tasks that change those files (the worker — task 5).
 
-- [ ] **Step 4: Запустить**
+- [ ] **Step 4: Run**
 
 Run: `.venv/bin/python -m pytest tests/test_language.py -q`
 Expected: PASS, 79 passed
 
 Run: `.venv/bin/python -m pytest tests/test_config.py tests/test_job_language.py -q`
-Expected: FAIL — 29 failed, 4 passed. Проходят строки `"hr"` и `"auto"` в `test_language_is_normalised_at_load`, `test_missing_file_means_auto` и сторож `test_worker_crash_keeps_the_stderr_tail`. Падают: конфиг хранит значение как есть (`assert 'cnr' == 'sr'`; число из TOML остаётся числом — `assert 5 == '5'`), в журнале нет ошибки, пример отдаёт `'sr'`, `AttributeError: 'JobRunner' object has no attribute '_pin'`, задание с `serbian` доходит до воркера и до `done`, в воркер уходит `--language sh`, а отказ воркера и его фраза об ошибке доходят до задания пустым хвостом stderr (`assert 'ASR не справился: ' == …`).
+Expected: FAIL — 29 failed, 4 passed. The `"hr"` and `"auto"` rows in `test_language_is_normalised_at_load`, `test_missing_file_means_auto` and the guard `test_worker_crash_keeps_the_stderr_tail` pass. Failing: the config stores the value as is (`assert 'cnr' == 'sr'`; a number from TOML stays a number — `assert 5 == '5'`), the log has no error, the example yields `'sr'`, `AttributeError: 'JobRunner' object has no attribute '_pin'`, a job with `serbian` reaches the worker and `done`, `--language sh` goes to the worker, and the worker's refusal and its error phrase reach the job with an empty stderr tail (`assert 'ASR не справился: ' == …`).
 
-- [ ] **Step 5: Конфиг и пример конфига**
+- [ ] **Step 5: Config and the example config**
 
-`helper/config.py`, импорты (строки 23-26): `from dataclasses import dataclass, replace` и `from helper import language` перед `from helper.env import CONFIG_DIR`.
+`helper/config.py`, imports (lines 23-26): `from dataclasses import dataclass, replace` and `from helper import language` before `from helper.env import CONFIG_DIR`.
 
-`helper/config.py`, `load` (179-206): сразу после `asr = AsrConfig(**_section(raw, "asr", AsrConfig))` (строка 189):
+`helper/config.py`, `load` (179-206): right after `asr = AsrConfig(**_section(raw, "asr", AsrConfig))` (line 189):
 
 ```python
-    # Код языка приводится к виду Whisper здесь, один раз: "sh", "SR" и "sr-Latn" — это
-    # sr, и дальше по демону ходит уже код. Незнакомое значение — не ошибка запуска, как
-    # и cookies: демон поднимается, а каждое новое задание получает отказ той же фразой
-    # (JobRunner._pin). str() — на случай числа вместо строки.
+    # The language code is reduced to Whisper's form here, once: "sh", "SR" and "sr-Latn" are
+    # sr, and from here on the code itself travels through the daemon. An unfamiliar value is not a startup error, as with
+    # cookies: the daemon comes up, and every new job gets a refusal with the same phrase
+    # (JobRunner._pin). str() — in case of a number instead of a string.
     try:
         asr = replace(asr, language=language.normalize(str(asr.language)) or "auto")
     except language.UnknownLanguage as exc:
@@ -1571,52 +1569,52 @@ Expected: FAIL — 29 failed, 4 passed. Проходят строки `"hr"` и 
         log.error(language.refusal(exc.raw))
 ```
 
-`describe()` не меняется: `language` в нём и так строка.
+`describe()` does not change: `language` in it is a string anyway.
 
-`helper/config.py:66-71` — комментарий над `language: str = "auto"` заменить целиком (прежний говорит «язык берётся из метаданных», а метаданные теперь только подсказка):
+`helper/config.py:66-71` — replace the comment above `language: str = "auto"` entirely (the previous one says “the language is taken from metadata”, and metadata is now only a hint):
 
 ```python
-    # Язык речи. "auto" — решает определитель: он слушает окна по всей длине ролика
-    # и работает всегда, а метка языка от YouTube для него лишь подсказка. Код языка
-    # закрепляет язык для КАЖДОГО ролика: Whisper декодирует с ним, даже если звучит
-    # другое, а определитель только отмечает расхождение. Закреплять стоит, лишь
-    # когда все ролики на одном языке: на чужом звуке поведение декодера не
-    # определено, и он начинает выбирать между переводом, транслитерацией и записью
-    # услышанного чужим алфавитом — заново в каждом тридцатисекундном окне.
-    # load() приводит значение к коду Whisper (helper/language.py), auto остаётся auto.
+    # Speech language. "auto" — the detector decides: it listens to windows over the whole video
+    # length and always runs, and the YouTube language label is only a hint for it. A language
+    # code pins the language for EVERY video: Whisper decodes with it even if something else is
+    # spoken, and the detector only marks the mismatch. Pin it only when all videos are in one
+    # language: on foreign speech the decoder's behaviour is not defined, and it starts choosing
+    # between translation, transliteration and writing down what was heard in a foreign alphabet
+    # — anew in every thirty-second window.
+    # load() reduces the value to a Whisper code (helper/language.py), auto stays auto.
 ```
 
-`config.example.toml:21-24` — заменить комментарий «Язык фиксируется жёстко, автодетект не используется…» и строку `language = "sr"` на:
+`config.example.toml:21-24` — replace the comment “The language is fixed hard, autodetect is not used…” and the line `language = "sr"` with:
 
 ```toml
-# Язык речи. "auto" — язык определяет сам демон: определитель слушает окна
-# по всей длине ролика и работает всегда, а метка языка от YouTube для него
-# лишь подсказка (сербские каналы YouTube бывает помечает английскими).
+# Speech language. "auto" — the daemon itself determines the language: the detector listens
+# to windows over the whole video length and always runs, and the language label from YouTube
+# is only a hint for it (YouTube sometimes labels Serbian channels in English).
 #
-# Код языка ("sr", "en", "ru"…) закрепляет язык для КАЖДОГО ролика: Whisper
-# распознаёт с ним, даже если звучит другой язык, а определитель только
-# отмечает расхождение. Ставить, лишь если все ролики на одном языке.
-# sh, me и cnr годятся и означают sr; регион и письменность отбрасываются
-# ("sr-Latn" — это sr). Код, которого Whisper не знает, — ошибка в журнале
-# при старте и отказ каждого нового ролика: «неизвестный язык …».
+# A language code ("sr", "en", "ru"…) pins the language for EVERY video: Whisper
+# recognizes with it even if another language is spoken, and the detector only
+# marks the mismatch. Set it only if all videos are in one language.
+# sh, me and cnr are also fine and mean sr; region and script are dropped
+# ("sr-Latn" is sr). A code Whisper does not know is an error in the log
+# at startup and a refusal for every new video: «unknown language …».
 language = "auto"
 ```
 
-Фразы «определитель работает всегда» и «отмечает расхождение» станут правдой с задачами 5 и 6 этой же ветки. Оба комментария пишутся сразу окончательными, чтобы не править их в каждой задаче: ветка вливается целиком.
+The phrases “the detector always runs” and “marks the mismatch” become true with tasks 5 and 6 of this same branch. Both comments are written in their final form right away, so as not to edit them in every task: the branch is merged as a whole.
 
-- [ ] **Step 6: Демон: закрепление, ранний отказ, ответ воркера**
+- [ ] **Step 6: Daemon: pinning, early refusal, the worker's reply**
 
-`helper/jobs.py`, импорты: `from helper import language` перед `from helper.asr.worker import SAMPLE_RATE` (строка 33). Других имён `language` в модуле нет — коллизий нет до задачи 8 (параметр `asr_cues`).
+`helper/jobs.py`, imports: `from helper import language` before `from helper.asr.worker import SAMPLE_RATE` (line 33). There are no other names `language` in the module — no collisions until task 8 (the `asr_cues` parameter).
 
-Новый метод `JobRunner._pin(self) -> str | None` — прямо перед `_source_language` (1218):
+New method `JobRunner._pin(self) -> str | None` — right before `_source_language` (1218):
 
 ```python
     def _pin(self) -> str | None:
-        """Язык, закреплённый хозяином в [asr] language: код Whisper или None («auto»).
+        """The language pinned by the owner in [asr] language: a Whisper code or None (“auto”).
 
-        load() приводит значение к коду, а негодное лишь пишет в журнал: демон должен
-        подняться. Задание же с негодным кодом получает отказ человеческой фразой,
-        окончательный: повтор с тем же конфигом дал бы то же самое.
+        load() reduces the value to a code, and an invalid one only writes to the log: the daemon must
+        come up. A job with an invalid code, though, gets a refusal in a human phrase,
+        a final one: a retry with the same config would give the same thing.
         """
         try:
             return language.normalize(self._config.asr.language)
@@ -1624,18 +1622,18 @@ language = "auto"
             raise PermanentJobError(language.refusal(exc.raw)) from None
 ```
 
-`JobRunner._pipeline`: вызов `self._pin()` со своим комментарием — сразу после `return` ветки возобновления (`if job.cues: … return`, 778), перед комментарием «Метаданные уже есть…» (780), который остаётся над `if job.info is None:`. Комментарий вызова: негодный код в `[asr] language` — отказ до первого обращения к YouTube и к карте, ни метаданных, ни звука, ни пропуска; отказ окончательный, иначе остывание в `get_or_create` пересоздавало бы задание раз в минуту, как было с трассировкой Whisper; возобновление выше языка не спрашивает — распознавание уже позади. `JobRunner.run` уже превращает `PermanentJobError` в `retryable=False` (752-754), менять его не нужно.
+`JobRunner._pipeline`: the call `self._pin()` with its own comment — right after the `return` of the resume branch (`if job.cues: … return`, 778), before the comment “Metadata is already there…” (780), which stays above `if job.info is None:`. The comment on the call: an invalid code in `[asr] language` is a refusal before the first request to YouTube and to the card, with no metadata, no audio and no lease; the refusal is final, otherwise the cooldown in `get_or_create` would recreate the job once a minute, as it did with the Whisper traceback; the resume above does not ask about the language — recognition is already behind. `JobRunner.run` already turns `PermanentJobError` into `retryable=False` (752-754), no need to change it.
 
-`JobRunner._source_language`, ветка конфига (1229-1232): вместо `configured = self._config.asr.language` / `if configured and configured != "auto": return configured` — `pin = self._pin()` / `if pin: return pin`. Это переходная правка: в воркер уходит уже приведённый код (`sh` → `sr`, `AUTO` → ветка метаданных и `auto`), а сам метод удалит задача 5. Ветку метаданных (1234-1242) не трогать.
+`JobRunner._source_language`, the config branch (1229-1232): instead of `configured = self._config.asr.language` / `if configured and configured != "auto": return configured` — `pin = self._pin()` / `if pin: return pin`. This is a transitional change: the already-reduced code goes to the worker (`sh` → `sr`, `AUTO` → the metadata branch and `auto`), and task 5 will delete the method itself. Do not touch the metadata branch (1234-1242).
 
-`JobRunner._run_asr`, ненулевой код выхода: обе ветки сигналов (1198-1207) остаются первыми; между ними и `raise RuntimeError(f"ASR не справился: …")` (1209) вставить:
+`JobRunner._run_asr`, non-zero exit code: both signal branches (1198-1207) stay first; between them and `raise RuntimeError(f"ASR не справился: …")` (1209) insert:
 
 ```python
-            # Воркер отказал сам — фраза в stdout, а не трассировка в stderr. Отказ с
-            # "permanent" не пройдёт и при повторе (негодный код языка), поэтому
-            # окончательный: остывание не пересоздаёт такое задание. Фраза без флага
-            # («аудио короче половины секунды») — отказ повторяемый, но зритель видит её,
-            # а не пустой хвост stderr.
+            # The worker refused itself — a phrase in stdout, not a traceback in stderr. A refusal with
+            # "permanent" will not pass on a retry either (an invalid language code), so it is
+            # final: the cooldown does not recreate such a job. A phrase without the flag
+            # (“audio shorter than half a second”) is a retryable refusal, but the viewer sees it,
+            # not an empty stderr tail.
             try:
                 reply = json.loads(out)
             except ValueError:
@@ -1648,11 +1646,11 @@ language = "auto"
                 raise RuntimeError(f"ASR не справился: {reply['error']}")
 ```
 
-`ValueError` ловит и `json.JSONDecodeError` (пустой stdout), и `UnicodeDecodeError`. Не JSON и JSON без `"error"` идут прежним путём, к `RuntimeError` с хвостом stderr. Ветку `"error" in result` после разбора на нулевом коде (1211-1214) не трогать.
+`ValueError` catches both `json.JSONDecodeError` (empty stdout) and `UnicodeDecodeError`. Non-JSON and JSON without `"error"` take the previous path, to `RuntimeError` with the stderr tail. Do not touch the `"error" in result` branch after parsing on a zero code (1211-1214).
 
-`restore()`, `_key_for` и `_cached_variant` `_pin()` не зовут и звать не должны: восстановление после F5 не выполняет конвейер и не обязано отказывать.
+`restore()`, `_key_for` and `_cached_variant` do not call `_pin()` and must not: a restore after F5 does not run the pipeline and is not obliged to refuse.
 
-- [ ] **Step 7: Запустить и убедиться, что проходят**
+- [ ] **Step 7: Run and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_language.py tests/test_config.py tests/test_job_language.py -q`
 Expected: PASS, 112 passed
@@ -1660,43 +1658,43 @@ Expected: PASS, 112 passed
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 265 passed
 
-- [ ] **Step 8: Коммит**
+- [ ] **Step 8: Commit**
 
 ```bash
 /usr/bin/git add helper/language.py helper/config.py helper/jobs.py config.example.toml tests/test_language.py tests/test_config.py tests/test_job_language.py
 /usr/bin/git commit -m "Коды языков проверяются: sh, me, cnr и sr-Latn — это sr, негодный код — окончательный отказ до обращения к YouTube"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command — in a separate Bash call, via `/usr/bin/git`; timeout at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message in Russian, without `Co-Authored-By` lines and other signatures.
 
 ---
 
-### Task 5: Определитель работает всегда, метка YouTube — только подсказка
+### Task 5: The detector always runs, the YouTube label is only a hint
 
-**Files:** номера строк — на `98a3ad2`, предыдущие задачи их сдвинули: искать по имени функции.
-- Modify: `helper/language.py` — дописать часть определителя в конец файла; импорты `from collections.abc import Sequence` и `from dataclasses import dataclass`
-- Modify: `helper/asr/worker.py:1-15` (докстрока модуля, пример вызова на строке 14), `:17-27` (импорты, `SAMPLE_RATE`), `:36-122` (`PROBE_WINDOWS`, `PROBE_SPAN`, `WINDOW_SECONDS`, `BCMS`, `_detect`, `_merge_bcms` — уходят; вместо них `_speech_seconds`, `_detect`, `_window`), `:125-215` (`transcribe`), `:218-259` (`main` → `build_parser` + `main`)
-- Modify: `helper/jobs.py:1151-1167` (`JobRunner._run_asr`, argv); `JobRunner._source_language` удаляется целиком, метод `JobRunner._pin` прямо над ним (задача 4) остаётся, а `JobRunner._declaration` встаёт на место `_source_language`, под `_pin`
-- Test: `tests/test_language.py` (дописать), `tests/test_worker.py` (новый), `tests/test_job_language.py` (дописать)
+**Files:** line numbers are from `98a3ad2`, the previous tasks have shifted them: search by function name.
+- Modify: `helper/language.py` — append the detector part to the end of the file; imports `from collections.abc import Sequence` and `from dataclasses import dataclass`
+- Modify: `helper/asr/worker.py:1-15` (the module docstring, the usage example on line 14), `:17-27` (imports, `SAMPLE_RATE`), `:36-122` (`PROBE_WINDOWS`, `PROBE_SPAN`, `WINDOW_SECONDS`, `BCMS`, `_detect`, `_merge_bcms` — go away; in their place `_speech_seconds`, `_detect`, `_window`), `:125-215` (`transcribe`), `:218-259` (`main` → `build_parser` + `main`)
+- Modify: `helper/jobs.py:1151-1167` (`JobRunner._run_asr`, argv); `JobRunner._source_language` is deleted entirely, the `JobRunner._pin` method right above it (Task 4) stays, and `JobRunner._declaration` takes the place of `_source_language`, under `_pin`
+- Test: `tests/test_language.py` (append), `tests/test_worker.py` (new), `tests/test_job_language.py` (append)
 
 **Interfaces:**
-- Consumes: задача 4 — коды `helper.language`, `JobRunner._pin`. Задача 3 — фикстура `whisper` (подменяет `faster_whisper.WhisperModel` и `BatchedInferencePipeline`; `whisper.kwargs` — именованные аргументы последнего `BatchedInferencePipeline.transcribe`), фикстура `pipeline` и `metadata`, как в задаче 4.
+- Consumes: Task 4 — the codes in `helper.language`, `JobRunner._pin`. Task 3 — the `whisper` fixture (replaces `faster_whisper.WhisperModel` and `BatchedInferencePipeline`; `whisper.kwargs` — the keyword arguments of the last `BatchedInferencePipeline.transcribe`), the `pipeline` fixture and `metadata`, as in Task 4.
 - Produces:
-  - `helper/language.py`: `MIN_SPEECH_SECONDS = 3.0`, `BCMS_FLOOR = 0.2`, `SLAVIC_NEIGHBOURS = frozenset({"mk", "bg", "sl", "ru", "uk", "be", "cs", "sk", "pl"})`, `SAMPLE_RATE = 16000`, `WINDOW_SAMPLES = 30 * SAMPLE_RATE`; `probe_offsets(n_samples: int, *, windows: int = 8, span: tuple[float, float] = (0.10, 0.90), window: int = WINDOW_SAMPLES) -> list[int]`; `@dataclass(frozen=True) class Detection(language: str | None, confidence: float | None, bcms_share: float, floor: bool, votes: int, probed: int, windows: tuple[tuple[str | None, float, float], ...])`; `summarize(windows: Sequence[tuple[float, Sequence[tuple[str, float]]]]) -> Detection`; `@dataclass(frozen=True) class LanguageVerdict(effective: str, declared: str | None, declared_by: str | None, detected: str | None, confidence: float | None, reason: str, source: str = "asr", track: str | None = None, verified: bool | None = None)` с `mismatch` (свойство), `note() -> str | None`, `wire() -> dict`, `from_wire(cls, data: object) -> LanguageVerdict | None`; `decide(pin: str | None, hint: str | None, detection: Detection, *, fallback: str = "sr") -> LanguageVerdict`.
-  - `helper/asr/worker.py` (модуль языков импортирован как `lang`, см. шаг 7): `_detect(model, audio: np.ndarray) -> lang.Detection`; `transcribe(audio, *, model_name=DEFAULT_MODEL, compute_type="float16", language: str = "sr", hint: str | None = None, initial_prompt=None, hotwords=None, batch_size=16, vad_filter=True) -> dict` (`initial_prompt` до задачи 8); `build_parser() -> argparse.ArgumentParser` с новым `--hint CODE`; ответ `{"language": verdict.effective, "verdict": verdict.wire(), "detection": {"bcmsShare", "votes", "probed", "windows"}, "duration", "model", "cues"}`; негодный `--language` → stdout `{"error": refusal, "permanent": true}`, код 2.
-  - `JobRunner._declaration(self, job: Job) -> tuple[str | None, str | None]` — `(self._pin(), language.hint(job.info.audio_language) if job.info else None)`; воркер получает `--language <pin или auto>` и `--hint <код>`, когда метка есть.
+  - `helper/language.py`: `MIN_SPEECH_SECONDS = 3.0`, `BCMS_FLOOR = 0.2`, `SLAVIC_NEIGHBOURS = frozenset({"mk", "bg", "sl", "ru", "uk", "be", "cs", "sk", "pl"})`, `SAMPLE_RATE = 16000`, `WINDOW_SAMPLES = 30 * SAMPLE_RATE`; `probe_offsets(n_samples: int, *, windows: int = 8, span: tuple[float, float] = (0.10, 0.90), window: int = WINDOW_SAMPLES) -> list[int]`; `@dataclass(frozen=True) class Detection(language: str | None, confidence: float | None, bcms_share: float, floor: bool, votes: int, probed: int, windows: tuple[tuple[str | None, float, float], ...])`; `summarize(windows: Sequence[tuple[float, Sequence[tuple[str, float]]]]) -> Detection`; `@dataclass(frozen=True) class LanguageVerdict(effective: str, declared: str | None, declared_by: str | None, detected: str | None, confidence: float | None, reason: str, source: str = "asr", track: str | None = None, verified: bool | None = None)` with `mismatch` (a property), `note() -> str | None`, `wire() -> dict`, `from_wire(cls, data: object) -> LanguageVerdict | None`; `decide(pin: str | None, hint: str | None, detection: Detection, *, fallback: str = "sr") -> LanguageVerdict`.
+  - `helper/asr/worker.py` (the language module is imported as `lang`, see Step 7): `_detect(model, audio: np.ndarray) -> lang.Detection`; `transcribe(audio, *, model_name=DEFAULT_MODEL, compute_type="float16", language: str = "sr", hint: str | None = None, initial_prompt=None, hotwords=None, batch_size=16, vad_filter=True) -> dict` (`initial_prompt` until Task 8); `build_parser() -> argparse.ArgumentParser` with the new `--hint CODE`; the answer `{"language": verdict.effective, "verdict": verdict.wire(), "detection": {"bcmsShare", "votes", "probed", "windows"}, "duration", "model", "cues"}`; an invalid `--language` → stdout `{"error": refusal, "permanent": true}`, exit code 2.
+  - `JobRunner._declaration(self, job: Job) -> tuple[str | None, str | None]` — `(self._pin(), language.hint(job.info.audio_language) if job.info else None)`; the worker receives `--language <pin or auto>` and `--hint <code>` when the label exists.
 
-- [ ] **Step 1: Написать падающие тесты правила**
+- [ ] **Step 1: Write failing tests for the rule**
 
-Дописать в конец `tests/test_language.py` (импорты те же):
+Append to the end of `tests/test_language.py` (the imports are the same):
 
 ```python
-# ── Определитель: окна, правило, решение ─────────────────────────────────────────
+# ── Detector: windows, rule, verdict ─────────────────────────────────────────────
 
 
 def test_detector_constants_are_pinned():
-    # Смена любой из них меняет распознавание закэшированных роликов: правишь здесь —
-    # поднимай helper.cache.PROMPT_VERSION.
+    # A change of any of them changes recognition of cached videos: fix here —
+    # raise helper.cache.PROMPT_VERSION.
     assert language.MIN_SPEECH_SECONDS == 3.0
     assert language.BCMS_FLOOR == 0.2
     assert language.SLAVIC_NEIGHBOURS == {"mk", "bg", "sl", "ru", "uk", "be", "cs", "sk", "pl"}
@@ -1725,20 +1723,20 @@ def window(*shares: tuple[str, float], speech: float = 25.0):
     return (speech, list(shares))
 
 
-# 3XJLfTSZy6I: сербская речь без метаданных. en сверху в пяти окнах из восьми,
-# в среднем en 0.55 против 0.44 у сербского семейства.
+# 3XJLfTSZy6I: Serbian speech without metadata. en on top in five windows out of eight,
+# on average en 0.55 against 0.44 for the Serbian family.
 IZA_MRAKA = [window(("en", 0.80), ("sr", 0.10), ("hr", 0.06), ("bs", 0.03), ("de", 0.01))] * 5 + [
     window(("sr", 0.45), ("hr", 0.27), ("bs", 0.15), ("en", 0.10), ("de", 0.03)),
     window(("hr", 0.40), ("sr", 0.35), ("en", 0.15), ("bs", 0.10)),
     window(("sr", 0.50), ("bs", 0.20), ("hr", 0.15), ("en", 0.15)),
 ]
-# Q2QcYOBk0Jo (Juske): метка YouTube en, речь сербская.
+# Q2QcYOBk0Jo (Juske): YouTube label en, the speech is Serbian.
 JUSKE = [window(("sr", 0.60), ("hr", 0.25), ("bs", 0.12), ("en", 0.03))] * 8
-# 3UbtKc9MlXg: английский, сербского семейства ноль во всех восьми окнах.
+# 3UbtKc9MlXg: English, zero Serbian family in all eight windows.
 ENGLISH = [window(("en", 0.95), ("de", 0.03), ("nl", 0.02))] * 8
-# Русская речь, у которой сербского семейства 0.3: выше порога, но язык свой.
+# Russian speech whose Serbian family is 0.3: above the threshold, but the language is its own.
 RUSSIAN = [window(("ru", 0.60), ("sr", 0.20), ("hr", 0.10), ("uk", 0.10))] * 8
-# Клип почти без речи: ни одно окно не голосует.
+# A clip with almost no speech: no window votes.
 SILENCE = [window(speech=0.0)] * 8
 
 
@@ -1803,7 +1801,7 @@ def test_windows_without_speech_or_answer_do_not_vote():
         [
             window(("en", 0.99), speech=2.9),
             window(speech=0.0),
-            # Речь есть, но определитель на этом окне упал: ответа нет.
+            # There is speech, but the detector failed on this window: no answer.
             window(speech=25.0),
         ]
     )
@@ -1951,36 +1949,36 @@ def test_from_wire_ignores_derived_and_broken_fields():
     assert verdict.mismatch is False
 ```
 
-Числа окон взяты так, чтобы средние совпали с полевыми записями: у `IZA_MRAKA` en в сумме 4.40 из 8 (0.55), семья 3.52 из 8 (0.44); у `JUSKE` семья 0.97 в каждом окне.
+The window numbers are chosen so that the averages match the field records: for `IZA_MRAKA` en totals 4.40 of 8 (0.55), the family 3.52 of 8 (0.44); for `JUSKE` the family is 0.97 in every window.
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_language.py -q`
-Expected: FAIL — 44 failed, 79 passed: новые тесты падают на `AttributeError: module 'helper.language' has no attribute …` (`MIN_SPEECH_SECONDS`, `SAMPLE_RATE`, `summarize`, `decide`, `LanguageVerdict`), тесты кодов из задачи 4 проходят
+Expected: FAIL — 44 failed, 79 passed: the new tests fail on `AttributeError: module 'helper.language' has no attribute …` (`MIN_SPEECH_SECONDS`, `SAMPLE_RATE`, `summarize`, `decide`, `LanguageVerdict`), the code tests from Task 4 pass
 
-- [ ] **Step 3: Правило определителя в `helper/language.py`**
+- [ ] **Step 3: The detector rule in `helper/language.py`**
 
-Дописать в конец файла. Константы — с комментарием над блоком: любая из них меняет распознавание уже закэшированных роликов, поэтому правка требует поднять `helper.cache.PROMPT_VERSION`:
+Append to the end of the file. The constants — with a comment above the block: any of them changes recognition of already cached videos, so an edit requires raising `helper.cache.PROMPT_VERSION`:
 
 ```python
-# Окно, в котором речи меньше, не голосует: тишина, музыка и заставка дают
-# распределение по набивке, и такое окно голосовало бы наравне с речью.
+# A window with less speech does not vote: silence, music and an intro give
+# a distribution based on padding, and such a window would vote on par with speech.
 MIN_SPEECH_SECONDS = 3.0
 
-# Доля сербского семейства, с которой определитель решает «сербский», даже если
-# сверху другой язык. На сербской речи Whisper тянет к английскому: 3XJLfTSZy6I
-# дал en 0.55 против 0.44 у семьи; на английском ролике семьи ноль в каждом окне.
+# The Serbian-family share at which the detector decides “Serbian”, even if
+# another language is on top. On Serbian speech Whisper leans towards English: 3XJLfTSZy6I
+# gave en 0.55 against 0.44 for the family; on an English video the family is zero in every window.
 BCMS_FLOOR = 0.2
 
-# Соседи, у которых сербского семейства бывает много по родству: порог их не
-# перебивает, иначе македонская или русская речь распознавалась бы сербской.
+# Neighbours that often have a lot of the Serbian family by kinship: the threshold does not
+# override them, otherwise Macedonian or Russian speech would be recognised as Serbian.
 SLAVIC_NEIGHBOURS = frozenset({"mk", "bg", "sl", "ru", "uk", "be", "cs", "sk", "pl"})
 
 SAMPLE_RATE = 16000
 WINDOW_SAMPLES = 30 * SAMPLE_RATE
 ```
 
-`probe_offsets` — окна лежат внутри `span` длины, как сегодня у воркера (первое начинается на 10%, последнее кончается на 90%); начала округляются `round` (не `int`: значения теста, например 4286 и 6171429, зависят от этого) и прижимаются к `[0, n_samples - window]`, поэтому на записи от 30 до 37,5 с окна целые и перекрываются, а не уходят в минус:
+`probe_offsets` — the windows lie inside a `span` of the length, as in the worker today (the first starts at 10%, the last ends at 90%); the starts are rounded with `round` (not `int`: the test values, e.g. 4286 and 6171429, depend on it) and clamped to `[0, n_samples - window]`, so on a recording of 30 to 37.5 s the windows are whole and overlap, and do not go negative:
 
 ```python
     if n_samples <= window:
@@ -1998,35 +1996,35 @@ WINDOW_SAMPLES = 30 * SAMPLE_RATE
     return sorted(starts)
 ```
 
-В докстроку `probe_offsets` перенести обоснование из `helper/asr/worker.py:36-40`: с начала брать нельзя — там заставка, музыка или реклама спонсора; у KCR-dkZIhxY первая реплика на 21-й секунде.
+In the `probe_offsets` docstring, move the reasoning from `helper/asr/worker.py:36-40`: one cannot take from the start — that is where the intro, music or a sponsor ad is; in KCR-dkZIhxY the first cue is at the 21st second.
 
-`Detection` — `@dataclass(frozen=True)` с полями в порядке из Interfaces; комментарий у `windows`: по окну — верхняя семья или `None` (окно не голосовало), её доля, секунды речи.
+`Detection` — `@dataclass(frozen=True)` with the fields in the order from Interfaces; a comment at `windows`: per window — the top family or `None` (the window did not vote), its share, the seconds of speech.
 
-`summarize(windows)` — чистая функция, по порядку:
-1. Для каждого окна `(speech, distribution)` распределение сводится по семье: `family(code)` для каждого кода, доли bs/hr/sr складываются под `"sr"`; код, у которого `family` — `None`, пропускается.
-2. Окно голосует, если `speech >= MIN_SPEECH_SECONDS` **и** сведённое распределение не пусто (пустое — определитель на окне упал или его не звали). Не голосует — запись `(None, 0.0, speech)`; голосует — `(верхняя семья окна, её доля, speech)`.
-3. Ни одного голоса — `Detection(None, None, 0.0, False, 0, len(windows), записи)`.
-4. Иначе доли каждой семьи усредняются по голосующим окнам; `bcms_share` — среднее `"sr"` (0.0, если его нет); победитель — наибольшее среднее.
-5. Победитель не `"sr"`, `bcms_share >= BCMS_FLOOR` и победитель не в `SLAVIC_NEIGHBOURS` → победитель `"sr"`, `floor=True`. `confidence` — среднее победителя (при пороге это и есть `bcms_share`).
+`summarize(windows)` — a pure function, in order:
+1. For each window `(speech, distribution)` the distribution is reduced by family: `family(code)` for each code, the shares of bs/hr/sr are summed under `"sr"`; a code whose `family` is `None` is skipped.
+2. A window votes if `speech >= MIN_SPEECH_SECONDS` **and** the reduced distribution is not empty (empty — the detector failed on the window or was not called). Does not vote — the record `(None, 0.0, speech)`; votes — `(the top family of the window, its share, speech)`.
+3. No votes at all — `Detection(None, None, 0.0, False, 0, len(windows), records)`.
+4. Otherwise the shares of each family are averaged over the voting windows; `bcms_share` — the average of `"sr"` (0.0 if absent); the winner — the largest average.
+5. The winner is not `"sr"`, `bcms_share >= BCMS_FLOOR` and the winner is not in `SLAVIC_NEIGHBOURS` → the winner is `"sr"`, `floor=True`. `confidence` — the winner's average (at the threshold this is `bcms_share`).
 
-`LanguageVerdict` — `@dataclass(frozen=True)`, поля в порядке из Interfaces.
-- `mismatch` (свойство): сравниваемый язык — `detected` при `source == "asr"`, `effective` при `source == "manual"`; `True`, только когда известны и `declared`, и сравниваемый, и их `family()` различны (`hr` против `sr` — не расхождение).
-- `note()` — ровно эти шаблоны, по порядку: при `mismatch` и `declared_by == "metadata"`: для asr `f"YouTube указал {declared}, по речи {detected}"`, для manual `f"YouTube указал {declared}, дорожка автора {effective}"`; при `mismatch` и `declared_by == "config"`: `f"в настройках {declared}, по речи {detected}"` / `f"в настройках {declared}, дорожка автора {effective}"`; иначе `reason == "hint"` → `f"речи почти нет, язык взят у YouTube: {effective}"`; `reason == "fallback"` → `f"речи почти нет, язык принят за {effective}"`; иначе `None`.
-- `wire()` — ровно ключи `effective, declared, declaredBy, detected, confidence, reason, source, track, verified, mismatch, note`; `confidence` — `round(…, 2)` или `None`; `mismatch` и `note` — вычисленные.
-- `from_wire(data)` (`@classmethod`) — никогда не бросает: не словарь → `None`; `effective` не строка или не из `WHISPER_CODES` (без приведения: `"SR"` и `"sh"` — `None`) → `None`. Остальное терпимо: `declared`, `declaredBy`, `detected`, `track` — непустая строка или `None`; `confidence` — `int`/`float`, но не `bool`, иначе `None`, хранится как `float`; `reason` — строка или `"detector"`; `source` — `"manual"`, только если так и записано, иначе `"asr"`; `verified` — `bool` или `None`; `mismatch` и `note` не читаются.
+`LanguageVerdict` — `@dataclass(frozen=True)`, the fields in the order from Interfaces.
+- `mismatch` (property): the compared language is `detected` when `source == "asr"`, `effective` when `source == "manual"`; `True` only when both `declared` and the compared one are known and their `family()` differ (`hr` vs `sr` is not a mismatch).
+- `note()` — exactly these templates, in order: on `mismatch` and `declared_by == "metadata"`: for asr `f"YouTube указал {declared}, по речи {detected}"`, for manual `f"YouTube указал {declared}, дорожка автора {effective}"`; on `mismatch` and `declared_by == "config"`: `f"в настройках {declared}, по речи {detected}"` / `f"в настройках {declared}, дорожка автора {effective}"`; otherwise `reason == "hint"` → `f"речи почти нет, язык взят у YouTube: {effective}"`; `reason == "fallback"` → `f"речи почти нет, язык принят за {effective}"`; otherwise `None`.
+- `wire()` — exactly the keys `effective, declared, declaredBy, detected, confidence, reason, source, track, verified, mismatch, note`; `confidence` — `round(…, 2)` or `None`; `mismatch` and `note` — computed.
+- `from_wire(data)` (`@classmethod`) — never raises: not a dict → `None`; `effective` not a string or not from `WHISPER_CODES` (without coercion: `"SR"` and `"sh"` — `None`) → `None`. The rest is lenient: `declared`, `declaredBy`, `detected`, `track` — a non-empty string or `None`; `confidence` — `int`/`float`, but not `bool`, otherwise `None`, stored as `float`; `reason` — a string or `"detector"`; `source` — `"manual"`, only if that is what is recorded, otherwise `"asr"`; `verified` — `bool` or `None`; `mismatch` and `note` are not read.
 
-`decide(pin, hint, detection, *, fallback="sr")` — `pin` и `hint` уже коды Whisper (их приводят вызывающие: `normalize` и `hint`). `effective`: `pin`, если есть; иначе `detection.language`, если `detection.votes`; иначе `hint`; иначе `fallback` — никогда не `""` и не `None`. `reason`: `"pin"` | (`"floor"` если `detection.floor` иначе `"detector"`) | `"hint"` | `"fallback"`. `declared = pin or hint`; `declared_by = "config" if pin else ("metadata" if hint else None)`; `detected`, `confidence` — из `detection`; `source` и прочее — умолчания. Подсказка голосующие окна не перевешивает (случай Juske).
+`decide(pin, hint, detection, *, fallback="sr")` — `pin` and `hint` are already Whisper codes (the callers reduce them: `normalize` and `hint`). `effective`: `pin`, if present; otherwise `detection.language`, if `detection.votes`; otherwise `hint`; otherwise `fallback` — never `""` and never `None`. `reason`: `"pin"` | (`"floor"` if `detection.floor` else `"detector"`) | `"hint"` | `"fallback"`. `declared = pin or hint`; `declared_by = "config" if pin else ("metadata" if hint else None)`; `detected`, `confidence` — from `detection`; `source` and the rest — defaults. The hint does not outweigh voting windows (the Juske case).
 
-- [ ] **Step 4: Запустить**
+- [ ] **Step 4: Run them**
 
 Run: `.venv/bin/python -m pytest tests/test_language.py -q`
 Expected: PASS, 123 passed
 
-- [ ] **Step 5: Написать падающие тесты воркера и демона**
+- [ ] **Step 5: Write failing tests for the worker and the daemon**
 
 ```python
 # tests/test_worker.py
-"""Воркер распознавания без карты: окна определителя, решение о языке, разбор аргументов."""
+"""Recognition worker without a GPU: detector windows, the language verdict, argument parsing."""
 
 import json
 import sys
@@ -2042,11 +2040,11 @@ WINDOW = language.WINDOW_SAMPLES
 
 
 class Model:
-    """WhisperModel для _detect: отвечает распределениями по очереди и помнит, что слушал."""
+    """WhisperModel for _detect: answers with the distributions in turn and remembers what it heard."""
 
     def __init__(self, *answers) -> None:
         self.answers = list(answers)
-        # Длины отрывков, отданных detect_language, по порядку.
+        # The lengths of the excerpts given to detect_language, in order.
         self.heard: list[int] = []
 
     def detect_language(self, audio=None, features=None, vad_filter=False, **kwargs):
@@ -2062,7 +2060,7 @@ class Model:
 
 @pytest.fixture
 def vad(monkeypatch):
-    """VAD без silero: речь — это ненулевые отсчёты отрывка."""
+    """VAD without silero: speech is the non-zero samples of the excerpt."""
     import faster_whisper.vad
 
     def speech(audio, vad_options=None, sampling_rate=16000, **kwargs):
@@ -2074,7 +2072,7 @@ def vad(monkeypatch):
 
 
 def recording(seconds: float, speech: list[float]) -> np.ndarray:
-    """Тишина длиной seconds; в начале каждого окна — столько секунд «речи», сколько в speech."""
+    """Silence of length seconds; at the start of each window — as many seconds of “speech” as in speech."""
     audio = np.zeros(int(seconds * SR), dtype="<f4")
 
     for offset, voiced in zip(language.probe_offsets(audio.size), speech):
@@ -2095,7 +2093,7 @@ def test_detect_hears_only_windows_with_speech(vad):
 
 
 def test_window_where_the_detector_fails_does_not_vote(vad):
-    # Без доли сербской семьи: исход не зависит от BCMS_FLOOR и его калибровки (задача 12).
+    # Without a Serbian-family share: the outcome does not depend on BCMS_FLOOR and its calibration (Task 12).
     model = Model(RuntimeError("CUDA"), *[[("en", 0.95), ("de", 0.05)]] * 7)
 
     detection = worker._detect(model, recording(20 * 60, [30] * 8))
@@ -2113,7 +2111,7 @@ def test_short_audio_is_one_window_on_the_same_path(vad):
 
     assert model.heard == [audio.size]
     assert detection.probed == 1
-    # Семья, а не верхняя метка: сегодня этот путь отдавал hr 0.45.
+    # The family, not the top label: today this path gave hr 0.45.
     assert detection.language == "sr"
     assert detection.confidence == pytest.approx(0.85)
 
@@ -2129,7 +2127,7 @@ def test_audio_between_30_and_37_5_seconds_gives_whole_windows(vad):
 
 def test_no_votes_means_one_pass_over_the_whole_file(vad):
     audio = recording(20 * 60, [2] * 8)
-    # Десять секунд речи в заставке, вне окон: окна начинаются со 120-й секунды.
+    # Ten seconds of speech in the intro, outside the windows: the windows start at the 120th second.
     audio[: 10 * SR] = 0.1
     model = Model([("sr", 0.8), ("en", 0.2)])
 
@@ -2176,7 +2174,7 @@ AUDIO = np.zeros(5 * SR, dtype="<f4")
 
 
 def detector_says(monkeypatch, detection) -> list[int]:
-    """_detect отвечает готовым Detection; список — длины записей, на которых его звали."""
+    """_detect answers with a ready Detection; the list — the lengths of recordings it was called on."""
     heard: list[int] = []
 
     def detect(model, audio):
@@ -2254,7 +2252,7 @@ def test_unknown_pin_fails_before_the_model_loads(monkeypatch):
 def test_parser_keeps_the_cli_contract():
     args = worker.build_parser().parse_args([])
 
-    # helper/measure.py не передаёт --language и рассчитывает на sr.
+    # helper/measure.py does not pass --language and relies on sr.
     assert args.language == "sr"
     assert args.hint is None
     assert (args.model, args.compute_type, args.batch_size) == (worker.DEFAULT_MODEL, "float16", 16)
@@ -2272,12 +2270,12 @@ def test_main_refuses_an_unknown_pin_before_reading_audio(monkeypatch, capsys):
     }
 ```
 
-Последний тест заодно проверяет порядок: под захватом вывода pytest чтение stdin бросает `OSError`, так что отказ обязан случиться раньше чтения звука.
+The last test also checks the order: under pytest's output capture reading stdin raises `OSError`, so the refusal must happen before reading the audio.
 
-В `tests/test_job_language.py` добавить импорт `from helper.asr import worker` после `from helper import jobs, language` и дописать в конец:
+In `tests/test_job_language.py`, add the import `from helper.asr import worker` after `from helper import jobs, language` and append to the end:
 
 ```python
-# ── Объявленное уходит в воркер подсказкой ───────────────────────────────────────
+# ── The declaration goes to the worker as a hint ─────────────────────────────────
 
 
 def test_declaration_is_the_pin_and_the_normalised_label(manager):
@@ -2319,38 +2317,38 @@ async def test_worker_argv_parses_with_the_worker_parser(manager, pipeline, pin,
     assert (parsed.language, parsed.hint) == (sent, hint)
 ```
 
-Разбор argv настоящим парсером воркера — контракт демона и воркера: любой флаг, который демон шлёт, а воркер не знает, уронит тест на `SystemExit` argparse.
+Parsing argv with the worker's real parser is the daemon–worker contract: any flag the daemon sends and the worker does not know will fail the test with argparse's `SystemExit`.
 
-- [ ] **Step 6: Запустить и убедиться, что падают**
+- [ ] **Step 6: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_worker.py tests/test_job_language.py -q`
-Expected: FAIL — 22 failed, 20 passed (проходят тесты задачи 4). В `test_worker.py` все 16: старый `_detect` зовёт модель на каждом окне и отдаёт кортеж (`assert [480000, …] == […]`, `AttributeError: 'tuple' object has no attribute 'votes'` (на 20 с — `… no attribute 'probed'`), на 31,25 с — укороченные окна `[450000, …]`, на тишине — `IndexError: pop from empty list`: заглушке нечего ответить), при закрепе старый `transcribe` определитель не зовёт (`assert [] == [80000]`), а при `auto` распаковывает его ответ (`TypeError: cannot unpack non-iterable Detection object`), `TypeError: transcribe() got an unexpected keyword argument 'hint'`, `Failed: модель грузить рано`, `AttributeError: module 'helper.asr.worker' has no attribute 'build_parser'`, `OSError: pytest: reading from stdin while output is captured!`. В `test_job_language.py` 6: `AttributeError: 'JobRunner' object has no attribute '_declaration'` и тот же `build_parser`
+Expected: FAIL — 22 failed, 20 passed (the Task 4 tests pass). In `test_worker.py` all 16: the old `_detect` calls the model on every window and returns a tuple (`assert [480000, …] == […]`, `AttributeError: 'tuple' object has no attribute 'votes'` (at 20 s — `… no attribute 'probed'`), at 31.25 s — shortened windows `[450000, …]`, on silence — `IndexError: pop from empty list`: the stub has nothing to answer), under a pin the old `transcribe` does not call the detector (`assert [] == [80000]`), and under `auto` it unpacks its answer (`TypeError: cannot unpack non-iterable Detection object`), `TypeError: transcribe() got an unexpected keyword argument 'hint'`, `Failed: модель грузить рано`, `AttributeError: module 'helper.asr.worker' has no attribute 'build_parser'`, `OSError: pytest: reading from stdin while output is captured!`. In `test_job_language.py` 6: `AttributeError: 'JobRunner' object has no attribute '_declaration'` and the same `build_parser`
 
-- [ ] **Step 7: Воркер**
+- [ ] **Step 7: The worker**
 
 `helper/asr/worker.py`:
 
-- Импорты: `import math` — к стандартным, между `json` и `sys` (секунды окон в ответе, см. ниже); после `import helper.env` (строка 25) — `from helper import language as lang` с комментарием, почему не `language`: параметры `transcribe` называются `language` и `hint` и затенили бы модуль и его функцию. `SAMPLE_RATE = lang.SAMPLE_RATE` вместо `16000` (строка 27): одно определение; `jobs.py:33` и `spikes/asr_real.py:31` импортируют его отсюда и продолжают работать.
-- Удалить строки 36-122: `PROBE_WINDOWS`, `PROBE_SPAN`, `WINDOW_SECONDS` (раскладка теперь `lang.probe_offsets`), `BCMS` (теперь `lang.family`), старые `_detect` и `_merge_bcms`. Вместо них три функции (поведение закреплено семью тестами `_detect` шага 5):
-  - `_speech_seconds(audio: np.ndarray) -> float` — секунды речи в отрывке: сумма `end - start` по `get_speech_timestamps(audio)` из `faster_whisper.vad`, делённая на `SAMPLE_RATE`. Докстрока: тот же VAD с теми же умолчаниями, что у `detect_language(vad_filter=True)`, — ровно столько определитель и услышит.
-  - `_window(model, audio: np.ndarray, speech: float) -> tuple[float, list[tuple[str, float]]]` — одна запись для `summarize`. Речи меньше `lang.MIN_SPEECH_SECONDS` — `(speech, [])`, модель на таком отрывке не зовётся. Иначе распределение — третий элемент ответа `model.detect_language(audio=audio, vad_filter=True)`, запись `(speech, list(probs))`. Исключение из `detect_language` — тоже `(speech, [])`: `except Exception` с пометкой `# noqa: BLE001 — одно окно не должно ронять распознавание`.
-  - `_detect(model, audio: np.ndarray) -> lang.Detection` — окна по `lang.probe_offsets(audio.size)`, каждое `audio[offset : offset + lang.WINDOW_SAMPLES]` со своей речью по `_speech_seconds`, и `lang.summarize` по всем записям. Если не проголосовало ни одно окно и запись длиннее окна (`audio.size > lang.WINDOW_SAMPLES`), последней записью идёт проход по всему файлу, `_window(model, audio, min(30.0, _speech_seconds(audio)))`, и `summarize` считается заново.
+- Imports: `import math` — to the standard ones, between `json` and `sys` (window seconds in the answer, see below); after `import helper.env` (line 25) — `from helper import language as lang` with a comment on why not `language`: the `transcribe` parameters are called `language` and `hint` and would shadow the module and its function. `SAMPLE_RATE = lang.SAMPLE_RATE` instead of `16000` (line 27): one definition; `jobs.py:33` and `spikes/asr_real.py:31` import it from here and keep working.
+- Delete lines 36-122: `PROBE_WINDOWS`, `PROBE_SPAN`, `WINDOW_SECONDS` (the layout is now `lang.probe_offsets`), `BCMS` (now `lang.family`), the old `_detect` and `_merge_bcms`. In their place three functions (the behaviour is pinned by the seven `_detect` tests of Step 5):
+  - `_speech_seconds(audio: np.ndarray) -> float` — the seconds of speech in the excerpt: the sum of `end - start` over `get_speech_timestamps(audio)` from `faster_whisper.vad`, divided by `SAMPLE_RATE`. The docstring: the same VAD with the same defaults as `detect_language(vad_filter=True)` — exactly as much as the detector will hear.
+  - `_window(model, audio: np.ndarray, speech: float) -> tuple[float, list[tuple[str, float]]]` — one record for `summarize`. Less speech than `lang.MIN_SPEECH_SECONDS` — `(speech, [])`, the model is not called on such an excerpt. Otherwise the distribution is the third element of `model.detect_language(audio=audio, vad_filter=True)`'s answer, the record `(speech, list(probs))`. An exception from `detect_language` — also `(speech, [])`: `except Exception` marked `# noqa: BLE001 — one window must not bring recognition down`.
+  - `_detect(model, audio: np.ndarray) -> lang.Detection` — windows by `lang.probe_offsets(audio.size)`, each `audio[offset : offset + lang.WINDOW_SAMPLES]` with its own speech by `_speech_seconds`, and `lang.summarize` over all the records. If no window voted and the recording is longer than a window (`audio.size > lang.WINDOW_SAMPLES`), the last record is a pass over the whole file, `_window(model, audio, min(30.0, _speech_seconds(audio)))`, and `summarize` is computed again.
 
-  Импорт `get_speech_timestamps` из `faster_whisper.vad` — внутри `_speech_seconds`, не на уровне модуля: `jobs.py` импортирует этот модуль ради `SAMPLE_RATE`, и faster_whisper в процессе демона не нужен; тест подменяет `faster_whisper.vad.get_speech_timestamps`, и подмена видна только при чтении атрибута во время вызова. Докстрока `_detect`: модель приходит уже загруженной (одна на определение и распознавание); окна раскладываем сами, потому что штатный `language_detection_segments` — это «первые N×30 секунд речи подряд», а порог 0.5 обрывает перебор на первом окне; окно, где речи меньше `MIN_SPEECH_SECONDS`, модели не отдаётся — на набивке она всё равно ответила бы, и тишина голосовала бы наравне с речью; упавшее окно не голосует; не проголосовало ни одно окно, а запись длиннее окна — один проход по первым тридцати секундам речи всего файла, последней записью в `windows` (на ролике длиннее 37,5 с — девятой; речь могла оказаться между окнами), и модель на нём зовут, только если речи в файле не меньше `MIN_SPEECH_SECONDS`. Прежняя докстрока («Отрывок берётся с 40% длительности») и комментарий «Окно могло целиком оказаться тишиной — VAD вернёт пусто» неверны и уходят вместе с функцией.
+  The `get_speech_timestamps` import from `faster_whisper.vad` — inside `_speech_seconds`, not at module level: `jobs.py` imports this module for `SAMPLE_RATE`, and faster_whisper is not needed in the daemon's process; the test patches `faster_whisper.vad.get_speech_timestamps`, and the patch is visible only when the attribute is read during the call. The `_detect` docstring: the model arrives already loaded (one for detection and recognition); we lay out the windows ourselves, because the stock `language_detection_segments` is “the first N×30 seconds of speech in a row”, and its 0.5 threshold stops the scan at the first window; a window with less speech than `MIN_SPEECH_SECONDS` is not given to the model — on padding it would answer anyway, and silence would vote on par with speech; a failed window does not vote; no window voted and the recording is longer than a window — one pass over the first thirty seconds of speech of the whole file, as the last record in `windows` (the ninth on a video longer than 37.5 s; the speech might have fallen between the windows), and the model is called on it only if the speech in the file is at least `MIN_SPEECH_SECONDS`. The old docstring (“The excerpt is taken from 40% of the duration”) and the comment “The window could have been entirely silence — VAD will return empty” are wrong and go away together with the function.
 
-- `transcribe` (125-215): новый параметр `hint: str | None = None` сразу после `language`; остальная подпись прежняя (`initial_prompt` остаётся до задачи 8). Порядок внутри: импорт faster_whisper как был; `pin = lang.normalize(language)` **до** `WhisperModel(...)` — негодный код бросает `UnknownLanguage`, не загрузив весов (`"auto"` входит в `NO_LANGUAGE`, так что отдельная проверка `language == "auto"` не нужна); `WhisperModel(...)`; `detection = _detect(model, audio)` — **всегда**, и при закреплённом языке; `verdict = lang.decide(pin, lang.hint(hint), detection)`; в `pipeline.transcribe` — `language=verdict.effective`. Комментарий над этим аргументом (156-158, «Язык фиксируется жёстко… смотрит только первые 30 секунд») заменить: язык решён выше и никогда не пустой и не `None`; собственное определение библиотеки слушает только первые тридцать секунд речи, а там интро; bs/hr/sr для неё — три токена одного языка с произвольным выбором. Блок `detected, confidence = "", 0.0` / `if language == "auto": …` (142-150) удалить. Ответ (205-215):
+- `transcribe` (125-215): the new parameter `hint: str | None = None` right after `language`; the rest of the signature is the previous one (`initial_prompt` stays until Task 8). The order inside: the faster_whisper import as before; `pin = lang.normalize(language)` **before** `WhisperModel(...)` — an invalid code raises `UnknownLanguage` without loading the weights (`"auto"` is part of `NO_LANGUAGE`, so a separate check `language == "auto"` is not needed); `WhisperModel(...)`; `detection = _detect(model, audio)` — **always**, even with a pinned language; `verdict = lang.decide(pin, lang.hint(hint), detection)`; in `pipeline.transcribe` — `language=verdict.effective`. The comment above this argument (156-158, “The language is pinned hard… looks only at the first 30 seconds”) is replaced: the language is decided above and is never empty and never `None`; the library's own detection listens only to the first thirty seconds of speech, and that is where the intro is; bs/hr/sr are three tokens of one language to it, with an arbitrary choice. The block `detected, confidence = "", 0.0` / `if language == "auto": …` (142-150) is deleted. The answer (205-215):
 
 ```python
     return {
-        # Язык, с которым распознавали: демон латинизирует по нему реплики.
+        # The language recognition ran with: the daemon transliterates the cues by it.
         "language": verdict.effective,
         "verdict": verdict.wire(),
-        # Окна определителя — для журнала демона и для подбора порогов по нему.
+        # Detector windows — for the daemon's journal and for tuning the thresholds against it.
         "detection": {
             "bcmsShare": round(detection.bcms_share, 2),
             "votes": detection.votes,
             "probed": detection.probed,
-            # Секунды речи — вниз: окно, показанное с MIN_SPEECH_SECONDS и больше, ушло в модель.
+            # Speech seconds — rounded down: a window shown with MIN_SPEECH_SECONDS or more went into the model.
             "windows": [
                 [code, round(share, 2), math.floor(speech * 10) / 10]
                 for code, share, speech in detection.windows
@@ -2362,10 +2360,10 @@ Expected: FAIL — 22 failed, 20 passed (проходят тесты задач�
     }
 ```
 
-  Ключей `detected` и `confidence` верхнего уровня больше нет: они живут в `verdict`. Демон читает их только в мёртвой строке журнала `jobs.py:932-934`, которую заменяет `_accept_asr` в задаче 6; до неё строка остаётся мёртвой, как и была.
+The top-level `detected` and `confidence` keys are gone: they live in `verdict`. The daemon reads them only in the dead journal line `jobs.py:932-934`, which `_accept_asr` replaces in Task 6; until then the line stays dead, as it was.
 
-- `build_parser() -> argparse.ArgumentParser` — вынести из `main` (219-231) все флаги как есть, плюс `parser.add_argument("--hint", default=None, help="метка языка от YouTube, только подсказка")` сразу после `--language`. У `--language` умолчание остаётся `"sr"`, комментарий: код, закреплённый хозяином, или auto; на умолчание `sr` рассчитывает `helper/measure.py`, который язык не передаёт.
-- `main()`: `args = build_parser().parse_args()`; **до** чтения звука (234) — проверка закрепления:
+- `build_parser() -> argparse.ArgumentParser` — move out of `main` (219-231) all the flags as they are, plus `parser.add_argument("--hint", default=None, help="метка языка от YouTube, только подсказка")` right after `--language`. `--language` keeps the default `"sr"`, the comment: the code pinned by the owner, or auto; `helper/measure.py`, which does not pass a language, relies on the `sr` default.
+- `main()`: `args = build_parser().parse_args()`; **before** reading the audio (234) — the pin check:
 
 ```python
     try:
@@ -2375,32 +2373,32 @@ Expected: FAIL — 22 failed, 20 passed (проходят тесты задач�
         return 2
 ```
 
-  с комментарием: отказ стоит ровно разбора аргументов; код 2 и `"permanent"` — демон делает из этого окончательный отказ (`_run_asr`, задача 4). В вызов `transcribe` добавить `hint=args.hint`. Прочие JSON-ошибки (`на вход не пришло аудио`, `аудио короче половины секунды`) и их код 1 не менять.
-- Докстрока модуля, пример на строке 14: `python -m helper.asr.worker --language auto --hint en` и строка под ним: `--language` — код, закреплённый хозяином, или auto; `--hint` — метка языка от YouTube; определитель слушает запись в любом случае, решение — `helper.language.decide`.
+  with the comment: the refusal costs exactly the argument parsing; code 2 and `"permanent"` — the daemon turns this into a final refusal (`_run_asr`, Task 4). Add `hint=args.hint` to the `transcribe` call. Do not change the other JSON errors (`на вход не пришло аудио`, `аудио короче половины секунды`) and their code 1.
+- The module docstring, the example on line 14: `python -m helper.asr.worker --language auto --hint en` and the line under it: `--language` — the code pinned by the owner, or auto; `--hint` — the language label from YouTube; the detector listens to the recording in any case, the verdict — `helper.language.decide`.
 
-`helper/measure.py` не меняется: без `--language` воркер берёт закрепление `sr`, и определитель теперь пройдёт до восьми окон по одному энкодеру перед замеряемым распознаванием; пик памяти по-прежнему даёт пакетное распознавание. Тест оснастки из задачи 3, что зовёт настоящий `transcribe` (`test_whisper_fixture_runs_the_real_worker_transcribe`), после этой задачи гоняет настоящий Silero VAD — фикстура `whisper` его не подменяет: на процессоре, без сети и карты, около 0,1 с на 5 с тишины. Речи в нулях нет, и `detect_language` подделки даже не зовётся. Тесты `transcribe` этой задачи подменяют `worker._detect` (`detector_says`), а прямые тесты `_detect` идут на своей заглушке `Model` и фикстуре `vad`.
+`helper/measure.py` does not change: without `--language` the worker takes the pin `sr`, and the detector will now run up to eight windows through one encoder before the measured recognition; peak memory is still given by batched recognition. The harness test from Task 3 that calls the real `transcribe` (`test_whisper_fixture_runs_the_real_worker_transcribe`) now runs the real Silero VAD after this task — the `whisper` fixture does not replace it: on the CPU, without network and a GPU, about 0.1 s per 5 s of silence. There is no speech in zeros, and the fake `detect_language` is not even called. The `transcribe` tests of this task patch `worker._detect` (`detector_says`), while the direct `_detect` tests run on their own `Model` stub and the `vad` fixture.
 
-- [ ] **Step 8: Демон: объявленное — подсказка**
+- [ ] **Step 8: Daemon: the declaration is a hint**
 
-`helper/jobs.py`: удалить метод `_source_language` целиком (после задачи 4 его ветка конфига зовёт `self._pin()`); метод `_pin`, стоящий прямо над ним, остаётся; `_declaration` — на месте `_source_language`, под `_pin`:
+`helper/jobs.py`: delete the `_source_language` method entirely (after Task 4 its config branch calls `self._pin()`); the `_pin` method standing right above it stays; `_declaration` — in place of `_source_language`, under `_pin`:
 
 ```python
     def _declaration(self, job: Job) -> tuple[str | None, str | None]:
         return self._pin(), (language.hint(job.info.audio_language) if job.info else None)
 ```
 
-Докстрока: что сказано о языке до звука — (закрепление хозяина, метка YouTube); решает не это, а воркер (`helper.language.decide`), определитель слушает всегда; метка YouTube — только подсказка: yt-dlp выводит её из ASR-дорожки YouTube, а та помечает сербские каналы английскими (Juske), у сербских роликов её обычно нет вовсе (60 из 60 в корпусе — замер из прежней докстроки); незнакомая метка — просто «не знаем». Сюда потом придёт объявление на ролик и на ссылку («Отложено»): объявление для решения, ключа кэша и выбора дорожки читается только здесь; исключения — проверка закрепления в начале `_pipeline` (`_pin`) и восстановление (`JobManager._key_for`: задания там нет, оно читает настройку через `hint` и меняется вместе с этой функцией). Строка журнала «язык %s взят из метаданных, распознаватель определять не будет» уходит вместе с ранним возвратом.
+The docstring: what is said about the language before the audio — (the owner's pin, the YouTube label); it is not this that decides, but the worker (`helper.language.decide`), the detector always listens; the YouTube label is only a hint: yt-dlp derives it from YouTube's ASR track, and that one labels Serbian channels as English (Juske), while Serbian videos usually have none at all (60 out of 60 in the corpus — the measurement from the old docstring); an unfamiliar label is simply “we don't know”. The declaration for the video and for the link will arrive here later (“Deferred”): the declaration for the verdict, the cache key and the track choice is read only here; the exceptions are the pin check at the start of `_pipeline` (`_pin`) and restore (`JobManager._key_for`: there is no job there, it reads the config through `hint` and changes together with this function). The journal line “язык %s взят из метаданных, распознаватель определять не будет” goes away together with the early return.
 
-`JobRunner._run_asr` (1153-1167): `pin, hint = self._declaration(job)` рядом с `prompt = _initial_prompt(job.info)`; в argv вместо `self._source_language(job)` — `pin or "auto"`; после списка, до `--initial-prompt`:
+`JobRunner._run_asr` (1153-1167): `pin, hint = self._declaration(job)` next to `prompt = _initial_prompt(job.info)`; in argv instead of `self._source_language(job)` — `pin or "auto"`; after the list, before `--initial-prompt`:
 
 ```python
         if hint:
             args += ["--hint", hint]
 ```
 
-Блок результата в `_pipeline` (929-941) не трогать: его заменяет `_accept_asr` в задаче 6. `--initial-prompt` и `_initial_prompt` не трогать: это задача 8.
+Do not touch the result block in `_pipeline` (929-941): `_accept_asr` replaces it in Task 6. Do not touch `--initial-prompt` and `_initial_prompt`: that is Task 8.
 
-- [ ] **Step 9: Запустить и убедиться, что проходят**
+- [ ] **Step 9: Run them and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_worker.py tests/test_job_language.py -q`
 Expected: PASS, 42 passed
@@ -2408,53 +2406,53 @@ Expected: PASS, 42 passed
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 331 passed
 
-- [ ] **Step 10: Коммит**
+- [ ] **Step 10: Commit**
 
 ```bash
 /usr/bin/git add helper/language.py helper/asr/worker.py helper/jobs.py tests/test_language.py tests/test_worker.py tests/test_job_language.py
 /usr/bin/git commit -m "Определитель языка слушает всегда: голосуют только окна с речью, порог сербского семейства, метка YouTube — лишь подсказка"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command goes in a separate Bash call, via `/usr/bin/git`; the timeout must be at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message is in Russian, without `Co-Authored-By` lines or any other signatures.
 
 ---
-### Task 6: Решение о языке видно клиентам
+### Task 6: The language verdict is visible to clients
 
-**Files:** номера строк — на `98a3ad2`, предыдущие задачи их сдвинули: искать по имени функции.
-- Modify: `helper/jobs.py` — импорты (строка 37, рядом с `from helper.gpulease import GpuLease, Preempted`); `Job.__init__` (239-337, рядом с `self.source`, 269-271); `Job.snapshot` (427-451, после `"generation"`, 440); новый `Job._set_language` между `Job._set_stage` (453-457) и `Job._fail` (459-463); новая модульная `_log_language` между `refusal_snapshot` (688-701) и `class JobRunner` (704); `JobRunner._pipeline` (772-943) — ветка дорожки автора `else:` (853-860) и блок после `_run_asr_watched` (926-941); новый `JobRunner._accept_asr` сразу после `JobRunner._run_asr_watched` (1070-1096)
+**Files:** line numbers are from `98a3ad2`, the previous tasks have shifted them: search by function name.
+- Modify: `helper/jobs.py` — imports (line 37, next to `from helper.gpulease import GpuLease, Preempted`); `Job.__init__` (239-337, next to `self.source`, 269-271); `Job.snapshot` (427-451, after `"generation"`, 440); the new `Job._set_language` between `Job._set_stage` (453-457) and `Job._fail` (459-463); the new module-level `_log_language` between `refusal_snapshot` (688-701) and `class JobRunner` (704); `JobRunner._pipeline` (772-943) — the author-track `else:` branch (853-860) and the block after `_run_asr_watched` (926-941); the new `JobRunner._accept_asr` right after `JobRunner._run_asr_watched` (1070-1096)
 - Modify: `tests/test_limits.py:243-276` (`test_events_with_create_answers_200_with_an_error_snapshot`)
-- Modify: `tests/conftest.py` — рядом с `metadata` (задача 3) три обычные функции: `watch`, `hear_until_done`, `preempt_after_asr`
-- Test: `tests/test_language_wire.py` (новый)
+- Modify: `tests/conftest.py` — next to `metadata` (Task 3), three ordinary functions: `watch`, `hear_until_done`, `preempt_after_asr`
+- Test: `tests/test_language_wire.py` (new)
 
 **Interfaces:**
 - Consumes:
-  - `helper.language.LanguageVerdict` (задача 5): поля по порядку `effective, declared, declared_by, detected, confidence, reason, source="asr", track=None, verified=None`; свойство `mismatch`; `note() -> str | None`; `wire() -> dict` с ключами `effective, declared, declaredBy, detected, confidence, reason, source, track, verified, mismatch, note`; `LanguageVerdict.from_wire(data: object) -> LanguageVerdict | None` (None, не словарь, нет или негодный `effective` → `None`).
-  - `language.normalize`, `language.UnknownLanguage`, `language.hint` (задача 4); модуль уже импортирован в `helper/jobs.py` именем `language` (задача 4).
-  - `language.MIN_SPEECH_SECONDS` (задача 5, 3.0) — с этих секунд речи окно уходит в определитель; секунды окон в ответе воркера округлены вниз до десятых (задача 5), так что окно, показанное с этим числом и больше, в модель ушло. Порог предупреждения в `_log_language`.
-  - `JobRunner._declaration(self, job) -> tuple[str | None, str | None]` — `(закрепление, подсказка метаданных)` (задача 5).
-  - Ответ воркера (задача 5): `{"language": <действующий код>, "verdict": LanguageVerdict.wire(), "detection": {"bcmsShare", "votes", "probed", "windows": [[код или null, доля, секунды речи], ...]}, "duration", "model", "cues"}`.
-  - Оснастка (задача 3): построитель `metadata(**overrides) -> VideoInfo` из `tests/conftest.py`; фикстура `pipeline` — `run(job)`, `workers`, `cache`, `configure(**asr)` и входы `pipeline.asr_result` (JSON, которым отвечает поддельный воркер), `pipeline.info` (что отдаёт `probe`; по умолчанию ролик без дорожек автора и без `audio_language`), `pipeline.track` (что отдаёт `fetch_manual_track`); её пропуск на карту выдаёт настоящий `helper.gpulease._Holder`. Фикстуры `manager`, `client`, `connection` уже есть.
+  - `helper.language.LanguageVerdict` (Task 5): fields in order `effective, declared, declared_by, detected, confidence, reason, source="asr", track=None, verified=None`; the `mismatch` property; `note() -> str | None`; `wire() -> dict` with the keys `effective, declared, declaredBy, detected, confidence, reason, source, track, verified, mismatch, note`; `LanguageVerdict.from_wire(data: object) -> LanguageVerdict | None` (None, not a dict, missing or invalid `effective` → `None`).
+  - `language.normalize`, `language.UnknownLanguage`, `language.hint` (Task 4); the module is already imported in `helper/jobs.py` under the name `language` (Task 4).
+  - `language.MIN_SPEECH_SECONDS` (Task 5, 3.0) — from that many seconds of speech a window goes to the detector; the window seconds in the worker's answer are rounded down to tenths (Task 5), so a window shown with this number or more went into the model. The warning threshold in `_log_language`.
+  - `JobRunner._declaration(self, job) -> tuple[str | None, str | None]` — `(pin, metadata hint)` (Task 5).
+  - The worker's answer (Task 5): `{"language": <effective code>, "verdict": LanguageVerdict.wire(), "detection": {"bcmsShare", "votes", "probed", "windows": [[code or null, share, speech seconds], ...]}, "duration", "model", "cues"}`.
+  - The harness (Task 3): the builder `metadata(**overrides) -> VideoInfo` from `tests/conftest.py`; the `pipeline` fixture — `run(job)`, `workers`, `cache`, `configure(**asr)` and the inputs `pipeline.asr_result` (the JSON the fake worker answers with), `pipeline.info` (what `probe` returns; by default a video without author tracks and without `audio_language`), `pipeline.track` (what `fetch_manual_track` returns); its permit for the GPU is provided by a real `helper.gpulease._Holder`. The fixtures `manager`, `client`, `connection` already exist.
 - Produces:
-  - `Job.language: LanguageVerdict | None` — `None`, пока решения нет; в ключ реестра `(video_id, use_author_track)` не входит.
-  - `Job._set_language(self, verdict: LanguageVerdict) -> None` — ставит `Job.language` и пишет в журнал `{"type": "language", "language": verdict.wire()}`.
-  - `Job.snapshot()["language"]` — `self.language.wire()` или `None`; у `refusal_snapshot` — `None`.
-  - `JobRunner._accept_asr(self, job: Job, result: dict) -> None` — решение о языке, реплики и `segmented` из ответа воркера; задача 8 заменит в нём сборку реплик на `asr_cues(...)`. Ответ без годного `verdict`, чей `language` не приводится к коду Whisper, — `PermanentJobError(f"распознаватель вернул неизвестный язык «{code}»")`: окончательный, без повтора на карте.
-  - `_log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None` (модульная, закрытая): INFO `язык <ролик>: <effective> (<reason>), объявлен <declared> (<declared_by>), по речи <detected>, уверенность <0.00>, окна: <код> <0.00>/<N>с, ...`, где каждое отсутствующее значение (объявление целиком, определённый язык, уверенность, код окна без голоса, список окон) пишется знаком `—`; WARNING `язык <ролик>: <note()>` при `mismatch`; WARNING `язык <ролик>: определитель не ответил, окон с речью без ответа: <N>`, когда хотя бы у одного окна код `None` при секундах речи не меньше `language.MIN_SPEECH_SECONDS`.
-  - Порядок событий: `language` идёт раньше `segmented` на путях распознавания и дорожки автора (кэш и восстановление — задача 7).
-  - В `tests/conftest.py`, рядом с `metadata`, — обычные функции, тесты берут их `from conftest import …`: `watch(video_id, **fields) -> dict` — сообщение `watch` вкладки; `async hear_until_done(connection) -> list[dict]` — всё, что сокет услышал до события `state` со стадией `done` или `error`; `preempt_after_asr(pipeline, monkeypatch) -> None` — карту отбирают на первой проверке вытеснения после воркера (подмена `gpulease._Holder.check`). Задача 7 берёт все три.
+  - `Job.language: LanguageVerdict | None` — `None` until there is a verdict; it does not enter the registry key `(video_id, use_author_track)`.
+  - `Job._set_language(self, verdict: LanguageVerdict) -> None` — sets `Job.language` and writes `{"type": "language", "language": verdict.wire()}` to the journal.
+  - `Job.snapshot()["language"]` — `self.language.wire()` or `None`; in `refusal_snapshot` — `None`.
+  - `JobRunner._accept_asr(self, job: Job, result: dict) -> None` — the language verdict, the cues and `segmented` from the worker's answer; Task 8 will replace its cue assembly with `asr_cues(...)`. An answer without a valid `verdict`, whose `language` does not reduce to a Whisper code — `PermanentJobError(f"распознаватель вернул неизвестный язык «{code}»")`: final, without a retry on the GPU.
+  - `_log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None` (module-level, private): INFO `язык <ролик>: <effective> (<reason>), объявлен <declared> (<declared_by>), по речи <detected>, уверенность <0.00>, окна: <код> <0.00>/<N>с, ...`, where every missing value (the declaration as a whole, the decided language, the confidence, a window code without a vote, the list of windows) is written with the character `—`; WARNING `язык <ролик>: <note()>` on `mismatch`; WARNING `язык <ролик>: определитель не ответил, окон с речью без ответа: <N>` when at least one window has the code `None` with speech seconds not less than `language.MIN_SPEECH_SECONDS`.
+  - Event order: `language` goes before `segmented` on the recognition and author-track paths (cache and restore — Task 7).
+  - In `tests/conftest.py`, next to `metadata`, — ordinary functions, the tests take them `from conftest import …`: `watch(video_id, **fields) -> dict` — the tab's `watch` message; `async hear_until_done(connection) -> list[dict]` — everything the socket heard until the `state` event with the `done` or `error` stage; `preempt_after_asr(pipeline, monkeypatch) -> None` — the GPU is taken away on the first preemption check after the worker (patching `gpulease._Holder.check`). Task 7 takes all three.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write failing tests**
 
-В `tests/conftest.py`, сразу после функции `metadata` (задача 3), — три обычные функции. Ими пользуются эта задача и задача 7; `helper.*` по-прежнему импортируется внутри функции:
+In `tests/conftest.py`, right after the `metadata` function (Task 3), — three ordinary functions. This task and Task 7 use them; `helper.*` is still imported inside the function:
 
 ```python
 def watch(video_id, **fields):
-    """Сообщение watch от вкладки: подписка на задание ролика."""
+    """The watch message from the tab: a subscription to the video's job."""
     return {"op": "watch", "videoId": video_id, **fields}
 
 
 async def hear_until_done(connection):
-    """Всё, что сокет услышал до конца задания: до события state со стадией done или error."""
+    """Everything the socket heard until the job ends: until the state event with the done or error stage."""
     heard = []
 
     while True:
@@ -2466,7 +2464,7 @@ async def hear_until_done(connection):
 
 
 def preempt_after_asr(pipeline, monkeypatch):
-    """Карту отбирают сразу после распознавания: первая проверка вытеснения после воркера."""
+    """The GPU is taken right after recognition: the first preemption check after the worker."""
     from helper import gpulease
 
     real_check = gpulease._Holder.check
@@ -2485,7 +2483,7 @@ def preempt_after_asr(pipeline, monkeypatch):
 
 ```python
 # tests/test_language_wire.py
-"""Решение о языке на проводе: поле language в снимке и событие language раньше реплик."""
+"""The language verdict on the wire: the language field in the snapshot and the language event before the cues."""
 
 import logging
 
@@ -2497,33 +2495,33 @@ from helper.jobs import Stage, refusal_snapshot
 from helper.language import LanguageVerdict
 from helper.sources.ytdlp import CaptionTrack
 
-# Одиннадцать знаков, как у настоящего ролика.
+# Eleven characters, like a real video's.
 VIDEO = "langwire001"
 
-# Сербская речь на канале, который YouTube пометил английским (Juske, Q2QcYOBk0Jo):
-# определитель уверен в сербском, объявление с речью расходится.
+# Serbian speech on a channel YouTube labelled English (Juske, Q2QcYOBk0Jo):
+# the detector is sure of Serbian, the declaration diverges from the speech.
 JUSKE = LanguageVerdict(
     effective="sr", declared="en", declared_by="metadata",
     detected="sr", confidence=0.97, reason="detector",
 )
-# Английский ролик без метаданных: расходиться не с чем, сказать нечего.
+# An English video without metadata: there is nothing to diverge from, nothing to say.
 ENGLISH = LanguageVerdict(
     effective="en", declared=None, declared_by=None,
     detected="en", confidence=0.99, reason="detector",
 )
-# Ни одно окно не проголосовало, и язык взят у YouTube.
+# No window voted, and the language is taken from YouTube.
 HINTED = LanguageVerdict(
     effective="en", declared="en", declared_by="metadata",
     detected=None, confidence=None, reason="hint",
 )
 CUES = [{"start": 0.0, "end": 1.5, "text": "Dobar dan.", "words": []}]
 TRACK = [{"start": 1.0, "end": 3.0, "text": "Zdravo svima."}]
-# Ключи снимка до этого плана. Новое поле одно, и его имя расширение не читает.
+# The snapshot keys before this plan. The new field is one, and the extension does not read its name.
 OLD_SNAPSHOT_KEYS = {
     "type", "videoId", "authorTrack", "targetLang", "generation", "stage", "error",
     "retryable", "waiting", "title", "total", "translated", "cues",
 }
-# Типы событий, на которые расширение отвечает действием (content.js, background.js).
+# Event types the extension reacts to with an action (content.js, background.js).
 EXTENSION_TYPES = {"state", "snapshot", "cues", "helper", "restored", "gone"}
 
 
@@ -2532,7 +2530,7 @@ def author_track(lang):
 
 
 def answer(verdict, windows=(), cues=CUES):
-    """Ответ воркера по протоколу задачи 5: решение, окна определителя, реплики."""
+    """The worker's answer according to the Task 5 protocol: the verdict, the detector windows, the cues."""
     return {
         "language": verdict.effective,
         "verdict": verdict.wire(),
@@ -2549,7 +2547,7 @@ def answer(verdict, windows=(), cues=CUES):
 
 
 def language_lines(caplog):
-    """Строки журнала о решении по языку этого ролика: уровень и текст."""
+    """The journal lines about this video's language verdict: level and text."""
     return [
         (record.levelno, record.getMessage())
         for record in caplog.records
@@ -2574,7 +2572,7 @@ def test_the_language_event_lands_in_the_journal_and_the_snapshot(manager):
     assert job.language is JUSKE
     assert job.events[-1] == {"type": "language", "language": JUSKE.wire()}
     assert job.snapshot()["language"] == JUSKE.wire()
-    # Не через _set_stage: стадия и ожидание карты остаются, надпись бейджа та же.
+    # Not via _set_stage: the stage and the GPU wait stay, the badge label is the same.
     assert job.stage is Stage.QUEUED
     assert job.waiting == "gpu"
 
@@ -2606,7 +2604,7 @@ async def test_the_socket_hears_the_language_before_segmented_after_asr(
     at = types.index("language")
 
     assert at < types.index("segmented")
-    # Решение приходит сразу за распознаванием: его выносит воркер.
+    # The verdict arrives right after recognition: the worker makes it.
     assert heard[at - 1]["stage"] == "asr"
     assert heard[at] == {"type": "language", "language": JUSKE.wire()}
     assert heard[at]["language"]["mismatch"] is True
@@ -2691,7 +2689,7 @@ async def test_a_pin_is_the_declaration_of_an_author_track(manager, pipeline):
         effective="sr", declared="hr", declared_by="config", detected=None,
         confidence=None, reason="track", source="manual", track="sr", verified=None,
     )
-    # hr и sr — один язык с тремя токенами: расхождения нет.
+    # hr and sr are one language with three tokens: no mismatch.
     assert job.language.mismatch is False
 
 
@@ -2736,7 +2734,7 @@ async def test_an_answer_in_an_unknown_language_fails_the_job(manager, pipeline)
     await pipeline.run(job)
 
     assert job.stage is Stage.ERROR
-    # Окончательно: повтор снова занял бы карту распознаванием ради того же ответа.
+    # Final: a retry would take the GPU for recognition again for the same answer.
     assert job.retryable is False
     assert job.error == "распознаватель вернул неизвестный язык «xx»"
     assert job.language is None
@@ -2772,14 +2770,14 @@ async def test_a_mismatch_is_a_warning_in_words(manager, pipeline, caplog):
         ),
         (logging.WARNING, f"язык {VIDEO}: YouTube указал en, по речи sr"),
     ]
-    # Мёртвая строка «язык речи … определитель дал» ушла: её место заняли две выше.
+    # The dead line “язык речи … определитель дал” is gone: the two above took its place.
     assert not [r for r in caplog.records if "определитель дал" in r.getMessage()]
 
 
 async def test_a_detector_that_never_answered_is_a_warning(manager, pipeline, caplog):
     caplog.set_level(logging.INFO, logger="helper.jobs")
-    # Речь в окне есть, а ответа определителя нет: голосов ноль, решила метка YouTube —
-    # тот же путь, которым сербская речь под меткой en ушла бы в английский декодер.
+    # There is speech in the window, but no detector answer: zero votes, the YouTube label
+    # decided — the same path by which Serbian speech under the en label would go into the English decoder.
     pipeline.asr_result = answer(HINTED, windows=[(None, 0.0, 25.0)])
 
     await pipeline.run(jobs.Job(VIDEO))
@@ -2794,46 +2792,46 @@ async def test_a_detector_that_never_answered_is_a_warning(manager, pipeline, ca
     ]
 ```
 
-И одна строка в существующий тест, который перечисляет поля снимка отказа по одному:
+And one line in the existing test that lists the refusal snapshot fields one by one:
 
 ```python
 # tests/test_limits.py, test_events_with_create_answers_200_with_an_error_snapshot,
-# сразу после assert snapshot["waiting"] is None:
+# right after assert snapshot["waiting"] is None:
     assert snapshot["language"] is None
 ```
 
-Сравнение `snapshot.keys() == full[0].snapshot().keys()` в этом же тесте остаётся верным без правок: `refusal_snapshot` собирает снимок из настоящего `Job`. `refusal_event` (`helper/app.py:67-79`) не трогается — тесты, что сверяют его на точное равенство (`tests/test_limits.py:221-227`, `tests/test_create_paths.py`), остаются зелёными.
+The comparison `snapshot.keys() == full[0].snapshot().keys()` in the same test stays true without edits: `refusal_snapshot` assembles the snapshot from a real `Job`. `refusal_event` (`helper/app.py:67-79`) is not touched — the tests that compare it for exact equality (`tests/test_limits.py:221-227`, `tests/test_create_paths.py`) stay green.
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_language_wire.py tests/test_limits.py -q`
-Expected: FAIL, 17 failed (16 новых и `test_events_with_create_answers_200_with_an_error_snapshot`): `AttributeError: 'Job' object has no attribute 'language'` и `... '_set_language'`; `KeyError: 'language'` в снимках; `ValueError: list.index(x): x not in list` — события `language` в потоке нет; тест неизвестного языка — `assert <Stage.DONE: 'done'> is <Stage.ERROR: 'error'>` (сегодня любой код из ответа воркера уходит в `normalize_cues` без проверки); тесты журнала — `assert [] == [(20, 'язык langwire001: ...')]`.
+Expected: FAIL, 17 failed (16 new and `test_events_with_create_answers_200_with_an_error_snapshot`): `AttributeError: 'Job' object has no attribute 'language'` and `... '_set_language'`; `KeyError: 'language'` in the snapshots; `ValueError: list.index(x): x not in list` — there is no `language` event in the stream; the unknown-language test — `assert <Stage.DONE: 'done'> is <Stage.ERROR: 'error'>` (today any code from the worker's answer goes into `normalize_cues` without a check); the journal tests — `assert [] == [(20, 'язык langwire001: ...')]`.
 
-- [ ] **Step 3: Поле, событие и снимок**
+- [ ] **Step 3: The field, the event and the snapshot**
 
-В импорты `helper/jobs.py`: `from helper.language import LanguageVerdict`.
+In the imports of `helper/jobs.py`: `from helper.language import LanguageVerdict`.
 
-`Job.__init__`, рядом с `self.source`: `self.language: LanguageVerdict | None = None`. Комментарий: какой язык решил демон и почему; `None`, пока решения нет; пишется только через `_set_language`; в ключ реестра не входит — вариант ролика это `(video_id, use_author_track)`, а язык — свойство материала.
+`Job.__init__`, next to `self.source`: `self.language: LanguageVerdict | None = None`. The comment: which language the daemon decided and why; `None` until there is a verdict; written only through `_set_language`; it does not enter the registry key — a video variant is `(video_id, use_author_track)`, while the language is a property of the material.
 
-`Job._set_language(self, verdict: LanguageVerdict) -> None` между `_set_stage` и `_fail`: `self.language = verdict`, затем `self._emit({"type": "language", "language": verdict.wire()})`. Комментарий — почему не через `_set_stage`: тот снимает `waiting` и шлёт `state`, по которому `extension/content.js` (`updateChip`) перерисовывает бейдж, а `background.js` (`lastStage`) решает, продолжать ли опрос. Событие нового типа расширение пропускает: `trackStage`, `mergeCues` и `updateChip` действуют только на `state`, `snapshot` и `cues`. Проверено прогоном неизменённых `content.js` и `background.js` в Node: снимок с вложенным `language` и событие `language` оставляют бейдж «перевожу… 2/290» как был, а `lastStage` по одному событию `language` даёт `undefined` — опрос идёт дальше.
+`Job._set_language(self, verdict: LanguageVerdict) -> None` between `_set_stage` and `_fail`: `self.language = verdict`, then `self._emit({"type": "language", "language": verdict.wire()})`. The comment — why not via `_set_stage`: the latter clears `waiting` and sends `state`, on which `extension/content.js` (`updateChip`) redraws the badge, and `background.js` (`lastStage`) decides whether to keep polling. The extension skips an event of the new type: `trackStage`, `mergeCues` and `updateChip` act only on `state`, `snapshot` and `cues`. Checked by running the unchanged `content.js` and `background.js` in Node: a snapshot with a nested `language` and a `language` event leave the badge “перевожу… 2/290” as it was, and `lastStage` on a single `language` event gives `undefined` — polling continues.
 
-`Job.snapshot()`: после `"generation"` — `"language": self.language.wire() if self.language else None`. Комментарий: решение целиком, одним вложенным объектом; ключи верхнего уровня `source`, `message`, `waiting`, `retry` читает `content.js` (строки 250, 364-370), и `source: "asr"` наверху превратил бы бейдж в «качаю asr…». `refusal_snapshot` не меняется: он собран из настоящего `Job` и получает `"language": null` сам.
+`Job.snapshot()`: after `"generation"` — `"language": self.language.wire() if self.language else None`. The comment: the verdict whole, as one nested object; the top-level keys `source`, `message`, `waiting`, `retry` are read by `content.js` (lines 250, 364-370), and `source: "asr"` at the top would turn the badge into “качаю asr…”. `refusal_snapshot` does not change: it is assembled from a real `Job` and gets `"language": null` itself.
 
-- [ ] **Step 4: `_accept_asr` — ответ воркера на задание**
+- [ ] **Step 4: `_accept_asr` — the worker's answer applied to the job**
 
-В `_pipeline` (ветка распознавания, 929-940 на `98a3ad2`) строки от `segments = result["cues"]` до `job._emit({"type": "segmented", ...})` включительно заменить двумя элементами: переписанный комментарий (бывшие 936–938, «Присваиваем реплики ДО проверки вытеснения…») — «Решение о языке и реплики — до проверки вытеснения: …» тем же доводом: приостановленное после распознавания задание возобновляется с перевода, и решение о языке должно лежать на нём вместе с репликами, — и под ним вызов `self._accept_asr(job, result)`; в саму `_accept_asr` комментарий не переносить. Удаление отложенного звука перед ними (охранённое задачей 1) и `held.check()` после вызова остаются на месте. Мёртвая строка `log.info("язык речи: %s (определитель дал %s, уверенность %.2f)", ...)` (932-934) удаляется: в пакетном режиме `detected` всегда равен переданному, и она не срабатывала ни разу; её место занимает `_log_language`.
+In `_pipeline` (the recognition branch, 929-940 on `98a3ad2`), replace the lines from `segments = result["cues"]` through `job._emit({"type": "segmented", ...})` inclusive with two elements: a rewritten comment (the former 936–938, “Assign the cues BEFORE the preemption check…”) — “The language verdict and the cues before the preemption check: …” with the same reasoning: a job paused after recognition resumes at translation, and the language verdict must lie on it together with the cues, — and below it the call `self._accept_asr(job, result)`; do not move the comment into `_accept_asr` itself. The deletion of the deferred audio before them (guarded by Task 1) and `held.check()` after the call stay in place. The dead line `log.info("язык речи: %s (определитель дал %s, уверенность %.2f)", ...)` (932-934) is deleted: in batched mode `detected` always equals the passed one, and it never fired; `_log_language` takes its place.
 
-`JobRunner._accept_asr` — метод сразу после `_run_asr_watched`. Порядок важен — событие `language` раньше `segmented`, а неизвестный язык обрывает задание до того, как на нём что-то появилось:
+`JobRunner._accept_asr` — a method right after `_run_asr_watched`. The order matters — the `language` event before `segmented`, and an unknown language aborts the job before anything appears on it:
 
 ```python
     def _accept_asr(self, job: Job, result: dict) -> None:
-        """Ответ воркера — на задание: сначала решение о языке, потом реплики и segmented."""
+        """The worker's answer applied to the job: the language verdict first, then the cues and segmented."""
         verdict = LanguageVerdict.from_wire(result.get("verdict"))
 
         if verdict is None:
-            # Решения в ответе нет или оно негодное: язык берётся из поля language тем же
-            # правилом, что и закрепление. Неизвестный код — отказ окончательный: повтор
-            # через минуту снова гонял бы распознавание на карте и получал тот же ответ.
+            # There is no verdict in the answer or it is invalid: the language is taken from the language
+            # field by the same rule as the pin. An unknown code is a final refusal: a retry
+            # a minute later would drive recognition on the GPU again and get the same answer.
             raw = result.get("language")
 
             try:
@@ -2857,16 +2855,16 @@ Expected: FAIL, 17 failed (16 новых и `test_events_with_create_answers_200
         job._emit({"type": "segmented", "total": len(job.cues)})
 ```
 
-`_log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None` — модульная функция между `refusal_snapshot` и `class JobRunner`. Формат строк — в Interfaces и в тестах `test_the_decision_is_one_info_line_with_the_windows`, `test_a_mismatch_is_a_warning_in_words`, `test_a_detector_that_never_answered_is_a_warning` и в тесте сокета на дорожке автора. По порядку:
-- одна строка INFO с решением и окнами; окно — `<код или —> <доля:.2f>/<int(секунды)>с`, окна через запятую, пустой список — `—`; секунды целые и вниз, как на проводе: окно, показанное с тремя секундами и больше, ушло в модель (`:.0f` показал бы окно в 2,6–2,9 с, не дошедшее до модели, как «3с» — без предупреждения ниже);
-- WARNING `note()` при `mismatch`;
-- WARNING «определитель не ответил, окон с речью без ответа: N», когда у N ≥ 1 окон код `None` при секундах речи не меньше `language.MIN_SPEECH_SECONDS`. Комментарий: без голосов решение молча уходит к метке YouTube или к `sr`, и сломавшийся определитель (падает на каждом окне, например после обновления faster-whisper) выглядел бы как ролик без речи; окно короче порога в модель не шло, и молчать о нём верно.
+`_log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None` — a module-level function between `refusal_snapshot` and `class JobRunner`. The line formats are in Interfaces and in the tests `test_the_decision_is_one_info_line_with_the_windows`, `test_a_mismatch_is_a_warning_in_words`, `test_a_detector_that_never_answered_is_a_warning` and in the socket test on the author track. In order:
+- one INFO line with the verdict and the windows; a window — `<code or —> <share:.2f>/<int(seconds)>с`, windows comma-separated, an empty list — `—`; the seconds are whole and rounded down, as on the wire: a window shown with three seconds or more went into the model (`:.0f` would show a window of 2.6–2.9 s that never reached the model as “3с” — without the warning below);
+- WARNING `note()` on `mismatch`;
+- WARNING “определитель не ответил, окон с речью без ответа: N” when N ≥ 1 windows have the code `None` with speech seconds not less than `language.MIN_SPEECH_SECONDS`. The comment: without votes the verdict silently goes to the YouTube label or to `sr`, and a broken detector (failing on every window, say, after a faster-whisper update) would look like a video without speech; a window shorter than the threshold never went into the model, and staying silent about it is right.
 
-Докстрока: решение о языке — в журнал, строка INFO и предупреждения словами; расширение решения не покажет, а страницы планшета ещё нет: до неё журнал и снимок (`GET /v1/jobs/{id}`) — единственные места, где решение видно.
+The docstring: the language verdict goes to the journal, an INFO line and warnings in words; the extension will not show the verdict, and there is no tablet page yet: until it exists, the journal and the snapshot (`GET /v1/jobs/{id}`) are the only places where the verdict is visible.
 
-- [ ] **Step 5: Решение на пути дорожки автора**
+- [ ] **Step 5: The verdict on the author-track path**
 
-В `_pipeline`, ветка `else:` после удачного `fetch_manual_track` (853-860), до `job.cues = ...` и `segmented`:
+In `_pipeline`, the `else:` branch after a successful `fetch_manual_track` (853-860), before `job.cues = ...` and `segmented`:
 
 ```python
                 pin, hint = self._declaration(job)
@@ -2885,57 +2883,57 @@ Expected: FAIL, 17 failed (16 новых и `test_events_with_create_answers_200
                 _log_language(job, verdict, [])
 ```
 
-Объявление то же, что у `decide`: закрепление человека перекрывает метаданные. `verified=None` — тридцатисекундный зонд отложен (см. «Отложено»). `normalize_cues(segments, track.lang)` пока остаётся как есть: на `verdict.effective` его переводит задача 10. В ветке отказа дорожки (`except YtDlpError`, 841-852) ничего не объявляется: решение уходит только после удачной загрузки, и отзывать нечего.
+The declaration is the same as in `decide`: the human's pin overrides the metadata. `verified=None` — the thirty-second probe is deferred (see “Deferred”). `normalize_cues(segments, track.lang)` remains as is for now: Task 10 moves it to `verdict.effective`. In the track-failure branch (`except YtDlpError`, 841-852) nothing is declared: the verdict goes out only after a successful download, and there is nothing to revoke.
 
-Возобновлению ничего делать не нужно: приостановленное задание держит `Job.language` так же, как `job.cues`, а `_pipeline` с готовыми репликами сразу идёт в `_finish_translation`, без второго события. Пересозданное после остывшего отказа — новый `Job` с `language=None` и своим объявлением.
+Resuming needs to do nothing: a paused job holds `Job.language` the same way as `job.cues`, and `_pipeline` with ready cues goes straight to `_finish_translation`, without a second event. One recreated after a cooled-down refusal is a new `Job` with `language=None` and its own declaration.
 
-- [ ] **Step 6: Запустить и убедиться, что проходят**
+- [ ] **Step 6: Run them and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_language_wire.py tests/test_limits.py -q`
-Expected: PASS — 16 новых тестов зелёные, в `tests/test_limits.py` ни одного падения.
+Expected: PASS — 16 new tests green, no failure in `tests/test_limits.py`.
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 347 passed
 
-- [ ] **Step 7: Коммит**
+- [ ] **Step 7: Commit**
 
 ```bash
 /usr/bin/git add helper/jobs.py tests/conftest.py tests/test_language_wire.py tests/test_limits.py
 /usr/bin/git commit -m "Решение о языке видно клиентам: поле language в снимке, событие раньше реплик, расхождение — предупреждением в журнале"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command goes in a separate Bash call, via `/usr/bin/git`; the timeout must be at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message is in Russian, without `Co-Authored-By` lines or any other signatures.
 
 ---
 
-### Task 7: Ключ кэша и записанное решение
+### Task 7: The cache key and the recorded verdict
 
-**Files:** номера строк — на `98a3ad2`, предыдущие задачи их сдвинули: искать по имени функции.
-- Modify: `helper/cache.py` — докстрока модуля (7-9); общий комментарий версий (24-25) и `SCHEMA_VERSION` (27); `CacheKey` (32-61, поля 34-44 и `digest` 46-61); `TrackCache.put` (137-185, запись 146-162)
-- Modify: `helper/jobs.py` — новая модульная `track_key` рядом с `_log_language` (задача 6), перед `class JobRunner` (704); `JobRunner._cache_key` (720-731); `JobRunner._finish_translation` (1098-1149, запись в кэш 1143-1148); `JobRunner._serve_cached` (1244-1274); `JobManager._key_for` (1652-1661); `JobManager.restore` (1663-1726: вызов на 1696, новое задание на 1704-1705); `JobManager._cached_variant` (1728-1765)
+**Files:** line numbers are from `98a3ad2`, the previous tasks have shifted them: search by function name.
+- Modify: `helper/cache.py` — the module docstring (7-9); the shared versions comment (24-25) and `SCHEMA_VERSION` (27); `CacheKey` (32-61, fields 34-44 and `digest` 46-61); `TrackCache.put` (137-185, the write 146-162)
+- Modify: `helper/jobs.py` — the new module-level `track_key` next to `_log_language` (Task 6), before `class JobRunner` (704); `JobRunner._cache_key` (720-731); `JobRunner._finish_translation` (1098-1149, the cache write 1143-1148); `JobRunner._serve_cached` (1244-1274); `JobManager._key_for` (1652-1661); `JobManager.restore` (1663-1726: the call at 1696, the new job at 1704-1705); `JobManager._cached_variant` (1728-1765)
 - Modify: `tests/test_job_identity.py:335` (`test_restore_from_cache_registers_the_variant_under_its_own_key`)
-- Test: `tests/test_cache_flow.py` (новый; `watch`, `hear_until_done` и `preempt_after_asr` берёт из `tests/conftest.py`, задача 6 — своих копий не заводит)
+- Test: `tests/test_cache_flow.py` (new; `watch`, `hear_until_done` and `preempt_after_asr` are taken from `tests/conftest.py`, Task 6 — it does not create its own copies)
 
 **Interfaces:**
 - Consumes:
-  - Задача 6: `Job.language`, `Job._set_language(verdict)`, событие `language`.
-  - Задача 5: `LanguageVerdict.wire()`, `LanguageVerdict.from_wire(data) -> LanguageVerdict | None`; `JobRunner._declaration(job) -> tuple[str | None, str | None]` — `(закрепление, подсказка метаданных)`, закрепление в нём — `JobRunner._pin()` (задача 4), которое `_pipeline` уже проверил до `probe`.
-  - Задача 4: `language.hint(raw) -> str | None` (никогда не бросает).
-  - Оснастка (задача 3): `metadata`, `pipeline` — `run`, `workers`, `cache` (настоящий `TrackCache`, свой у каждого теста), `configure(**asr)` (бегун пересобирается, кэш тот же), входы `asr_result`, `info`, `track`; пропуск выдаёт настоящий `helper.gpulease._Holder`. Фикстуры `manager`, `client`, `connection`. Из задачи 6 — функции `tests/conftest.py`: `watch`, `hear_until_done`, `preempt_after_asr(pipeline, monkeypatch)`; тесты берут их `from conftest import …`.
+  - Task 6: `Job.language`, `Job._set_language(verdict)`, the `language` event.
+  - Task 5: `LanguageVerdict.wire()`, `LanguageVerdict.from_wire(data) -> LanguageVerdict | None`; `JobRunner._declaration(job) -> tuple[str | None, str | None]` — `(pin, metadata hint)`, where the pin is `JobRunner._pin()` (Task 4), which `_pipeline` has already checked before `probe`.
+  - Task 4: `language.hint(raw) -> str | None` (never raises).
+  - The harness (Task 3): `metadata`, `pipeline` — `run`, `workers`, `cache` (a real `TrackCache`, its own per test), `configure(**asr)` (the runner is rebuilt, the cache is the same), the inputs `asr_result`, `info`, `track`; a pass is provided by a real `helper.gpulease._Holder`. Fixtures `manager`, `client`, `connection`. From Task 6 — the `tests/conftest.py` functions: `watch`, `hear_until_done`, `preempt_after_asr(pipeline, monkeypatch)`; the tests take them `from conftest import …`.
 - Produces:
-  - `helper.cache.CacheKey(video_id: str, pin: str, asr_model: str, translator_model: str, study_lang: str = "", track_fingerprint: str = "asr")` — `target_lang` нет, `source_lang` переименован в `pin` (`""` — человек язык не закреплял). `digest()` — sha256 от `video_id|track_fingerprint|pin|asr_model|translator_model|study_lang|PROMPT_VERSION|SCHEMA_VERSION`. `SCHEMA_VERSION = 2`; `PROMPT_VERSION` остаётся 1 (поднимает задача 11).
-  - `TrackCache.put(self, key: CacheKey, cues: list[dict], length_seconds: float | None, *, language: dict | None = None) -> None`; запись: `video_id, pin, asr_model, translator_model, study_lang, track_fingerprint, prompt_version, schema_version, length_seconds, language, created_at, cues` — без `source_lang` и `target_lang`. Читатели берут решение через `.get("language")`.
-  - `helper.jobs.track_key(config: Config, video_id: str, fingerprint: str, pin: str | None) -> CacheKey` — единственный рецепт ключа.
+  - `helper.cache.CacheKey(video_id: str, pin: str, asr_model: str, translator_model: str, study_lang: str = "", track_fingerprint: str = "asr")` — no `target_lang`, `source_lang` renamed to `pin` (`""` — the human has not pinned a language). `digest()` — sha256 of `video_id|track_fingerprint|pin|asr_model|translator_model|study_lang|PROMPT_VERSION|SCHEMA_VERSION`. `SCHEMA_VERSION = 2`; `PROMPT_VERSION` stays 1 (Task 11 raises it).
+  - `TrackCache.put(self, key: CacheKey, cues: list[dict], length_seconds: float | None, *, language: dict | None = None) -> None`; the write: `video_id, pin, asr_model, translator_model, study_lang, track_fingerprint, prompt_version, schema_version, length_seconds, language, created_at, cues` — without `source_lang` and `target_lang`. Readers take the verdict via `.get("language")`.
+  - `helper.jobs.track_key(config: Config, video_id: str, fingerprint: str, pin: str | None) -> CacheKey` — the only recipe for the key.
   - `JobRunner._cache_key(job)` = `track_key(self._config, job.video_id, job.source, self._declaration(job)[0])`.
   - `JobManager._key_for(self, video_id: str, fingerprint: str) -> CacheKey` = `track_key(self.config, video_id, fingerprint, language.hint(self.config.asr.language))`.
-  - `JobManager._cached_variant(self, video_id: str, use_author_track: bool, duration: float | None = None) -> dict | None` — без `target_lang`.
-  - Поведение: результат без реплик — `{"type": "state", "stage": "done", "total": 0, "cached": false}` и в кэш не идёт; запись без реплик — промах и для `_serve_cached`; попадание в кэш и восстановление шлют `language` раньше `cues`; `Job.target_lang` и `targetLang` в снимке остаются.
+  - `JobManager._cached_variant(self, video_id: str, use_author_track: bool, duration: float | None = None) -> dict | None` — without `target_lang`.
+  - Behaviour: a result without cues — `{"type": "state", "stage": "done", "total": 0, "cached": false}` and it does not go into the cache; an entry without cues — a miss for `_serve_cached` too; a cache hit and a restore send `language` before `cues`; `Job.target_lang` and `targetLang` in the snapshot stay.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write failing tests**
 
 ```python
 # tests/test_cache_flow.py
-"""Ключ кэша несёт закрепление человека, запись — решение о языке, пустая дорожка не кэшируется."""
+"""The cache key carries the human's pin, the entry — the language verdict, an empty track is not cached."""
 
 import hashlib
 import json
@@ -2952,45 +2950,45 @@ from helper.jobs import Stage
 from helper.language import LanguageVerdict
 from helper.sources.ytdlp import CaptionTrack
 
-# Ролик тестов конвейера: кэш фикстуры pipeline свой у каждого теста. Тесты
-# восстановления пишут в общий на прогон manager.cache, и у каждого свой ролик.
+# The video of the pipeline tests: the pipeline fixture cache is its own per test. The
+# restore tests write into the manager.cache shared for the run, and each has its own video.
 VIDEO = "cacheflow01"
 
-# 3XJLfTSZy6I: сербская речь без метаданных, английский сверху в пяти окнах из восьми,
-# доля сербского семейства 0.44 — решил порог BCMS_FLOOR.
+# 3XJLfTSZy6I: Serbian speech without metadata, English on top in five windows out of eight,
+# the Serbian-family share 0.44 — BCMS_FLOOR decided it.
 FLOOR = LanguageVerdict(
     effective="sr", declared=None, declared_by=None,
     detected="sr", confidence=0.44, reason="floor",
 )
-# Juske, Q2QcYOBk0Jo: YouTube пометил en, речь сербская.
+# Juske, Q2QcYOBk0Jo: YouTube labelled it en, the speech is Serbian.
 JUSKE = LanguageVerdict(
     effective="sr", declared="en", declared_by="metadata",
     detected="sr", confidence=0.97, reason="detector",
 )
-# Человек закрепил sr в [asr] language.
+# The human pinned sr in [asr] language.
 PINNED = LanguageVerdict(
     effective="sr", declared="sr", declared_by="config",
     detected="sr", confidence=0.97, reason="pin",
 )
-# Ни одно окно не голосовало, подсказки нет.
+# No window voted, there is no hint.
 SILENT = LanguageVerdict(
     effective="sr", declared=None, declared_by=None,
     detected=None, confidence=None, reason="fallback",
 )
 CUES = [{"start": 0.0, "end": 1.5, "text": "Dobar dan.", "words": []}]
-# Готовые реплики в записи — так их кладёт _finish_translation (JobCue.payload()).
+# Ready cues in the entry — that is how _finish_translation (JobCue.payload()) stores them.
 STORED = [
     {
         "i": 0, "start": 0.0, "end": 1.5, "src": "Dobar dan.", "lines": ["Добрый день."],
         "study": "Dobar dan.", "failed": False,
     },
 ]
-# Значение для rewrite: поля в записи нет вовсе.
+# The value for rewrite: the field is absent from the entry altogether.
 ABSENT = object()
 
 
 def answer(verdict, cues=CUES):
-    """Ответ воркера по протоколу задачи 5."""
+    """The worker's answer according to the Task 5 protocol."""
     return {
         "language": verdict.effective,
         "verdict": verdict.wire(),
@@ -3002,7 +3000,7 @@ def answer(verdict, cues=CUES):
 
 
 def key_of(stored):
-    """Ключ записи по её же полям: тест попадает ровно туда, куда писал конвейер."""
+    """The key of an entry from its own fields: the test hits exactly where the pipeline wrote."""
     return CacheKey(
         video_id=stored["video_id"], pin=stored["pin"], asr_model=stored["asr_model"],
         translator_model=stored["translator_model"], study_lang=stored["study_lang"],
@@ -3011,7 +3009,7 @@ def key_of(stored):
 
 
 def rewrite(store, key, **changes):
-    """Поправить запись на диске; поле со значением ABSENT удаляется."""
+    """Fix an entry on disk; a field with the ABSENT value is removed."""
     path = store._path(key)
     payload = json.loads(path.read_text(encoding="utf-8"))
 
@@ -3024,7 +3022,7 @@ def rewrite(store, key, **changes):
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-# ── ключ ─────────────────────────────────────────────────────────────────
+# ── key ─────────────────────────────────────────────────────────────────
 
 
 def test_the_key_is_the_pin_recipe_without_the_target_language():
@@ -3067,13 +3065,13 @@ def test_a_pin_goes_into_both_keys(manager, monkeypatch):
 
 
 def test_restore_reads_a_broken_pin_as_no_pin(manager, monkeypatch):
-    # Отказ по негодному закреплению — дело конвейера (задача 4). Восстановление только
-    # читает: ролики, закэшированные без закрепа, по-прежнему открываются — негодный код
-    # читается как «не закреплено»; сделанные при прежнем годном закрепе не находятся,
-    # пока код не исправлен.
+    # Refusing an invalid pin is the pipeline's business (Task 4). Restore only
+    # reads: videos cached without a pin still open — an invalid code is
+    # read as “not pinned”; ones made under a previously valid pin are not found
+    # until the code is fixed.
     manager.cache.put(manager._key_for("brokenpin01", "asr"), STORED, 10.0)
     broken = Config(asr=AsrConfig(language="serbian"), translator=TranslatorConfig())
-    # Настройка у демона одна на реестр и бегун: подменяются обе.
+    # The daemon has one config for the registry and the runner: both are patched.
     monkeypatch.setattr(manager, "config", broken)
     monkeypatch.setattr(manager.runner, "_config", broken)
 
@@ -3081,7 +3079,7 @@ def test_restore_reads_a_broken_pin_as_no_pin(manager, monkeypatch):
     assert manager.restore("brokenpin01", "ru", True, 10.0).stage is Stage.DONE
 
 
-# ── запись ───────────────────────────────────────────────────────────────
+# ── entry ───────────────────────────────────────────────────────────────
 
 
 def test_put_records_the_verdict_and_the_pin(tmp_path, monkeypatch):
@@ -3242,7 +3240,7 @@ async def test_an_author_track_entry_keeps_its_verdict(manager, pipeline):
     )
 
 
-# ── восстановление ───────────────────────────────────────────────────────
+# ── restore ─────────────────────────────────────────────────────────────
 
 
 async def test_restore_brings_the_verdict_back_before_the_cues(client, manager):
@@ -3302,7 +3300,7 @@ def test_restore_never_takes_versions_or_models_from_the_entry(manager, monkeypa
     )
 
     assert manager.restore(video, "ru", True, 10.0) is None
-    # Обе записи на месте: восстановление их не видит, но и не трогает.
+    # Both entries are in place: restore does not see them, but does not touch them either.
     assert len(manager.cache.variants(video)) == 2
 
 
@@ -3321,124 +3319,124 @@ def test_restore_prefers_the_newest_author_track(manager):
     assert [cue.src for cue in restored.cues] == ["Nova"]
 ```
 
-Ролики тестов восстановления (`brokenpin01`, `restverdict`, `noverdict01`–`noverdict03`, `restpinned1`, `restorphan1`, `restnewest1`) пишутся в общий на прогон `manager.cache`, поэтому у каждого теста свой; `abcdefghijk` туда не попадает — на его пустоте держится `test_restore_looks_up_the_variant_the_viewer_asked_for`. В последнем тесте старшая по `created_at` запись лежит в индексе первой: порядок строк индекса и порядок по свежести расходятся, и тест отличает одно от другого.
+The videos of the restore tests (`brokenpin01`, `restverdict`, `noverdict01`–`noverdict03`, `restpinned1`, `restorphan1`, `restnewest1`) are written into the `manager.cache` shared for the run, so each test has its own; `abcdefghijk` does not get in there — `test_restore_looks_up_the_variant_the_viewer_asked_for` relies on it being empty. In the last test the entry older by `created_at` sits first in the index: the order of index rows and the order by freshness diverge, and the test tells one from the other.
 
-И новая подпись `_key_for` в существующем тесте:
+And the new `_key_for` signature in the existing test:
 
 ```python
 # tests/test_job_identity.py:335, test_restore_from_cache_registers_the_variant_under_its_own_key
     manager.cache.put(manager._key_for(video, "asr"), cues, 10.0)
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_cache_flow.py tests/test_job_identity.py -q`
-Expected: FAIL, 22 failed (21 новый и `test_restore_from_cache_registers_the_variant_under_its_own_key`): `TypeError: CacheKey.__init__() got an unexpected keyword argument 'pin'`; `AttributeError: 'CacheKey' object has no attribute 'pin'`; `AttributeError: module 'helper.jobs' has no attribute 'track_key'`; `TypeError: JobManager._key_for() missing 1 required positional argument: 'fingerprint'` во всех тестах восстановления; в тестах конвейера попадание в кэш даёт `['state', 'cues', 'state']` без `language`, `assert None == LanguageVerdict(...)`, другой `targetLang` — `assert 2 == 1` (сегодня он в ключе, и распознавание идёт второй раз), `KeyError: 'pin'` и `KeyError: 'language'` в записи, у `done` пустого результата нет `cached: False`.
+Expected: FAIL, 22 failed (21 new and `test_restore_from_cache_registers_the_variant_under_its_own_key`): `TypeError: CacheKey.__init__() got an unexpected keyword argument 'pin'`; `AttributeError: 'CacheKey' object has no attribute 'pin'`; `AttributeError: module 'helper.jobs' has no attribute 'track_key'`; `TypeError: JobManager._key_for() missing 1 required positional argument: 'fingerprint'` in all the restore tests; in the pipeline tests a cache hit yields `['state', 'cues', 'state']` without `language`, `assert None == LanguageVerdict(...)`, a different `targetLang` — `assert 2 == 1` (today it is in the key, and recognition runs a second time), `KeyError: 'pin'` and `KeyError: 'language'` in the entry, and the `done` of an empty result has no `cached: False`.
 
-- [ ] **Step 3: Ключ и запись в `helper/cache.py`**
+- [ ] **Step 3: The key and the entry in `helper/cache.py`**
 
-`CacheKey`: вместо `source_lang` и `target_lang` — одно поле `pin: str` на месте `source_lang`. Комментарий: язык, закреплённый человеком (`[asr] language`), нормализованный; `""` — не закреплён; ни `"auto"`, ни метаданных YouTube тут не бывает; действующий язык и решение определителя — в записи, поле `language`. В `digest()` из списка частей уходит `target_lang`, `source_lang` заменяется на `pin`; остальные части и порядок те же: `video_id, track_fingerprint, pin, asr_model, translator_model, study_lang, PROMPT_VERSION, SCHEMA_VERSION`.
+`CacheKey`: instead of `source_lang` and `target_lang` — one field `pin: str` in place of `source_lang`. The comment: the language pinned by a human (`[asr] language`), normalised; `""` — not pinned; neither `"auto"` nor YouTube metadata ever appears here; the effective language and the detector's verdict are in the entry, the `language` field. In `digest()`, `target_lang` leaves the list of parts, `source_lang` is replaced by `pin`; the other parts and their order stay the same: `video_id, track_fingerprint, pin, asr_model, translator_model, study_lang, PROMPT_VERSION, SCHEMA_VERSION`.
 
-Версии (24-27). Общий комментарий над обеими («Поднимать при любом изменении промпта или формата записи…») сузить до `PROMPT_VERSION`, а у `SCHEMA_VERSION = 2` — свой полный комментарий прямо над ним:
+Versions (24-27). The shared comment above both (“Raise on any change of the prompt or of the entry format…”) narrows down to `PROMPT_VERSION`, and `SCHEMA_VERSION = 2` gets its own full comment right above it:
 
 ```python
-# Поднимать при любом изменении промпта — это часть ключа, поэтому смена версии
-# автоматически обесценивает старые записи.
+# Raise on any change of the prompt — it is part of the key, so a version bump
+# automatically invalidates old entries.
 PROMPT_VERSION = 1
 
-# Формат записи на диске: поднимать, когда меняется то, что пишет put.
-# 2 — запись несёт language и pin вместо source_lang и target_lang.
+# The on-disk entry format: raise when what put writes changes.
+# 2 — the entry carries language and pin instead of source_lang and target_lang.
 SCHEMA_VERSION = 2
 ```
 
-Значение `PROMPT_VERSION` не трогать: его один раз поднимает задача 11 и тогда же переписывает комментарий над ним целиком.
+Do not touch the value of `PROMPT_VERSION`: Task 11 raises it once and rewrites the comment above it in full at the same time.
 
-`TrackCache.put(self, key, cues, length_seconds, *, language: dict | None = None)`. В записи `"source_lang"` и `"target_lang"` заменить на `"pin": key.pin` — поле ключа пишется в файл по той же причине, что `study_lang` (комментарий рядом: без него запись при разборе глазами не объясняет, почему ключ не сходится); после `"length_seconds"` добавить `"language": language`. В докстроку `put`: `language` — `LanguageVerdict.wire()` или `None`, читатели берут его через `.get("language")`, и запись без поля отдаётся с языком `null`.
+`TrackCache.put(self, key, cues, length_seconds, *, language: dict | None = None)`. In the entry, replace `"source_lang"` and `"target_lang"` with `"pin": key.pin` — the key field is written into the file for the same reason as `study_lang` (the comment next to it: without it the entry, read by eye, does not explain why the key does not match); after `"length_seconds"` add `"language": language`. In the `put` docstring: `language` — `LanguageVerdict.wire()` or `None`, readers take it via `.get("language")`, and an entry without the field is served with the language `null`.
 
-Докстрока модуля, строки 7-9: заменить «…старая запись просто перестанет находиться, а потом уедет по LRU» на: «…старая запись просто перестанет находиться. С диска она сама не уходит: вытеснение по давности чтения идёт только внутри put и только когда записи переросли бюджет, так что осиротевшие лежат, пока его хватает. Удалять их — решение хозяина.»
+The module docstring, lines 7-9: replace “…the old entry simply stops being found, and then goes away by LRU” with: “…the old entry simply stops being found. It does not leave the disk by itself: eviction by read age happens only inside put and only when the entries have outgrown the budget, so orphans lie there as long as it lasts. Deleting them is the owner's decision.”
 
-- [ ] **Step 4: Один рецепт ключа в `helper/jobs.py`**
+- [ ] **Step 4: One key recipe in `helper/jobs.py`**
 
-Модульная `track_key(config: Config, video_id: str, fingerprint: str, pin: str | None) -> CacheKey` перед `class JobRunner`: `CacheKey(video_id=video_id, pin=pin or "", asr_model=f"{config.asr.model}/{config.asr.compute_type}", translator_model=config.translator.model, study_lang=config.translator.study_language, track_fingerprint=fingerprint)`. Докстрока — решение и отступление от замысла (замысел: «в ключ кэша идёт действующий язык… поиск по объявленному, запись под действующим»): язык в ключе — закрепление человека, а не действующий язык, потому что кэш обязан ответить до любой работы на карте (`helper/cache.py:4-5`), а действующий язык появляется только после воркера; когда человек закрепил язык, действующий с ним совпадает, а решение по незакреплённому ролику лежит в записи и видно на проводе. Метаданные YouTube в ключ не входят: канал Juske помечен `en` при сербской речи, и язык такого ролика решает определитель. `targetLang` не входит: на выходе всегда русская и черногорская строки, и клиент с другим `targetLang` получает ту же дорожку. Сюда же перенести комментарий из `_cache_key` о том, что обе модели входят в ключ.
+The module-level `track_key(config: Config, video_id: str, fingerprint: str, pin: str | None) -> CacheKey` before `class JobRunner`: `CacheKey(video_id=video_id, pin=pin or "", asr_model=f"{config.asr.model}/{config.asr.compute_type}", translator_model=config.translator.model, study_lang=config.translator.study_language, track_fingerprint=fingerprint)`. The docstring — the decision and the departure from the design (the design: “the effective language goes into the cache key… lookup by the declared one, the write under the effective one”): the language in the key is the human's pin, not the effective language, because the cache must answer before any work on the GPU (`helper/cache.py:4-5`), while the effective language appears only after the worker; when the human has pinned a language, the effective one matches it, and the verdict for an unpinned video lies in the entry and is visible on the wire. YouTube metadata does not enter the key: the Juske channel is labelled `en` while the speech is Serbian, and the language of such a video is decided by the detector. `targetLang` does not enter either: the output is always a Russian and a Montenegrin line, and a client with a different `targetLang` gets the same track. Move here as well the comment from `_cache_key` about both models entering the key.
 
-`JobRunner._cache_key(job)` = `track_key(self._config, job.video_id, job.source, self._declaration(job)[0])`. Объявление — через `_declaration` (сейчас это `_pin()`), а не `hint`; негодное закрепление `_pipeline` уже отказал через `_pin()`; сюда же придёт объявление ссылки, см. «Отложено». Возобновление после паузы пишет под тем же ключом, под которым задание искало: настройка не меняется до перезапуска демона.
+`JobRunner._cache_key(job)` = `track_key(self._config, job.video_id, job.source, self._declaration(job)[0])`. The declaration — via `_declaration` (`_pin()` for now), not `hint`; `_pipeline` has already refused an invalid pin via `_pin()`; the link declaration will arrive here too, see “Deferred”. A resume after a pause writes under the same key the job looked up by: the config does not change until the daemon restarts.
 
-`JobManager._key_for(self, video_id: str, fingerprint: str) -> CacheKey` = `track_key(self.config, video_id, fingerprint, language.hint(self.config.asr.language))`. Комментарий: тот же рецепт, что у конвейера, иначе восстановление молча не находило бы сделанного; закрепление через `hint`, потому что восстановление только читает и не отказывает — негодное закрепление отказывает задание в конвейере (задача 4), а ролики, закэшированные без закрепа, по-прежнему открываются: восстановление читает негодный код как «не закреплено»; сделанные при прежнем годном закрепе не находятся, пока код не исправлен.
+`JobManager._key_for(self, video_id: str, fingerprint: str) -> CacheKey` = `track_key(self.config, video_id, fingerprint, language.hint(self.config.asr.language))`. The comment: the same recipe as the pipeline's, otherwise a restore would silently fail to find what was made; the pin via `hint`, because a restore only reads and does not refuse — an invalid pin makes the job fail in the pipeline (Task 4), while videos cached without a pin still open: a restore reads an invalid code as “not pinned”; ones made under a previously valid pin are not found until the code is fixed.
 
-- [ ] **Step 5: Запись и чтение решения**
+- [ ] **Step 5: Writing and reading the verdict**
 
-`_finish_translation`: перед записью в кэш, после веток `pending` и `failed`, — `if not job.cues: job._set_stage(Stage.DONE, total=0, cached=False); return`. Комментарий: пустая дорожка в кэш не идёт — записанная, она отдавалась бы готовой навсегда (в кэше демона таких три, одна на 41-минутный ролик), а восстановление считает её испорченной записью; цена — ролик без единой реплики не кэшируется: новое задание по нему — после 12 других готовых или перезапуска — снова качает звук и распознаёт под пропуском. В `self._cache.put` добавить `language=job.language.wire() if job.language else None` (`asyncio.to_thread` передаёт именованный аргумент как есть).
+`_finish_translation`: before the cache write, after the `pending` and `failed` branches — `if not job.cues: job._set_stage(Stage.DONE, total=0, cached=False); return`. The comment: an empty track does not go into the cache — once written, it would be served as ready forever (the daemon's cache holds three such entries, one for a 41-minute video), and a restore treats it as a corrupted entry; the price — a video without a single cue is not cached: a new job for it — after 12 other finished ones or a restart — downloads the audio and recognises it under the permit again. In `self._cache.put` add `language=job.language.wire() if job.language else None` (`asyncio.to_thread` passes a named argument as is).
 
-`_serve_cached`: `if not cached or not cached.get("cues"): return False` — запись без реплик это промах, как у `restore`. Затем, ДО `job.cues = [...]`: `verdict = LanguageVerdict.from_wire(cached.get("language"))`, и если не `None` — `job._set_language(verdict)`. Комментарий: решение раньше реплик, как на свежем распознавании, иначе флаг расхождения пропадал бы на каждом повторном просмотре; запись без поля или с негодным — язык `null` и события `language` нет, без падения.
+`_serve_cached`: `if not cached or not cached.get("cues"): return False` — an entry without cues is a miss, as in `restore`. Then, BEFORE `job.cues = [...]`: `verdict = LanguageVerdict.from_wire(cached.get("language"))`, and if it is not `None` — `job._set_language(verdict)`. The comment: the verdict before the cues, as on a fresh recognition, otherwise the divergence flag would disappear on every repeat view; an entry without the field or with an invalid one — the language is `null` and there is no `language` event, without crashing.
 
-`restore`: вызов `self._cached_variant(video_id, use_author_track, duration)`; после `job.source = ...` и до `job.cues = [...]` — то же копирование решения через `from_wire`. Проверку «пустая дорожка — испорченная запись» (1698-1702) не трогать. `target_lang` остаётся в подписи `restore`: им создаётся `Job` и он уходит в снимок как `targetLang`.
+`restore`: the call `self._cached_variant(video_id, use_author_track, duration)`; after `job.source = ...` and before `job.cues = [...]` — the same copying of the verdict via `from_wire`. Do not touch the “empty track is a corrupted entry” check (1698-1702). `target_lang` stays in the `restore` signature: it is used to create the `Job` and goes into the snapshot as `targetLang`.
 
-- [ ] **Step 6: Восстановление: свежие первыми, ключ по текущей настройке**
+- [ ] **Step 6: Restore: newest first, the key by the current config**
 
-`_cached_variant(self, video_id, use_author_track, duration=None)` — без `target_lang`. Из записи берётся только отпечаток (`track_fingerprint`, по умолчанию `asr`), закрепление — текущее, модели и версии — нынешнего кода; на каждый отпечаток один `get` по `self._key_for(video_id, fingerprint)` с `duration` (ключ у него один, а `get` пишет `used_at`); из найденного свежая по `created_at` идёт первой — из двух дорожек автора (`manual:sr` и `manual:sr-Latn`) отдаётся последняя сделанная, а не первая по порядку строк индекса. С `use_author_track` отдаётся самая свежая дорожка автора (`manual:…`), а нет её — запись распознавания (`asr`); без него — только `asr`; не нашлось ничего — `None`. Комментарии о длительности от плеера (1746-1749) и о приоритете дорожки автора (1758-1760) сохранить на своих местах.
+`_cached_variant(self, video_id, use_author_track, duration=None)` — without `target_lang`. Only the fingerprint is taken from the entry (`track_fingerprint`, `asr` by default); the pin is the current one, the models and versions are the current code's; for each fingerprint one `get` by `self._key_for(video_id, fingerprint)` with `duration` (it has a single key, and `get` writes `used_at`); of what was found the newest by `created_at` comes first — of two author tracks (`manual:sr` and `manual:sr-Latn`) the last made is served, not the first by index row order. With `use_author_track` the freshest author track (`manual:…`) is served, and if there is none — the recognition entry (`asr`); without it — `asr` only; nothing found — `None`. Keep the comments about the duration from the player (1746-1749) and about the author-track priority (1758-1760) in their places.
 
-В докстроку `_cached_variant` дописать: закрепление в пересчитанном ключе — нынешнее, из настройки, а не записанное в файле; поэтому запись, сделанная при другом закреплении, при другой модели или версии, не находится, но и не удаляется.
+In the `_cached_variant` docstring, add: the pin in the recomputed key is the current one, from the config, not the one written in the file; therefore an entry made under a different pin, with a different model or version is not found, but is not deleted either.
 
-- [ ] **Step 7: Запустить и убедиться, что проходят**
+- [ ] **Step 7: Run them and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_cache_flow.py tests/test_job_identity.py -q`
-Expected: PASS — 21 новый тест зелёный, в `tests/test_job_identity.py` ни одного падения.
+Expected: PASS — 21 new tests green, no failure in `tests/test_job_identity.py`.
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 368 passed
 
-- [ ] **Step 8: Коммит**
+- [ ] **Step 8: Commit**
 
 ```bash
 /usr/bin/git add helper/cache.py helper/jobs.py tests/test_cache_flow.py tests/test_job_identity.py
 /usr/bin/git commit -m "Ключ кэша несёт закрепление человека вместо строки auto и без targetLang; запись хранит решение о языке, пустая дорожка не кэшируется"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command goes in a separate Bash call, via `/usr/bin/git`; the timeout must be at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message is in Russian, without `Co-Authored-By` lines or any other signatures.
 
 ---
-### Task 8: Затравка зависит от языка, мусор распознавания отсекается
+### Task 8: The prompt depends on the language, recognition garbage is filtered out
 
-Поломка 3 замысла. Затравку сегодня собирает демон до воркера и без языка (`_initial_prompt`, `helper/jobs.py:1443-1458`): сербская фраза уходит и в английский ролик, а имена из заголовка, описания и тегов любого языка проходят сербскую транслитерацию (`_proper_nouns`, `helper/jobs.py:1461-1478`). Пакетный режим faster-whisper 1.2.1 подаёт затравку каждому куску заново и не применяет ни одного из заградителей, которые ставит воркер, так что эхо затравки, тишина и петли повторов доходят до переводчика и до экрана.
+Breakage 3 of the design. Today the daemon assembles the prompt before the worker and without a language (`_initial_prompt`, `helper/jobs.py:1443-1458`): the Serbian phrase goes into an English video too, and names from the title, description and tags of any language go through Serbian transliteration (`_proper_nouns`, `helper/jobs.py:1461-1478`). The batched mode of faster-whisper 1.2.1 feeds the prompt to every chunk anew and applies none of the guards the worker sets, so prompt echo, silence and repetition loops reach the translator and the screen.
 
-Что решено. После задачи 5 язык решается в воркере, поэтому и затравку составляет воркер — по решённому языку (`verdict.effective`), а не по объявленному; демон шлёт ему только имена. Воркер отдаёт все сегменты вместе с их метриками, а отсекает демон: stderr воркера при успехе выбрасывается (`_run_asr`), и выброс, решённый в воркере, в журнале не был бы виден; отдельный прогон воркера при этом показывает сырой вывод. Эхо отсекается по предложению внутри `build_cues`, и петля повторов тоже: сегмент пакетного режима — кусок речи до 30 с, и «повтор» его только помечает — уходят зациклившиеся предложения, а диалог перед петлёй остаётся; целиком выбрасывается только «тишина». «Реплика, совпадающая с затравкой» понимается как «состоит только из слов затравки, и среди них есть необиходное слово фразы или вводки имён (для `sr` — transkript, snimka, pominju) либо два разных имени не из её обиходных слов». Оба толкования — запись 3 в «Решениях, расходящихся с буквой замысла». Дорожку автора фильтры не трогают: у неё нет ни затравки, ни метрик. `PROMPT_VERSION` здесь не поднимать — задача 11 поднимает его один раз за всё, что меняет закэшированную дорожку.
+What is decided. After Task 5 the language is decided in the worker, so the worker also composes the prompt — by the decided language (`verdict.effective`), not the declared one; the daemon sends it only the names. The worker returns all segments together with their metrics, and the daemon filters: the worker's stderr is discarded on success (`_run_asr`), so a drop decided in the worker would not be visible in the journal; a separate worker run still shows the raw output. Echo is filtered per sentence inside `build_cues`, and so is the repetition loop: a batched-mode segment is a piece of speech up to 30 s, and “повтор” only marks it — the looping sentences leave, while the dialogue before the loop stays; only “тишина” is dropped whole. “A cue matching the prompt” is understood as “consisting only of words from the prompt, with at least one uncommon word of the phrase or of the names lead-in among them (for `sr` — transkript, snimka, pominju) or two different names that are not among its common words”. Both interpretations are record 3 in “Decisions that diverge from the letter of the design”. The filters do not touch the author track: it has neither a prompt nor metrics. Do not raise `PROMPT_VERSION` here — Task 11 raises it once for everything that changes a cached track.
 
-Номера строк — на `98a3ad2`. К этой задаче `helper/jobs.py` и `helper/asr/worker.py` уже изменены задачами 4–7: искать по имени функции.
+Line numbers are from `98a3ad2`. By this task, `helper/jobs.py` and `helper/asr/worker.py` have already been changed by Tasks 4–7: search by function name.
 
 **Files:**
 - Create: `helper/asr/prompt.py`
-- Modify: `helper/segment.py:16-19` (импорты), `helper/segment.py:177-218` (`build_cues`, цикл по предложениям — строка 195)
-- Modify: `helper/asr/worker.py` — импорты (17-25); `transcribe` (125-215: параметр `initial_prompt` — 131, пустые заградители с комментариями — 164-174, `initial_prompt=initial_prompt` — 187, сборка реплик — 192-203, ответ — 205-215); `build_parser` из задачи 5 (на `98a3ad2` разбор аргументов внутри `main`, 219-232, флаг `--initial-prompt` — 223); вызов `transcribe` в `main` (246-255, `initial_prompt=args.initial_prompt` — 251)
-- Modify: `helper/jobs.py` — импорты (16-28: `import re`; 33-39); `JobRunner._accept_asr` из задачи 6 (на `98a3ad2` её строка с репликами — 939 в `_pipeline`); `JobRunner._run_asr` (1151-1167: затравка — 1153, флаг — 1166-1167); удалить `_initial_prompt` (1443-1458) и `_proper_nouns` (1461-1478), на их месте — модульная `asr_cues`
-- Modify: `tests/test_worker.py` (задача 5) — `test_result_carries_the_verdict_and_the_windows` и `test_parser_keeps_the_cli_contract` (шаг 11)
-- Test: `tests/test_prompt.py`, `tests/test_segment.py`, `tests/test_asr_filters.py` (новые)
+- Modify: `helper/segment.py:16-19` (imports), `helper/segment.py:177-218` (`build_cues`, the loop over sentences — line 195)
+- Modify: `helper/asr/worker.py` — imports (17-25); `transcribe` (125-215: the `initial_prompt` parameter — 131, the empty guards with their comments — 164-174, `initial_prompt=initial_prompt` — 187, cue assembly — 192-203, the answer — 205-215); `build_parser` from Task 5 (on `98a3ad2` argument parsing is inside `main`, 219-232, the `--initial-prompt` flag — 223); the `transcribe` call in `main` (246-255, `initial_prompt=args.initial_prompt` — 251)
+- Modify: `helper/jobs.py` — imports (16-28: `import re`; 33-39); `JobRunner._accept_asr` from Task 6 (on `98a3ad2` its cue line is 939 in `_pipeline`); `JobRunner._run_asr` (1151-1167: the prompt — 1153, the flag — 1166-1167); delete `_initial_prompt` (1443-1458) and `_proper_nouns` (1461-1478), in their place — the module-level `asr_cues`
+- Modify: `tests/test_worker.py` (Task 5) — `test_result_carries_the_verdict_and_the_windows` and `test_parser_keeps_the_cli_contract` (Step 11)
+- Test: `tests/test_prompt.py`, `tests/test_segment.py`, `tests/test_asr_filters.py` (new)
 
 **Interfaces:**
 - Consumes:
-  - `helper.language.family(code: str | None) -> str | None` (задача 4).
-  - `helper.language.Detection`, `LanguageVerdict` (`wire()`), `decide(pin, hint, detection, *, fallback="sr")`; в воркере `_detect(model, audio) -> Detection`, `transcribe(..., language: str = "sr", hint: str | None = None, ...)`, `build_parser() -> argparse.ArgumentParser`, флаг `--hint` (задача 5).
-  - `JobRunner._accept_asr(self, job: Job, result: dict) -> None`, `held.check()` после неё в `_pipeline` (задача 6).
-  - Фикстуры `manager`; `pipeline` — `pipeline.info`, `pipeline.run(job)`, `pipeline.workers[-1].args`; `whisper` — `whisper.segments`, `whisper.kwargs` и строитель `whisper.segment(start, end, text, *, no_speech_prob=0.1, avg_logprob=-0.3, compression_ratio=1.5, words=())` (задача 3).
-  - `tests/test_worker.py` (задача 5): `test_result_carries_the_verdict_and_the_windows` сверяет набор ключей ответа, `test_parser_keeps_the_cli_contract` — умолчания парсера, в том числе `args.initial_prompt`.
+  - `helper.language.family(code: str | None) -> str | None` (Task 4).
+  - `helper.language.Detection`, `LanguageVerdict` (`wire()`), `decide(pin, hint, detection, *, fallback="sr")`; in the worker `_detect(model, audio) -> Detection`, `transcribe(..., language: str = "sr", hint: str | None = None, ...)`, `build_parser() -> argparse.ArgumentParser`, the `--hint` flag (Task 5).
+  - `JobRunner._accept_asr(self, job: Job, result: dict) -> None`, `held.check()` after it in `_pipeline` (Task 6).
+  - Fixtures: `manager`; `pipeline` — `pipeline.info`, `pipeline.run(job)`, `pipeline.workers[-1].args`; `whisper` — `whisper.segments`, `whisper.kwargs` and the builder `whisper.segment(start, end, text, *, no_speech_prob=0.1, avg_logprob=-0.3, compression_ratio=1.5, words=())` (Task 3).
+  - `tests/test_worker.py` (Task 5): `test_result_carries_the_verdict_and_the_windows` checks the set of answer keys, `test_parser_keeps_the_cli_contract` — the parser defaults, including `args.initial_prompt`.
 - Produces:
   - `helper/asr/prompt.py`: `NO_SPEECH_THRESHOLD = 0.6`, `LOG_PROB_THRESHOLD = -1.0`, `COMPRESSION_RATIO_THRESHOLD = 2.4`, `MAX_NAMES = 12`, `PHRASES = {"sr": "Ovo je transkript video snimka na srpskom jeziku."}`, `NAMES_LEAD = "Pominju se:"`, `ECHO_COMMON = frozenset({"ovo", "je", "video", "na", "se", "srpskom", "jeziku"})`;
     `def harvest_names(title: str, tags: Sequence[str]) -> list[str]`;
     `def initial_prompt(language: str | None, names: Sequence[str]) -> str | None`;
     `def is_echo(sentence: str, prompt: str | None) -> bool`;
-    `def compression_ratio(text: str) -> float` — формула faster-whisper (`get_compression_ratio`): байты UTF-8 на байты после `zlib`;
-    `def segment_verdict(segment: Mapping[str, object]) -> str | None` — `"тишина"`, `"повтор"` или `None`.
-  - `helper.segment.build_cues(segments: list[dict], drop: Callable[[str, dict], bool] | None = None) -> list[Cue]` — `drop(sentence, segment)`, сегмент — тот словарь, по которому идёт сборка, с метриками.
-  - Воркер: `def _cue(segment) -> dict`; `transcribe(audio, *, model_name=DEFAULT_MODEL, compute_type="float16", language: str = "sr", hint: str | None = None, prompt_names: Sequence[str] | None = None, hotwords: str | None = None, batch_size: int = 16, vad_filter: bool = True) -> dict`. Ответ дополнительно несёт `"prompt": str | None`, каждая реплика — `"no_speech_prob"`, `"avg_logprob"`, `"compression_ratio"`. Флаг `--prompt-names JSON` вместо `--initial-prompt`.
-  - `helper.jobs.asr_cues(segments: list[dict], language: str, prompt: str | None) -> tuple[list[Cue], list[tuple[str, str]]]`; причины выброса: `"тишина"` (сегмент целиком), `"повтор"` (зациклившееся предложение помеченного сегмента), `"эхо затравки"` (предложение).
-  - Протокол демон → воркер: `--prompt-names '<JSON-список>'` в каждом запуске, даже `[]`; `--initial-prompt` больше нет. Ответ воркера меняется только добавлением ключей.
+    `def compression_ratio(text: str) -> float` — the faster-whisper formula (`get_compression_ratio`): UTF-8 bytes over bytes after `zlib`;
+    `def segment_verdict(segment: Mapping[str, object]) -> str | None` — `"тишина"`, `"повтор"` or `None`.
+  - `helper.segment.build_cues(segments: list[dict], drop: Callable[[str, dict], bool] | None = None) -> list[Cue]` — `drop(sentence, segment)`, where segment is the very dict the assembly walks, with its metrics.
+  - Worker: `def _cue(segment) -> dict`; `transcribe(audio, *, model_name=DEFAULT_MODEL, compute_type="float16", language: str = "sr", hint: str | None = None, prompt_names: Sequence[str] | None = None, hotwords: str | None = None, batch_size: int = 16, vad_filter: bool = True) -> dict`. The answer additionally carries `"prompt": str | None`, every cue — `"no_speech_prob"`, `"avg_logprob"`, `"compression_ratio"`. The `--prompt-names JSON` flag instead of `--initial-prompt`.
+  - `helper.jobs.asr_cues(segments: list[dict], language: str, prompt: str | None) -> tuple[list[Cue], list[tuple[str, str]]]`; drop reasons: `"тишина"` (a whole segment), `"повтор"` (a looping sentence of a marked segment), `"эхо затравки"` (a sentence).
+  - Daemon → worker protocol: `--prompt-names '<JSON list>'` on every run, even `[]`; `--initial-prompt` is gone. The worker's answer changes only by added keys.
 
-- [ ] **Step 1: Написать падающие тесты чистых функций**
+- [ ] **Step 1: Write failing tests for the pure functions**
 
-Строки эха и речи взяты из локального кэша дорожек (66 620 реплик) и скопированы литералами: тесты кэш пользователя не читают.
+The echo and speech lines are taken from the local track cache (66 620 cues) and copied as literals: the tests do not read the user's cache.
 
 ```python
 # tests/test_prompt.py
-"""Затравка распознавания и отсев его мусора: чистые функции helper.asr.prompt."""
+"""The recognition prompt and the filtering of its garbage: pure functions of helper.asr.prompt."""
 
 import pytest
 
@@ -3549,12 +3547,12 @@ def test_field_echoes_of_the_prompt_are_recognised(prompt, sentence):
     (SERIES, "Ćao, Andrija."),
     (SERIES, "Andrija, Andrija."),
     (None, "Ovo je transkript video snimka na srpskom jeziku."),
-    # Одно имя из заголовка в обиходной фразе — речь: в кэше «Šta je ovo?» есть в 17
-    # роликах из 160, а заголовок «ŠTA SE KRILO U TITOVOM PLAVOM VOZU?» даёт имя ŠTA.
+    # One title name in an everyday phrase is speech: in the cache “Šta je ovo?” occurs in 17
+    # of 160 videos, and the title “ŠTA SE KRILO U TITOVOM PLAVOM VOZU?” yields the name ŠTA.
     (initial_prompt("sr", ["ŠTA", "VOZU", "Prava", "Istina"]), "Šta je ovo?"),
     (initial_prompt("sr", ["Beograd"]), "Ovo je Beograd."),
-    # Обиходное слово фразы, ставшее именем, второго имени не даёт: заголовок
-    # «OVO JE NAJGORI AUTO NA SVETU» даёт имена OVO и AUTO.
+    # A common word of the phrase that became a name does not give a second name: the title
+    # “OVO JE NAJGORI AUTO NA SVETU” yields the names OVO and AUTO.
     (initial_prompt("sr", ["OVO", "AUTO"]), "Ovo je auto."),
 ])
 def test_speech_that_shares_words_with_the_prompt_is_kept(prompt, sentence):
@@ -3578,7 +3576,7 @@ def test_segment_verdict_drops_only_silence_and_repetition(metrics, verdict):
 
 
 def test_compression_ratio_is_the_one_faster_whisper_uses():
-    import helper.env  # noqa: F401 — HF_HOME во временный кэш до faster_whisper, как в воркере
+    import helper.env  # noqa: F401 — HF_HOME to a temporary cache before faster_whisper, as in the worker
 
     from faster_whisper.transcribe import get_compression_ratio
 
@@ -3588,43 +3586,43 @@ def test_compression_ratio_is_the_one_faster_whisper_uses():
         assert compression_ratio(text) == get_compression_ratio(text)
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_prompt.py -v`
-Expected: FAIL — ошибка сбора `ModuleNotFoundError: No module named 'helper.asr.prompt'`
+Expected: FAIL — a collection error `ModuleNotFoundError: No module named 'helper.asr.prompt'`
 
-- [ ] **Step 3: Создать `helper/asr/prompt.py`**
+- [ ] **Step 3: Create `helper/asr/prompt.py`**
 
-Импорты: `re`, `unicodedata`, `zlib`, `from collections.abc import Mapping, Sequence`, `from helper.language import family`, `from helper.script import CYRILLIC, to_latin`. Именно `family`, а не модуль `helper.language` целиком: параметр `language` у `initial_prompt` затенил бы модуль. `CYRILLIC` — уже существующий образец `[Ѐ-ӿ]` (`helper/script.py:18`), второго не заводить. Ни `faster_whisper`, ни `helper.jobs`: модуль грузят и воркер, и демон.
+Imports: `re`, `unicodedata`, `zlib`, `from collections.abc import Mapping, Sequence`, `from helper.language import family`, `from helper.script import CYRILLIC, to_latin`. `family` specifically, not the `helper.language` module as a whole: the `language` parameter of `initial_prompt` would shadow the module. `CYRILLIC` is the existing pattern `[Ѐ-ӿ]` (`helper/script.py:18`); do not create a second one. Neither `faster_whisper` nor `helper.jobs`: both the worker and the daemon load the module.
 
-Константы — как в Interfaces. `PHRASES["sr"]` и `NAMES_LEAD` дословно те, что собирал `_initial_prompt` (`helper/jobs.py:1456`, `1458`): при тех же именах затравка для сербского остаётся байт в байт прежней, меняется только набор имён и то, кому она достаётся.
+The constants are as in Interfaces. `PHRASES["sr"]` and `NAMES_LEAD` are verbatim the ones `_initial_prompt` assembled (`helper/jobs.py:1456`, `1458`): with the same names the Serbian prompt stays byte for byte the same, only the set of names and who gets it change.
 
-Докстрока модуля, коротко и по-русски, — что проверено в faster-whisper 1.2.1 и почему устроено так:
-- затравка нужна ровно для одного — прибить латиницу у сербского семейства (`helper/script.py:4-6`), поэтому фраза есть только у `sr`; где фразы нет, нет и затравки, имена тоже не идут;
-- пакетный режим подаёт одну и ту же затравку каждому куску до 30 с (`generate_segment_batched` копирует её на каждый кусок пачки), и на кусках без речи она всплывает эхом;
-- из затравки он берёт последние 223 токена (`get_prompt`: `max_length // 2 - 1`): переполнение съело бы фразу, а не имена;
-- пороги тишины и повторов пакетный режим принимает и не применяет («Unused Arguments» в докстроке `BatchedInferencePipeline.transcribe`), поэтому отсев — на стороне демона: сегмент судят по метрикам, которые он и так несёт (`segment_verdict`), а предложения сегмента с «повтором» — по своей `compression_ratio` и по повтору уже сказанного (`helper.jobs.asr_cues`).
+The module docstring, briefly and in Russian — what was checked in faster-whisper 1.2.1 and why it is built this way:
+- the prompt is needed for exactly one thing — to pin Latin script for the Serbian family (`helper/script.py:4-6`), so the phrase exists only for `sr`; where there is no phrase, there is no prompt either, and the names do not go in either;
+- batched mode feeds the same prompt to every chunk up to 30 s (`generate_segment_batched` copies it to every chunk of the batch), and on chunks without speech it surfaces as echo;
+- it takes the last 223 tokens of the prompt (`get_prompt`: `max_length // 2 - 1`): an overflow would eat the phrase, not the names;
+- batched mode accepts the silence and repetition thresholds and does not apply them (“Unused Arguments” in the `BatchedInferencePipeline.transcribe` docstring), so filtering is on the daemon's side: a segment is judged by the metrics it carries anyway (`segment_verdict`), and the sentences of a segment marked “повтор” — by their own `compression_ratio` and by a repeat of what was already said (`helper.jobs.asr_cues`).
 
-`harvest_names(title, tags)`: слова `\b\w{3,}` из заголовка, затем из тегов, по порядку. Берётся слово с заглавной первой буквой в любой письменности (`word[0].isalpha() and word[0].isupper()`); слово капсом длиннее четырёх букв (`word.isupper() and len(word) > 4`) пропускается; повторы убираются с сохранением порядка; не больше `MAX_NAMES`. Без транслитерации. Описания нет даже в параметрах. В докстроке: эхо в поле шло из шаблонного текста описаний (Label, Copyright, Patreon, Instagram, спонсоры); капс длиннее четырёх букв — выделение в заголовке (UDARIO, OFARBANOG, NAJGORIH), а короткие BMW и NATO — названия.
+`harvest_names(title, tags)`: words `\b\w{3,}` from the title, then from the tags, in order. A word whose first letter is uppercase in any script is taken (`word[0].isalpha() and word[0].isupper()`); an all-caps word longer than four letters (`word.isupper() and len(word) > 4`) is skipped; duplicates are removed preserving order; no more than `MAX_NAMES`. No transliteration. The description is absent even from the parameters. In the docstring: the field echo came from the template text of descriptions (Label, Copyright, Patreon, Instagram, sponsors); all-caps longer than four letters is emphasis in a title (UDARIO, OFARBANOG, NAJGORIH), while short BMW and NATO are names.
 
-`initial_prompt(language, names)`: `PHRASES.get(family(language))`; фразы нет → `None`. Иначе имена: `to_latin` каждого; повторы, появившиеся после транслитерации, убрать (кириллический заголовок и латинские теги дают одно имя дважды); выбросить имена, где после сербских правил осталась кириллица (`CYRILLIC.search`: «Для» → «Dlя»); оставить не больше `MAX_NAMES` и здесь — воркер берёт список из командной строки, а переполнение съело бы фразу. Имён не осталось → фраза; иначе `f"{phrase} {NAMES_LEAD} {', '.join(names)}."`. Других вызовов `to_latin` на именах нет: тест BCMS здесь структурный — фраза есть только у семейства `sr`.
+`initial_prompt(language, names)`: `PHRASES.get(family(language))`; no phrase → `None`. Otherwise the names: `to_latin` of each; drop duplicates that appeared after transliteration (a Cyrillic title and Latin tags yield one name twice); drop names where Cyrillic remains after the Serbian rules (`CYRILLIC.search`: “Для” → “Dlя”); keep no more than `MAX_NAMES` here too — the worker takes the list from the command line, and an overflow would eat the phrase. No names left → the phrase; otherwise `f"{phrase} {NAMES_LEAD} {', '.join(names)}."`. There are no other `to_latin` calls on names: the BCMS test here is structural — the phrase exists only for the `sr` family.
 
-`is_echo(sentence, prompt)`: `prompt is None` → `False`. Слова обеих строк: `casefold()`, затем `"đ"` → `"dj"` (у đ нет разложения в NFKD), затем `unicodedata.normalize("NFKD", …)` без комбинирующих знаков (`unicodedata.combining`), затем множество `re.findall(r"\w+", …)`. Затравка делится по `NAMES_LEAD` (`prompt.partition(NAMES_LEAD)`): до вводки — фраза, после — имена. Эхо — когда у предложения не меньше двух разных слов, все они есть в затравке, хотя бы одно не из `ECHO_COMMON`, и при этом среди них есть слово фразы или самой вводки не из `ECHO_COMMON` (для `sr` — transkript, snimka, pominju) либо не меньше двух разных слов из имён, не считая слов `ECHO_COMMON`: заголовок «OVO JE NAJGORI AUTO NA SVETU» даёт имена OVO и AUTO, а «Ovo je auto.» — речь, как и «Šta je ovo?» под «ŠTA JE OVO?! …». В докстроке — отступление от буквы замысла: буквального совпадения с затравкой нет ни в одной из 66 620 закэшированных реплик, эхо — обрывки и перестановки её хвоста («Pominju se na srpskom jeziku.») и списки имён; обиходные слова фразы эхо не делают («Ovo je video.», «Na srpskom jeziku.»), одно слово тоже («Andrija, Andrija.»), и одно имя из заголовка в обиходной фразе тоже: заголовок «ŠTA SE KRILO U TITOVOM PLAVOM VOZU?» даёт имя ŠTA, и без этого условия «Šta je ovo?» уходило бы эхом.
+`is_echo(sentence, prompt)`: `prompt is None` → `False`. The words of both strings: `casefold()`, then `"đ"` → `"dj"` (đ has no decomposition in NFKD), then `unicodedata.normalize("NFKD", …)` without combining marks (`unicodedata.combining`), then the set `re.findall(r"\w+", …)`. The prompt is split at `NAMES_LEAD` (`prompt.partition(NAMES_LEAD)`): before the lead-in — the phrase, after it — the names. It is echo when the sentence has at least two different words, all of them present in the prompt, at least one not from `ECHO_COMMON`, and at the same time among them there is a word of the phrase or of the lead-in itself that is not in `ECHO_COMMON` (for `sr` — transkript, snimka, pominju) or at least two different words from the names, not counting `ECHO_COMMON` words: the title “OVO JE NAJGORI AUTO NA SVETU” yields the names OVO and AUTO, while “Ovo je auto.” is speech, as is “Šta je ovo?” under “ŠTA JE OVO?! …”. In the docstring — the departure from the letter of the design: a literal match with the prompt occurs in none of the 66 620 cached cues, echo is fragments and permutations of its tail (“Pominju se na srpskom jeziku.”) and lists of names; the common words of the phrase do not make echo (“Ovo je video.”, “Na srpskom jeziku.”), nor does one word (“Andrija, Andrija.”), nor does one title name in an everyday phrase: the title “ŠTA SE KRILO U TITOVOM PLAVOM VOZU?” yields the name ŠTA, and without this condition “Šta je ovo?” would go out as echo.
 
-`compression_ratio(text)` — степень сжатия по формуле faster-whisper (`faster_whisper.transcribe.get_compression_ratio`): `len(байты UTF-8) / len(zlib.compress(байты UTF-8))`, только стандартная библиотека. Совпадение с библиотекой пинает `test_compression_ratio_is_the_one_faster_whisper_uses`. Нужна демону для предложений внутри сегмента: метрику сегмента считает сама библиотека, а предложения — только мы.
+`compression_ratio(text)` — the compression ratio by the faster-whisper formula (`faster_whisper.transcribe.get_compression_ratio`): `len(UTF-8 bytes) / len(zlib.compress(UTF-8 bytes))`, standard library only. Agreement with the library is pinned by `test_compression_ratio_is_the_one_faster_whisper_uses`. The daemon needs it for sentences inside a segment: the library computes the segment metric itself, and only we compute it for sentences.
 
-`segment_verdict(segment)`: `"тишина"`, когда `no_speech_prob > NO_SPEECH_THRESHOLD` и `avg_logprob < LOG_PROB_THRESHOLD`; иначе `"повтор"`, когда `compression_ratio > COMPRESSION_RATIO_THRESHOLD`; иначе `None`. Поля нет или оно `None` — по нему не выбрасывать. В докстроке: «тишина» — правило, которым Whisper сам пропускает окно в последовательном режиме, и такой сегмент выбрасывается целиком; «повтор» — замена отката по температуре, которого в пакетном режиме нет (Whisper перерасшифровал бы кусок), но сегмент пакетного режима — целый кусок речи до 30 с, и петля часто начинается посреди него, после настоящего диалога. Поэтому «повтор» сегмент только помечает: внутри выбрасываются одни зациклившиеся предложения (`asr_cues`, шаг 12), а настоящая речь перед петлёй остаётся. Каждый выброс уходит в журнал (шаг 12).
+`segment_verdict(segment)`: `"тишина"` when `no_speech_prob > NO_SPEECH_THRESHOLD` and `avg_logprob < LOG_PROB_THRESHOLD`; otherwise `"повтор"` when `compression_ratio > COMPRESSION_RATIO_THRESHOLD`; otherwise `None`. No field or a `None` field — do not drop on it. In the docstring: “тишина” is the rule by which Whisper itself skips a window in sequential mode, and such a segment is dropped whole; “повтор” replaces the temperature fallback, which batched mode does not have (Whisper would re-decode the chunk), but a batched-mode segment is a whole piece of speech up to 30 s, and the loop often starts in the middle of it, after real dialogue. That is why “повтор” only marks the segment: only the looping sentences are dropped inside it (`asr_cues`, Step 12), while the real speech before the loop stays. Every drop goes to the journal (Step 12).
 
-- [ ] **Step 4: Запустить и убедиться, что проходят**
+- [ ] **Step 4: Run them and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_prompt.py -v`
 Expected: PASS, 55 passed
 
-- [ ] **Step 5: Написать падающие тесты сборки реплик с отсевом**
+- [ ] **Step 5: Write failing tests for cue assembly with filtering**
 
 ```python
 # tests/test_segment.py
-"""Сборка реплик из сегментов распознавания: helper.segment."""
+"""Cue assembly from recognition segments: helper.segment."""
 
 from helper.segment import build_cues
 
@@ -3672,29 +3670,29 @@ def test_a_predicate_that_drops_nothing_changes_nothing():
     assert build_cues([GREETING], drop=lambda sentence, segment: False) == build_cues([GREETING])
 ```
 
-Первый тест ловит отсев до сопоставления слов: тогда «Kako ste?» легла бы на слова «Pominju se» и получила бы 1.0–1.6 с (проверено: выходит `[('Dobar dan. Kako ste?', 0.0, 1.6)]`). Второй — отсев по кускам: 108 знаков режутся `_split_balanced` на две реплики, и порознь ни одна не равна предложению.
+The first test catches filtering after word matching: then “Kako ste?” would land on the words “Pominju se” and get 1.0–1.6 s (checked: the result is `[('Dobar dan. Kako ste?', 0.0, 1.6)]`). The second — filtering by pieces: 108 characters are cut by `_split_balanced` into two cues, and neither alone equals the sentence.
 
-- [ ] **Step 6: Запустить и убедиться, что падают**
+- [ ] **Step 6: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_segment.py -v`
-Expected: FAIL — 3 failed, `TypeError: build_cues() got an unexpected keyword argument 'drop'` (первая проверка второго теста, две реплики без отсева, проходит уже сейчас)
+Expected: FAIL — 3 failed, `TypeError: build_cues() got an unexpected keyword argument 'drop'` (the first check of the second test, two cues without filtering, already passes)
 
-- [ ] **Step 7: Отсев предложений в `build_cues`**
+- [ ] **Step 7: Filter sentences in `build_cues`**
 
-`helper/segment.py`: импорт `from collections.abc import Callable`; сигнатура `build_cues(segments: list[dict], drop: Callable[[str, dict], bool] | None = None) -> list[Cue]`. Первой строкой тела цикла `for sentence, (start, end) in zip(sentences, spans):` (строка 195) — `if drop is not None and drop(sentence, segment): continue`; `segment` — словарь, по которому идёт сборка, со всеми его ключами: `normalize_cues` копирует их (`{**cue, ...}`), так что метрики сегмента доходят до `drop`. Комментарий над ней: интервалы сопоставляются со словами по всем предложениям сегмента, до отсева, — выбрось предложение раньше, и каждое следующее легло бы на чужие слова; отсев идёт по предложению целиком, до `_split_balanced` и `_enforce_min_duration`: длинное эхо иначе резалось бы на куски, порознь на эхо не похожие, а короткое склеивалось бы с соседней настоящей репликой («Da. Pominju se na srpskom jeziku.»). В докстроке `build_cues` — одна фраза про `drop`: зовётся как `drop(предложение, сегмент)`; `True` — предложение в реплики не идёт. Без `drop` поведение прежнее: на этом держится `spikes/asr_real.py:134`.
+`helper/segment.py`: the import `from collections.abc import Callable`; the signature `build_cues(segments: list[dict], drop: Callable[[str, dict], bool] | None = None) -> list[Cue]`. As the first line of the loop body `for sentence, (start, end) in zip(sentences, spans):` (line 195) — `if drop is not None and drop(sentence, segment): continue`; `segment` is the dict the assembly walks, with all its keys: `normalize_cues` copies them (`{**cue, ...}`), so the segment's metrics reach `drop`. The comment above it: intervals are matched to words over all sentences of the segment, before filtering — drop a sentence earlier and every following one would land on someone else's words; filtering is per whole sentence, before `_split_balanced` and `_enforce_min_duration`: a long echo would otherwise be cut into pieces that do not look like echo separately, and a short one would be glued to the neighbouring real cue (“Da. Pominju se na srpskom jeziku.”). In the `build_cues` docstring — one phrase about `drop`: called as `drop(sentence, segment)`; `True` — the sentence does not go into the cues. Without `drop` the behaviour is the previous one: `spikes/asr_real.py:134` relies on it.
 
-- [ ] **Step 8: Запустить и убедиться, что проходят**
+- [ ] **Step 8: Run them and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_segment.py -v`
 Expected: PASS, 3 passed
 
-- [ ] **Step 9: Написать падающие тесты воркера и демона**
+- [ ] **Step 9: Write failing tests for the worker and the daemon**
 
-`_detect` подменяется прямо в модуле воркера: тесты этой задачи про затравку и метрики, а не про окна, VAD и модель. Сегменты faster-whisper строит `whisper.segment(...)` фикстуры из задачи 3 — настоящий `Segment`, имена полей метрик сверяет сама библиотека. Метаданные — `dataclasses.replace(pipeline.info, …)`.
+`_detect` is patched right in the worker module: the tests of this task are about the prompt and the metrics, not about windows, VAD and the model. faster-whisper segments are built by `whisper.segment(...)` of the Task 3 fixture — a real `Segment`, and the library itself checks the metric field names. Metadata — `dataclasses.replace(pipeline.info, …)`.
 
 ```python
 # tests/test_asr_filters.py
-"""Затравка под решённый язык и отсев мусора распознавания: воркер и демон."""
+"""A prompt for the decided language and filtering of recognition garbage: the worker and the daemon."""
 
 import logging
 from dataclasses import replace
@@ -3712,7 +3710,7 @@ VIDEO = "abcdefghijk"
 PHRASE = "Ovo je transkript video snimka na srpskom jeziku."
 NAMED = initial_prompt("sr", ["Mamini", "Epizoda"])
 LOOP = ", ".join(["ne"] * 12)
-# jWrDvxtofLk, 201,8–229,6 с: шесть настоящих предложений, потом петля «tak» в том же куске.
+# jWrDvxtofLk, 201.8–229.6 s: six real sentences, then a “tak” loop in the same chunk.
 DIALOGUE = (
     "Pa nije to dobro. Kako nije? Šta nije dobro? Pa očajno je, pogledaj ti koliko je ovo "
     "krupno. Šta radiš sa ovim? Da ga jedem."
@@ -3720,8 +3718,8 @@ DIALOGUE = (
 TAK = "Ideš, slušaj me, prvo uzduš, ovako, pa poprično, pa što sitnije, " + "tak, " * 70 + "tak"
 MINUTE = np.zeros(60 * worker.SAMPLE_RATE, dtype="<f4")
 
-# Восемь окон с речью, решает определитель. Сербская речь — как у канала Juske,
-# который YouTube помечает en.
+# Eight windows with speech, the detector decides. Serbian speech — like the Juske channel,
+# which YouTube labels en.
 SERBIAN_SPEECH = Detection(
     language="sr", confidence=0.97, bcms_share=0.97, floor=False, votes=8, probed=8,
     windows=(("sr", 0.97, 25.0),) * 8,
@@ -3731,7 +3729,7 @@ ENGLISH_SPEECH = Detection(
     windows=(("en", 0.99, 28.0),) * 8,
 )
 
-# Аргументы, которые пакетный режим faster-whisper 1.2.1 принимает и не применяет.
+# Arguments that the batched mode of faster-whisper 1.2.1 accepts and does not apply.
 DEAD_GUARDS = {
     "temperature",
     "compression_ratio_threshold",
@@ -3743,12 +3741,12 @@ DEAD_GUARDS = {
 
 
 def heard(monkeypatch, detection: Detection) -> None:
-    """Определитель «услышал» заданное: окна, VAD и модель здесь ни при чём."""
+    """The detector “heard” the given thing: windows, VAD and the model are irrelevant here."""
     monkeypatch.setattr(worker, "_detect", lambda model, audio: detection)
 
 
 def segment(start, end, text, *, no_speech=0.05, logprob=-0.2, ratio=1.1) -> dict:
-    """Сегмент так, как его приносит JSON воркера."""
+    """A segment as the worker JSON delivers it."""
     return {
         "start": start, "end": end, "text": text, "words": [],
         "no_speech_prob": no_speech, "avg_logprob": logprob, "compression_ratio": ratio,
@@ -3898,8 +3896,8 @@ def test_without_a_prompt_the_phrase_is_just_speech():
 
 
 def test_a_loop_takes_only_its_own_sentence_not_the_dialogue_before_it():
-    # Кусок целиком сжимается в 3.45 раза, а каждое настоящее предложение в нём — не
-    # больше чем в 0.89: выброс куска унёс бы диалог вместе с петлёй.
+    # The whole chunk compresses 3.45 times, while each real sentence in it — no
+    # more than 0.89: dropping the chunk would carry the dialogue away with the loop.
     cues, dropped = jobs.asr_cues(
         [segment(201.8, 229.6, f"{DIALOGUE} {TAK}", ratio=3.45)], "sr", NAMED
     )
@@ -3916,7 +3914,7 @@ def test_a_two_sentence_loop_keeps_its_first_turn():
 
     cues, dropped = jobs.asr_cues([segment(0.0, 30.0, looped, ratio=3.0)], "sr", NAMED)
 
-    # Каждое предложение петли сжимается плохо, ловит её только повтор уже сказанного.
+    # Every sentence of the loop compresses poorly; only a repeat of what was said catches it.
     assert [c.text for c in cues] == ["Dobro jutro.", "Kako si?", "Idemo dalje.", "Vidimo se."]
     assert dropped == [("повтор", "Idemo dalje."), ("повтор", "Vidimo se.")] * 5
 
@@ -3979,41 +3977,41 @@ async def test_daemon_sends_title_and_tag_names_not_a_ready_prompt(pipeline, man
     assert parsed.prompt_names == ["Мамини", "Епизода", "Beograd"]
 ```
 
-- [ ] **Step 10: Запустить и убедиться, что падают**
+- [ ] **Step 10: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_asr_filters.py -v`
 Expected: FAIL — 16 failed:
 - `test_cue_carries_the_three_metrics_of_its_segment` — `AttributeError: module 'helper.asr.worker' has no attribute '_cue'`;
-- пять тестов, что зовут `transcribe(..., prompt_names=...)`, — `TypeError: transcribe() got an unexpected keyword argument 'prompt_names'`;
+- the five tests that call `transcribe(..., prompt_names=...)` — `TypeError: transcribe() got an unexpected keyword argument 'prompt_names'`;
 - `test_without_prompt_names_there_is_no_prompt` — `KeyError: 'prompt'`;
-- `test_worker_takes_names_as_a_json_list_and_no_ready_prompt` — `SystemExit: 2` (`--prompt-names` парсер не знает);
-- шесть тестов `asr_cues` — `AttributeError: module 'helper.jobs' has no attribute 'asr_cues'`;
-- `test_dropped_lines_never_become_job_cues_and_each_is_logged` — в `job.cues` пять реплик: эхо, тишина и петля среди них;
+- `test_worker_takes_names_as_a_json_list_and_no_ready_prompt` — `SystemExit: 2` (the parser does not know `--prompt-names`);
+- the six `asr_cues` tests — `AttributeError: module 'helper.jobs' has no attribute 'asr_cues'`;
+- `test_dropped_lines_never_become_job_cues_and_each_is_logged` — `job.cues` has five cues: the echo, the silence and the loop among them;
 - `test_daemon_sends_title_and_tag_names_not_a_ready_prompt` — `AssertionError: assert '--initial-prompt' not in [...]`.
 
-- [ ] **Step 11: Воркер — затравка после решения о языке, метрики в ответе, имена вместо затравки**
+- [ ] **Step 11: Worker — the prompt after the language decision, metrics in the answer, names instead of the prompt**
 
 `helper/asr/worker.py`:
 
-1. Импорты: `from collections.abc import Sequence`; после `import helper.env` — `from helper.asr.prompt import initial_prompt`.
-2. `_cue(segment) -> dict` — модульная функция вместо спискового выражения 192-203. Ключи: `start`, `end`, `text` (`segment.text.strip()`), `words` (`start`, `end`, `word` каждого слова из `segment.words or []`; `probability` не берётся, как и сегодня), плюс `no_speech_prob`, `avg_logprob`, `compression_ratio` как есть. Фильтр пустых `"cues": [c for c in cues if c["text"]]` остаётся.
-3. `transcribe`: параметр `initial_prompt` заменить на `prompt_names: Sequence[str] | None = None` — после `hint`, порядок как в Interfaces. Сразу после решения о языке (задача 5: `verdict = …decide(…)`) — `prompt = initial_prompt(verdict.effective, prompt_names) if prompt_names is not None else None`; в `pipeline.transcribe` — `initial_prompt=prompt`; в ответе — `"prompt": prompt` рядом с `"model"`. `None` значит «флага не было»: так воркер зовут `helper/measure.py` и `spikes/asr_real.py`, и затравки у них нет, как сегодня; `[]` — фраза без имён. Комментарий у затравки: она по решённому языку, а не по объявленному — сербской речи под меткой en (Juske) нужна сербская фраза, английской речи никакая.
-4. Из аргументов `pipeline.transcribe` убрать `temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]`, `compression_ratio_threshold=2.4`, `log_prob_threshold=-1.0`, `no_speech_threshold=0.6`, `condition_on_previous_text=False`, `hallucination_silence_threshold=2.0` вместе с комментариями 164-165 и 170-172 — оба неверны для пакетного режима. На 1.2.1 поведение не меняется: пороги пакетный режим только хранит в опциях (`faster_whisper/transcribe.py:525-527`) и нигде не читает, лестницу температур урезает до первой (528-532; у умолчания она та же, 0.0), а `hallucination_silence_threshold=None` и `condition_on_previous_text=False` выставляет сам (546-547). Вместо них один комментарий: пороги не передаются, потому что пакетный режим их не применяет; тишину демон отсекает целым сегментом по его метрикам (`helper.asr.prompt.segment_verdict`), а в сегменте с «повтором» — только зациклившиеся предложения (`helper.jobs.asr_cues`); каждый выброс виден в журнале. `task`, `beam_size`, `word_timestamps`, `vad_filter`, `vad_parameters`, `hotwords`, `batch_size` — без изменений.
-5. `build_parser` (задача 5): убрать `--initial-prompt`; добавить `--prompt-names` с `type=_prompt_names`, `default=None` и help «JSON-список имён из заголовка и тегов; затравку по решённому языку составит воркер». `_prompt_names(raw: str) -> list[str]` — `json.loads(raw)`; не список строк → `argparse.ArgumentTypeError("нужен JSON-список строк")`; битый JSON argparse и так превращает в ошибку разбора, выход 2. В `main` — `prompt_names=args.prompt_names` вместо `initial_prompt=args.initial_prompt`.
-6. `tests/test_worker.py` (задача 5) — вслед за ответом и парсером: в `test_result_carries_the_verdict_and_the_windows` ожидаемый набор ключей становится `{"language", "verdict", "detection", "duration", "model", "prompt", "cues"}`; в `test_parser_keeps_the_cli_contract` в кортеже умолчаний `args.initial_prompt` заменить на `args.prompt_names` — без флага он по-прежнему `None`.
+1. Imports: `from collections.abc import Sequence`; after `import helper.env` — `from helper.asr.prompt import initial_prompt`.
+2. `_cue(segment) -> dict` — a module-level function instead of the list expression at 192-203. Keys: `start`, `end`, `text` (`segment.text.strip()`), `words` (`start`, `end`, `word` of each word from `segment.words or []`; `probability` is not taken, as today), plus `no_speech_prob`, `avg_logprob`, `compression_ratio` as they are. The empty filter `"cues": [c for c in cues if c["text"]]` stays.
+3. `transcribe`: replace the `initial_prompt` parameter with `prompt_names: Sequence[str] | None = None` — after `hint`, the order as in Interfaces. Right after the language decision (Task 5: `verdict = …decide(…)`) — `prompt = initial_prompt(verdict.effective, prompt_names) if prompt_names is not None else None`; in `pipeline.transcribe` — `initial_prompt=prompt`; in the answer — `"prompt": prompt` next to `"model"`. `None` means “there was no flag”: that is how `helper/measure.py` and `spikes/asr_real.py` call the worker, and they get no prompt, as today; `[]` — the phrase without names. The comment at the prompt: it follows the decided language, not the declared one — Serbian speech under an en label (Juske) needs the Serbian phrase, English speech needs none.
+4. From the arguments of `pipeline.transcribe`, remove `temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]`, `compression_ratio_threshold=2.4`, `log_prob_threshold=-1.0`, `no_speech_threshold=0.6`, `condition_on_previous_text=False`, `hallucination_silence_threshold=2.0` together with comments 164-165 and 170-172 — both are wrong for batched mode. On 1.2.1 the behaviour does not change: batched mode only stores the thresholds in the options (`faster_whisper/transcribe.py:525-527`) and reads them nowhere, cuts the temperature ladder to the first value (528-532; the default is the same, 0.0), and sets `hallucination_silence_threshold=None` and `condition_on_previous_text=False` itself (546-547). Instead of them, one comment: the thresholds are not passed because batched mode does not apply them; the daemon filters silence as a whole segment by its metrics (`helper.asr.prompt.segment_verdict`), and in a segment marked “повтор” — only the looping sentences (`helper.jobs.asr_cues`); every drop is visible in the journal. `task`, `beam_size`, `word_timestamps`, `vad_filter`, `vad_parameters`, `hotwords`, `batch_size` — unchanged.
+5. `build_parser` (Task 5): remove `--initial-prompt`; add `--prompt-names` with `type=_prompt_names`, `default=None` and `help="JSON-список имён из заголовка и тегов; затравку по решённому языку составит воркер"`. `_prompt_names(raw: str) -> list[str]` — `json.loads(raw)`; not a list of strings → `argparse.ArgumentTypeError("нужен JSON-список строк")`; argparse turns broken JSON into a parse error anyway, exit 2. In `main` — `prompt_names=args.prompt_names` instead of `initial_prompt=args.initial_prompt`.
+6. `tests/test_worker.py` (Task 5) — following the answer and the parser: in `test_result_carries_the_verdict_and_the_windows` the expected key set becomes `{"language", "verdict", "detection", "duration", "model", "prompt", "cues"}`; in `test_parser_keeps_the_cli_contract` replace `args.initial_prompt` in the defaults tuple with `args.prompt_names` — without the flag it is still `None`.
 
-- [ ] **Step 12: Демон — имена вместо затравки, отсев до реплик**
+- [ ] **Step 12: Daemon — names instead of the prompt, filtering before the cues**
 
 `helper/jobs.py`:
 
-1. Импорты: `import re` — к стандартным (между `logging` и `secrets`); `from helper.asr.prompt import COMPRESSION_RATIO_THRESHOLD, compression_ratio, harvest_names, is_echo, segment_verdict` — перед `from helper.asr.worker import SAMPLE_RATE`.
-2. Удалить `_initial_prompt` (1443-1458) и `_proper_nouns` (1461-1478) целиком — вместе с докстрокой, неверной для пакетного режима (обусловливание на предыдущий текст, «половина 224-токенного контекста»). На их месте — модульная `asr_cues`:
+1. Imports: `import re` — to the standard ones (between `logging` and `secrets`); `from helper.asr.prompt import COMPRESSION_RATIO_THRESHOLD, compression_ratio, harvest_names, is_echo, segment_verdict` — before `from helper.asr.worker import SAMPLE_RATE`.
+2. Delete `_initial_prompt` (1443-1458) and `_proper_nouns` (1461-1478) entirely — together with the docstring, which is wrong for batched mode (conditioning on the previous text, “half of the 224-token context”). In their place — the module-level `asr_cues`:
 
 ```python
 def asr_cues(
     segments: list[dict], language: str, prompt: str | None
 ) -> tuple[list[Cue], list[tuple[str, str]]]:
-    """Реплики из сегментов распознавания и то, что выброшено по дороге: (причина, текст)."""
+    """Cues from recognition segments and what was dropped along the way: (reason, text)."""
     dropped: list[tuple[str, str]] = []
     kept = []
 
@@ -4023,12 +4021,12 @@ def asr_cues(
         else:
             kept.append(segment)
 
-    # Уже сказанное в сегменте: своё у каждого, петля живёт внутри одного куска.
+    # What was already said in the segment: its own per segment, a loop lives inside one chunk.
     heard: dict[int, set[tuple[str, ...]]] = {}
 
     def drop(sentence: str, segment: dict) -> bool:
         if segment_verdict(segment) == "повтор":
-            # Слова без регистра и знаков: «Idemo dalje» без точки — тот же повтор.
+            # Words without case and punctuation: “Idemo dalje” without a period is the same repeat.
             words = tuple(re.findall(r"\w+", sentence.casefold()))
             seen = heard.setdefault(id(segment), set())
             looped = words in seen or compression_ratio(sentence) > COMPRESSION_RATIO_THRESHOLD
@@ -4039,8 +4037,8 @@ def asr_cues(
 
                 return True
 
-        # Эхо проверяется после normalize_cues: кириллический вывод сравнивается
-        # с латинской затравкой уже латиницей.
+        # Echo is checked after normalize_cues: Cyrillic output is compared
+        # with the Latin prompt already in Latin.
         if is_echo(sentence, prompt):
             dropped.append(("эхо затравки", sentence))
 
@@ -4051,59 +4049,59 @@ def asr_cues(
     return build_cues(normalize_cues(kept, language), drop=drop), dropped
 ```
 
-Правило отсева. «Тишина» выбрасывает сегмент целиком, до `normalize_cues`. В сегменте с «повтором» `drop` выбрасывает предложение как `("повтор", предложение)`, когда его своя степень сжатия выше `COMPRESSION_RATIO_THRESHOLD` или оно повторяет уже сказанное в этом же сегменте; сравниваются слова без регистра (`re.findall(r"\w+", sentence.casefold())`), так что потерянная точка повтор не прячет. Память своя у каждого сегмента. Петля из двух предложений (A. B. A. B. …) оставляет первые A и B. В сегментах без пометки повторы не выбрасываются никогда: «Da. Ne. Da.» — обычная речь. Эхо проверяется после повтора, как и прежде.
+The filtering rule. “тишина” drops the segment whole, before `normalize_cues`. In a segment marked “повтор”, `drop` drops a sentence as `("повтор", sentence)` when its own compression ratio is above `COMPRESSION_RATIO_THRESHOLD` or it repeats what was already said in this same segment; the words are compared without case (`re.findall(r"\w+", sentence.casefold())`), so a lost period does not hide a repeat. The memory is its own per segment. A loop of two sentences (A. B. A. B. …) leaves the first A and B. In segments without the mark, repeats are never dropped: “Da. Ne. Da.” is ordinary speech. Echo is checked after the repeat, as before.
 
-В докстроке ещё две вещи: фильтры только для распознавания — ветка дорожки автора в `_pipeline` не меняется; выбросы возвращаются, а не пишутся здесь, потому что журнал ведёт задание.
+Two more things in the docstring: the filters are for recognition only — the author-track branch in `_pipeline` does not change; the drops are returned rather than written here because the job keeps the journal.
 
-Параметр `language` (имя закреплено в Interfaces) затеняет модуль внутри `asr_cues`; модуль там не нужен, `language.*` в ней не звать.
+The `language` parameter (the name is fixed in Interfaces) shadows the module inside `asr_cues`; the module is not needed there, do not call `language.*` in it.
 
-3. `JobRunner._accept_asr` (задача 6): строку, что строит реплики (`job.cues = self._to_job_cues(build_cues(normalize_cues(result["cues"], verdict.effective)))`), заменить на:
+3. `JobRunner._accept_asr` (Task 6): replace the line that builds the cues (`job.cues = self._to_job_cues(build_cues(normalize_cues(result["cues"], verdict.effective)))`) with:
    - `prompt = result.get("prompt")`;
    - `log.info("затравка %s: %s", job.video_id, prompt or "нет")`;
    - `cues, dropped = asr_cues(result["cues"], verdict.effective, prompt)`;
-   - на каждый выброс `log.info("выброшено %s (%s): %s", job.video_id, reason, text)`;
+   - for each drop, `log.info("выброшено %s (%s): %s", job.video_id, reason, text)`;
    - `job.cues = self._to_job_cues(cues)`.
 
-   Порядок прежний: язык, реплики, `segmented` — всё до `held.check()` в `_pipeline`. Затравку пишем потому, что её теперь составляет воркер, а его stderr при успехе демон выбрасывает: без этой строки эхо на экране не с чем сопоставить. Строка на выброс — потому что выброшенная «тишина» — это до 30 с звука, а «повтор» — предложение, и проверить пороги на этом корпусе нечем: в кэше метрик нет. Журнал — единственная проверка в поле. Индексы `JobCue` остаются сплошными: отсев идёт до `_to_job_cues`, а на `index` опираются `_next_batch` и `_context_for`.
-4. `JobRunner._run_asr`: убрать строку 1153 (`prompt = _initial_prompt(job.info)`) и 1166-1167 (`--initial-prompt`). Сразу после блока `if hint: args += ["--hint", hint]` из задачи 5 — безусловно, в каждом запуске, даже со списком `[]`: `args += ["--prompt-names", json.dumps(harvest_names(job.info.title, job.info.tags), ensure_ascii=False)]`. `ensure_ascii=False` — имена читаемы в `ps` и в журнале. Комментарий: имена, а не готовая затравка — язык решает воркер после определителя, и только он знает, есть ли для этого языка фраза; описание не передаётся (см. `harvest_names`).
+   The order is the previous one: language, cues, `segmented` — all before `held.check()` in `_pipeline`. The prompt is written because the worker composes it now, and the daemon discards its stderr on success: without this line the echo on the screen has nothing to be matched against. A line per drop — because a dropped “тишина” is up to 30 s of audio, while a “повтор” is a sentence, and there is no way to check the thresholds on this corpus: the cache has no metrics. The journal is the only check in the field. `JobCue` indices stay contiguous: filtering happens before `_to_job_cues`, and `_next_batch` and `_context_for` rely on `index`.
+4. `JobRunner._run_asr`: remove line 1153 (`prompt = _initial_prompt(job.info)`) and 1166-1167 (`--initial-prompt`). Right after the `if hint: args += ["--hint", hint]` block from Task 5 — unconditionally, on every run, even with the list `[]`: `args += ["--prompt-names", json.dumps(harvest_names(job.info.title, job.info.tags), ensure_ascii=False)]`. `ensure_ascii=False` — the names are readable in `ps` and in the journal. Comment: names, not a ready prompt — the worker decides the language after the detector, and only it knows whether a phrase exists for that language; the description is not passed (see `harvest_names`).
 
-- [ ] **Step 13: Запустить и убедиться, что проходят**
+- [ ] **Step 13: Run them and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_asr_filters.py tests/test_prompt.py tests/test_segment.py -v`
 Expected: PASS, 74 passed
 
 Run: `grep -rn --include="*.py" -e "_initial_prompt" -e "_proper_nouns" -e "--initial-prompt" helper tests`
-Expected: две строки, обе в `tests/test_asr_filters.py`: `["--initial-prompt", PHRASE],` и `assert "--initial-prompt" not in argv` (на `98a3ad2` эта же команда находит шесть строк в `helper/jobs.py` и `helper/asr/worker.py`)
+Expected: two lines, both in `tests/test_asr_filters.py`: `["--initial-prompt", PHRASE],` and `assert "--initial-prompt" not in argv` (on `98a3ad2` the same command finds six lines in `helper/jobs.py` and `helper/asr/worker.py`)
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 442 passed
 
-- [ ] **Step 14: Коммит**
+- [ ] **Step 14: Commit**
 
 ```bash
 /usr/bin/git add helper/asr/prompt.py helper/asr/worker.py helper/segment.py helper/jobs.py tests/test_prompt.py tests/test_segment.py tests/test_asr_filters.py tests/test_worker.py
 /usr/bin/git commit -m "Затравка распознавания по решённому языку; тишина, петли повторов и эхо затравки не доходят до реплик"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command goes in a separate Bash call, via `/usr/bin/git`; the timeout must be at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message is in Russian, without `Co-Authored-By` lines or any other signatures.
 
 ---
 
-### Task 9: Нарезка не рвёт сокращения
+### Task 9: Cutting does not tear abbreviations
 
-`SENTENCE_END` (`helper/segment.py:32`) кончает предложение на любой точке перед пробелом. «Today we test the U.S. market, e.g. tech stocks.» сегодня — три части, `['Today we test the U.S.', 'market, e.g.', 'tech stocks.']`, «Rođen je 5. maja 1980. godine.» — тоже три, и обрывки уходят в переводчик как самостоятельные фразы. В локальном кэше это около 0,63% границ реплик распознавания, почти все — на сербских датах и годах (`21.` | `januara`, `1948.` | `godine`), английских — единицы. Правило не зависит от языка: часть, начинающаяся со строчной буквы, предложения не начинает. Списков сокращений по языкам нет, действующий язык не нужен.
+`SENTENCE_END` (`helper/segment.py:32`) ends a sentence at any period before a space. “Today we test the U.S. market, e.g. tech stocks.” is three parts today, `['Today we test the U.S.', 'market, e.g.', 'tech stocks.']`, “Rođen je 5. maja 1980. godine.” is three as well, and the fragments go to the translator as independent phrases. In the local cache that is about 0.63% of recognition cue boundaries, almost all of them on Serbian dates and years (`21.` | `januara`, `1948.` | `godine`), and a handful in English. The rule does not depend on the language: a part that starts with a lowercase letter does not start a sentence. There are no per-language abbreviation lists, and the effective language is not needed.
 
 **Files:**
 - Modify: `helper/segment.py:62-72` (`split_sentences`)
-- Test: `tests/test_segment.py` (из задачи 8, дописать)
+- Test: `tests/test_segment.py` (from Task 8, append)
 
 **Interfaces:**
-- Consumes: `tests/test_segment.py` с помощниками `word` и `timeline` (задача 8).
-- Produces: `split_sentences(text: str) -> list[str]` — сигнатура прежняя; часть, первый знак которой — строчная буква, приклеивается к предыдущей через один пробел.
+- Consumes: `tests/test_segment.py` with the `word` and `timeline` helpers (Task 8).
+- Produces: `split_sentences(text: str) -> list[str]` — the signature is unchanged; a part whose first character is a lowercase letter is glued to the previous one with a single space.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write failing tests**
 
-В `tests/test_segment.py` импорт заменить на `from helper.segment import build_cues, split_sentences` и дописать в конец:
+In `tests/test_segment.py` replace the import with `from helper.segment import build_cues, split_sentences` and append at the end:
 
 ```python
 def test_abbreviations_do_not_end_a_sentence():
@@ -4142,25 +4140,25 @@ def test_a_date_reaches_the_translator_as_one_cue():
     ]
 ```
 
-`test_ordinary_sentences_still_split` проходит уже сейчас — это страж: склейка не должна съесть настоящие границы, в том числе год в конце предложения перед заглавной.
+`test_ordinary_sentences_still_split` passes already — it is a guard: the joining must not eat real boundaries, including a year at the end of a sentence before a capital letter.
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_segment.py -v`
 Expected: FAIL — 3 failed, 4 passed:
-- `test_abbreviations_do_not_end_a_sentence` — получено `['Today we test the U.S.', 'market, e.g.', 'tech stocks.']`;
-- `test_ordinals_and_years_do_not_end_a_sentence` — получено `['Rođen je 5.', 'maja 1980.', 'godine.']`;
-- `test_a_date_reaches_the_translator_as_one_cue` — получено `[('Rođen je 5.', 0.0, 0.9), ('maja 1980. godine.', 1.0, 2.6), ('Živio je u Beogradu.', 3.5, 5.0)]`.
+- `test_abbreviations_do_not_end_a_sentence` — got `['Today we test the U.S.', 'market, e.g.', 'tech stocks.']`;
+- `test_ordinals_and_years_do_not_end_a_sentence` — got `['Rođen je 5.', 'maja 1980.', 'godine.']`;
+- `test_a_date_reaches_the_translator_as_one_cue` — got `[('Rođen je 5.', 0.0, 0.9), ('maja 1980. godine.', 1.0, 2.6), ('Živio je u Beogradu.', 3.5, 5.0)]`.
 
-- [ ] **Step 3: Склеивать часть со строчной буквы с предыдущей**
+- [ ] **Step 3: Glue a lowercase part to the previous one**
 
-`split_sentences` (`helper/segment.py:62-72`): после разбиения по `SENTENCE_END` пройти части по порядку; часть, у которой `part[0].islower()`, дописать к предыдущей через один пробел; первая часть и части, начинающиеся с заглавной, цифры, кавычки или скобки, остаются отдельными. Пустой текст — как сейчас, `[]`.
+`split_sentences` (`helper/segment.py:62-72`): after splitting on `SENTENCE_END`, walk the parts in order; a part with `part[0].islower()` is appended to the previous one with a single space; the first part and parts starting with a capital letter, a digit, a quote or a bracket stay separate. Empty text — as now, `[]`.
 
-В докстроку — правило и его границы. Точка перед строчной буквой предложения не кончает: порядковые числительные и годы («5. maja», «1980. godine»), сокращения («U.S. market», «e.g. tech», «npr.»), многоточие перед продолжением («ali... ali, nekako»). Что остаётся как было: продолжение с заглавной («Mr. Smith») режется по-прежнему; письменности без регистра не затронуты (`islower()` у них ложно); граница, совпавшая с краем куска VAD, лежит между сегментами и сюда не доходит.
+Into the docstring — the rule and its limits. A period before a lowercase letter does not end a sentence: ordinal numbers and years (“5. maja”, “1980. godine”), abbreviations (“U.S. market”, “e.g. tech”, “npr.”), an ellipsis before a continuation (“ali... ali, nekako”). What stays as it was: a continuation with a capital (“Mr. Smith”) is still cut; scripts without case are unaffected (`islower()` is false for them); a boundary that coincides with the edge of a VAD chunk lies between segments and does not get here.
 
-Не трогать: `SENTENCE_END`, `CONJUNCTIONS` (перенос по союзам других языков отложен, см. «Отложено»), `_split_balanced`. `PROMPT_VERSION` не поднимать — это задача 11.
+Do not touch: `SENTENCE_END`, `CONJUNCTIONS` (the break by other languages' conjunctions is deferred, see “Deferred”), `_split_balanced`. Do not raise `PROMPT_VERSION` — that is Task 11.
 
-- [ ] **Step 4: Запустить и убедиться, что проходят**
+- [ ] **Step 4: Run them and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_segment.py -v`
 Expected: PASS, 7 passed
@@ -4168,47 +4166,51 @@ Expected: PASS, 7 passed
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 446 passed
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 /usr/bin/git add helper/segment.py tests/test_segment.py
 /usr/bin/git commit -m "Нарезка не рвёт предложение на сокращениях, порядковых числительных и годах"
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command goes in a separate Bash call, via `/usr/bin/git`; the timeout must be at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message is in Russian, without `Co-Authored-By` lines or any other signatures.
 
 ---
-### Task 10: Дорожка автора: метки нормализуются
+### Task 10: The author track: labels are normalised
 
-Сейчас дорожку автора выбирает регулярка `BCMS_LANG = ^(sr|hr|bs|sh)(-|$)`, а письменность её текста решает точное
-сравнение `language not in BCMS` в `helper/script.py:76`, куда конвейер передаёт сырую метку `track.lang`. Проверено на
-98a3ad2: `normalize_cues` с меткой `sr-Cyrl`, `SR` или `sr_Latn` оставляет «Добар дан, људи.» кириллицей, и она уходит
-в переводчик; метки `cnr` и `sr_Latn` регулярка не узнаёт вовсе; закреп хозяина в выборе не участвует, так что при
-`[asr] language = "en"` сербская дорожка (то есть перевод) берётся как оригинал. Задача сводит все три места к одной
-семье языка из `helper/language.py`. Дорожки на других языках в этом плане не выбираются (см. «Отложено»): сверять
-метку с речью без карты нечем.
+Right now the author track is chosen by the regexp `BCMS_LANG = ^(sr|hr|bs|sh)(-|$)`, while the
+script of its text is decided by the exact comparison `language not in BCMS` in `helper/script.py:76`,
+into which the pipeline passes the raw label `track.lang`. Checked on 98a3ad2: `normalize_cues` with
+the label `sr-Cyrl`, `SR` or `sr_Latn` leaves “Добар дан, људи.” in Cyrillic, and it goes to the
+translator; the regexp does not recognise the labels `cnr` and `sr_Latn` at all; the owner's pin takes
+no part in the choice, so with `[asr] language = "en"` the Serbian track (that is, the translation) is
+taken as the original. The task reduces all three places to one language family from
+`helper/language.py`. Tracks in other languages are not selected in this plan (see “Deferred”): there
+is no way to check a label against speech without a GPU.
 
-`helper/script.py` ни за одной задачей плана не числится, а его `BCMS` по общему правилу заменяет та задача, что трогает
-файл. Гейт `normalize_cues` — та самая ошибка, которую чинит эта задача, поэтому замена здесь.
+`helper/script.py` is not assigned to any task in the plan, and by the general rule its `BCMS` is
+replaced by whichever task touches the file. The `normalize_cues` gate is the very bug this task
+fixes, hence the replacement here.
 
 **Files:**
-- Modify: `helper/sources/ytdlp.py:34-35` (комментарий и `BCMS_LANG` — удалить), `helper/sources/ytdlp.py:321-336` (`usable_manual_track`), импорт рядом с `helper/sources/ytdlp.py:21`
-- Modify: `helper/script.py:24-25` (`BCMS` — удалить), `helper/script.py:60-86` (`normalize_cues`, проверка на строке 76), импорт рядом с `helper/script.py:16`
-- Modify: `helper/jobs.py:813-817` (`JobRunner._pipeline`, выбор дорожки), `helper/jobs.py:854-856` (`JobRunner._pipeline`, ветка дорожки после удачной загрузки: `normalize_cues(segments, track.lang)`)
-- Test: `tests/test_author_track.py` (новый)
+- Modify: `helper/sources/ytdlp.py:34-35` (the comment and `BCMS_LANG` — delete), `helper/sources/ytdlp.py:321-336` (`usable_manual_track`), the import next to `helper/sources/ytdlp.py:21`
+- Modify: `helper/script.py:24-25` (`BCMS` — delete), `helper/script.py:60-86` (`normalize_cues`, the check on line 76), the import next to `helper/script.py:16`
+- Modify: `helper/jobs.py:813-817` (`JobRunner._pipeline`, track selection), `helper/jobs.py:854-856` (`JobRunner._pipeline`, the track branch after a successful download: `normalize_cues(segments, track.lang)`)
+- Test: `tests/test_author_track.py` (new)
 
 **Interfaces:**
-- Consumes: `helper.language.is_bcms(code: str | None) -> bool` (задача 4); `JobRunner._declaration(self, job) -> tuple[str | None, str | None]` — `(закрепление, подсказка метаданных)` (задача 5); решение по дорожке `verdict` — `LanguageVerdict(effective=language.hint(track.lang) or "sr", …, reason="track", source="manual", track=track.lang)`, которое задача 6 строит в ветке дорожки `_pipeline`, и `Job.language` (задача 6); фикстура `pipeline` и построитель `metadata(**overrides) -> VideoInfo` из `tests/conftest.py` (задача 3).
-- Produces: `usable_manual_track(info: VideoInfo, pin: str | None = None) -> CaptionTrack | None`; `normalize_cues(cues: list[dict], language: str = "sr") -> list[dict]` латинизирует, когда `is_bcms(language)`; ветка дорожки в `_pipeline` нормализует текст по `verdict.effective`. `helper.sources.ytdlp.BCMS_LANG` и `helper.script.BCMS` больше не существуют.
+- Consumes: `helper.language.is_bcms(code: str | None) -> bool` (Task 4); `JobRunner._declaration(self, job) -> tuple[str | None, str | None]` — `(pin, metadata hint)` (Task 5); the track decision `verdict` — `LanguageVerdict(effective=language.hint(track.lang) or "sr", …, reason="track", source="manual", track=track.lang)`, which Task 6 builds in the `_pipeline` track branch, and `Job.language` (Task 6); the `pipeline` fixture and the `metadata(**overrides) -> VideoInfo` builder from `tests/conftest.py` (Task 3).
+- Produces: `usable_manual_track(info: VideoInfo, pin: str | None = None) -> CaptionTrack | None`; `normalize_cues(cues: list[dict], language: str = "sr") -> list[dict]` latinises when `is_bcms(language)`; the track branch in `_pipeline` normalises the text by `verdict.effective`. `helper.sources.ytdlp.BCMS_LANG` and `helper.script.BCMS` no longer exist.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write failing tests**
 
-Входы фикстуры — как их назвала задача 3: `pipeline.info` — что вернёт подменённый `probe`, `pipeline.track` — что
-вернёт подменённый `fetch_manual_track`. Если в `tests/conftest.py` они названы иначе, взять те имена.
+The fixture inputs are as Task 3 named them: `pipeline.info` — what the patched `probe` returns,
+`pipeline.track` — what the patched `fetch_manual_track` returns. If `tests/conftest.py` names them
+differently, take those names.
 
 ```python
 # tests/test_author_track.py
-"""Дорожка автора: какая метка годится и в какой письменности её текст идёт дальше."""
+"""The author track: which label is suitable and in which script its text goes on."""
 
 import pytest
 
@@ -4217,7 +4219,7 @@ from helper.jobs import Job, Stage
 from helper.script import normalize_cues
 from helper.sources.ytdlp import CaptionTrack, usable_manual_track
 
-# yt-dlp отдаёт каждую дорожку семью форматами, и probe кладёт по записи на каждый.
+# yt-dlp serves each track in seven formats, and probe puts one record per format.
 FORMATS = ("json3", "srv1", "srv2", "srv3", "ttml", "srt", "vtt")
 
 CYRILLIC = [
@@ -4239,7 +4241,7 @@ def test_any_spelling_of_the_serbian_family_is_an_author_track(label):
     track = usable_manual_track(metadata(manual_tracks=tracks(label)))
 
     assert track is not None
-    # В yt-dlp метка уходит как есть: --sub-langs ищет ровно этот ключ.
+    # In yt-dlp the label goes as is: --sub-langs looks for exactly this key.
     assert track.lang == label
 
 
@@ -4262,7 +4264,7 @@ def test_seven_formats_are_one_track_and_the_first_serbian_label_wins():
 
 
 def test_youtube_metadata_never_refuses_a_serbian_track():
-    # Случай Juske: YouTube называет речь английской, а она сербская.
+    # The Juske case: YouTube calls the speech English, but it is Serbian.
     info = metadata(audio_language="en", manual_tracks=tracks("sr"))
 
     assert usable_manual_track(info).lang == "sr"
@@ -4275,7 +4277,7 @@ def test_a_serbian_family_pin_keeps_the_track(pin):
 
 @pytest.mark.parametrize("pin", ["en", "ru", "mk"])
 def test_a_pin_outside_the_serbian_family_refuses_the_track(pin):
-    # Хозяин сказал, что речь не сербская: сербская дорожка у такого ролика — перевод.
+    # The owner said the speech is not Serbian: the Serbian track of such a video is a translation.
     assert usable_manual_track(metadata(manual_tracks=tracks("sr")), pin) is None
 
 
@@ -4315,47 +4317,47 @@ async def test_a_pin_outside_the_serbian_family_sends_the_video_to_asr(pipeline)
     await pipeline.run(job)
 
     assert job.source == "asr"
-    # Дорожку не брали вовсе, а не взяли и уронили.
+    # The track was not taken at all, rather than taken and then dropped.
     assert job.track_failed is False
     assert len(pipeline.workers) == 1
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run them and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_author_track.py -v`
-Expected: FAIL — 13 failed, 19 passed. Шесть тестов закрепа — `TypeError: usable_manual_track() takes 1 positional argument but 2 were given`; метки `sr_Latn` и `cnr` — `assert None is not None` (регулярка их не знает); латиница под `sr-Cyrl`, `SR`, `sr_Latn` — `AssertionError: assert 'Добар дан, људи.' == 'Dobar dan, ljudi.'`; первый тест конвейера — кириллица в `job.cues` (задача 6 оставила в ветке дорожки `normalize_cues(segments, track.lang)`); второй — `assert 'manual:sr' == 'asr'`.
+Expected: FAIL — 13 failed, 19 passed. The six pin tests — `TypeError: usable_manual_track() takes 1 positional argument but 2 were given`; the labels `sr_Latn` and `cnr` — `assert None is not None` (the regexp does not know them); Latin under `sr-Cyrl`, `SR`, `sr_Latn` — `AssertionError: assert 'Добар дан, људи.' == 'Dobar dan, ljudi.'`; the first pipeline test — Cyrillic in `job.cues` (Task 6 left `normalize_cues(segments, track.lang)` in the track branch); the second — `assert 'manual:sr' == 'asr'`.
 
-- [ ] **Step 3: `usable_manual_track` — по семье языка**
+- [ ] **Step 3: `usable_manual_track` — by language family**
 
 `helper/sources/ytdlp.py`:
 
-- Удалить `BCMS_LANG` вместе с комментарием над ним (`:34-35`). `import re` остаётся: на нём `VIDEO_ID` и классификаторы отказов.
-- Импорт `from helper.language import is_bcms` рядом с `from helper.env import YTDLP_CACHE` (`:21`). `helper/language.py` тянет только стандартную библиотеку, цикла нет.
-- `def usable_manual_track(info: VideoInfo, pin: str | None = None) -> CaptionTrack | None` (`:321-336`). Закреп задан и `not is_bcms(pin)` — `None`, на дорожки не глядя. Иначе — первая запись `info.manual_tracks`, у которой `is_bcms(track.lang)`, или `None`. Отдельной дедупликации не нужно: семь форматов одной метки идут подряд, и вернуться может только первая запись метки — это и есть «одна дорожка на метку». Среди нескольких меток семьи (`sr-Latn`, `hr`) берётся первая по порядку метаданных; закреп внутри семьи (`hr`, `bs`) выбор не меняет. Метка возвращается как есть: по ней `fetch_manual_track` ищет ключ (`--sub-langs`, полное совпадение) и строится отпечаток `manual:<метка>`, нормализованный код туда не подставлять.
-- Докстрока заменяется и говорит:
-  1. годится только ручная дорожка сербского семейства в любой записи метки (`sr`, `sr-Latn`, `sr-Cyrl`, `SR`, `sh`, `cnr`, `hr`, `bs`): сверяется семья через `is_bcms`, а не строка; `live_chat` (чат повтора эфира) и метки, которых нет среди кодов Whisper, не годятся никогда;
-  2. почему не другие языки: метку надо сверять с речью, а определителя без карты нет (на диске только large-v3 и turbo), зонд на карте отнял бы у дорожки автора её смысл — обойтись без карты; без сверки английская дорожка забрала бы ролик, где YouTube назвал сербскую речь английской (Juske);
-  3. `pin` — закреп хозяина (`[asr] language`); вне сербского семейства он значит «речь не сербская», и сербская дорожка у такого ролика — перевод, а не оригинал. Метаданные YouTube (`audio_language`) в выборе не участвуют — именно они однажды и соврали;
-  4. прежний довод остаётся: македонский, болгарский, словацкий, русский — акустические соседи сербского, и наличие дорожки не равно её пригодности;
-  5. `automatic_captions` сюда не попадают по построению: `probe` кладёт в `manual_tracks` только ключ `subtitles`.
+- Delete `BCMS_LANG` together with the comment above it (`:34-35`). `import re` stays: `VIDEO_ID` and the failure classifiers rely on it.
+- The import `from helper.language import is_bcms` next to `from helper.env import YTDLP_CACHE` (`:21`). `helper/language.py` pulls only the standard library, so there is no cycle.
+- `def usable_manual_track(info: VideoInfo, pin: str | None = None) -> CaptionTrack | None` (`:321-336`). If a pin is given and `not is_bcms(pin)` — `None`, without looking at the tracks. Otherwise — the first record of `info.manual_tracks` whose `is_bcms(track.lang)`, or `None`. No separate deduplication is needed: the seven formats of one label go in a row, and only the first record of the label can be returned — that is “one track per label”. Among several labels of the family (`sr-Latn`, `hr`) the first in metadata order is taken; a pin inside the family (`hr`, `bs`) does not change the choice. The label is returned as is: `fetch_manual_track` looks up the key by it (`--sub-langs`, an exact match), and the `manual:<label>` fingerprint is built from it; do not put the normalised code there.
+- The docstring is replaced and says:
+  1. only a manual track of the Serbian family is suitable, in any spelling of the label (`sr`, `sr-Latn`, `sr-Cyrl`, `SR`, `sh`, `cnr`, `hr`, `bs`): the family is compared through `is_bcms`, not the string; `live_chat` (the live-replay chat) and labels that are not among the Whisper codes are never suitable;
+  2. why not other languages: the label must be checked against the speech, and there is no detector without a GPU (only large-v3 and turbo are on disk), while a probe on the GPU would take away the point of the author track — do without the GPU; without a check, an English track would take a video where YouTube called Serbian speech English (Juske);
+  3. `pin` is the owner's pin (`[asr] language`); outside the Serbian family it means “the speech is not Serbian”, and the Serbian track of such a video is a translation, not the original. YouTube metadata (`audio_language`) takes no part in the choice — it is exactly what lied once;
+  4. the previous argument stands: Macedonian, Bulgarian, Slovak, Russian are acoustic neighbours of Serbian, and the presence of a track does not equal its suitability;
+  5. `automatic_captions` do not get here by construction: `probe` puts only the `subtitles` key into `manual_tracks`.
 
-- [ ] **Step 4: `normalize_cues` — по семье языка**
+- [ ] **Step 4: `normalize_cues` — by language family**
 
 `helper/script.py`:
 
-- Удалить `BCMS` с комментарием (`:24-25`). Читателей у него вне файла нет: `grep -rn --include='*.py' -e "script import.*BCMS" -e "script\.BCMS" helper tests spikes` — пусто; внутри файла его читает только строка 76.
-- Импорт `from helper.language import is_bcms` — функцией, а не модулем: параметр `language` у `normalize_cues` затенил бы имя модуля.
-- `:76`: `if language not in BCMS:` → `if not is_bcms(language):`. Умолчание `language: str = "sr"` не трогать — на нём `spikes/asr_real.py:134`.
-- В докстроку `normalize_cues` одно предложение: язык сверяется по семье (`is_bcms`), а не строкой — метка дорожки автора бывает `sr-Cyrl` или `SR`, и точное сравнение пропускало такую кириллицу в переводчик.
+- Delete `BCMS` with the comment (`:24-25`). It has no readers outside the file: `grep -rn --include='*.py' -e "script import.*BCMS" -e "script\.BCMS" helper tests spikes` — empty; inside the file only line 76 reads it.
+- The import `from helper.language import is_bcms` — as a function, not a module: the `language` parameter of `normalize_cues` would shadow the module name.
+- `:76`: `if language not in BCMS:` → `if not is_bcms(language):`. Do not touch the default `language: str = "sr"` — `spikes/asr_real.py:134` relies on it.
+- Into the `normalize_cues` docstring, one sentence: the language is compared by family (`is_bcms`), not by string — an author track label can be `sr-Cyrl` or `SR`, and the exact comparison let such Cyrillic through to the translator.
 
-- [ ] **Step 5: Конвейер передаёт закреп и действующий язык**
+- [ ] **Step 5: The pipeline passes the pin and the effective language**
 
 `helper/jobs.py`, `JobRunner._pipeline`:
 
-- Выбор дорожки (98a3ad2: `:813-817`): перед ним `pin, _ = self._declaration(job)`, затем `usable_manual_track(job.info, pin)`. `_declaration` здесь не бросает: `_pipeline` уже позвал `_pin()` до `probe` (задача 4), а негодное закрепление отказало бы задание там. Объявление — через `_declaration`, как у ключа кэша (задача 7): сюда же придёт объявление ссылки, см. «Отложено». К комментарию над выбором (`:804-812`) дописать: закреп вне сербского семейства дорожку не берёт, см. `usable_manual_track`.
-- Ветка дорожки после удачной загрузки (98a3ad2: `:854-856`): `normalize_cues(segments, track.lang)` → `normalize_cues(segments, verdict.effective)`, где `verdict` — решение по дорожке, которое задача 6 строит прямо перед этим. Комментарий: письменность — по действующему языку решения, а не по сырой метке, иначе кириллица под `sr-Cyrl` или `SR` ушла бы в переводчик. `fetch_manual_track`, подпись стадии `source` и `job.source` по-прежнему получают сырую метку.
+- Track selection (98a3ad2: `:813-817`): before it `pin, _ = self._declaration(job)`, then `usable_manual_track(job.info, pin)`. `_declaration` does not raise here: `_pipeline` has already called `_pin()` before `probe` (Task 4), and a bad pin would have refused the job there. The declaration goes through `_declaration`, as with the cache key (Task 7): the link declaration will arrive here too, see “Deferred”. To the comment above the selection (`:804-812`) add: a pin outside the Serbian family does not take the track, see `usable_manual_track`.
+- The track branch after a successful download (98a3ad2: `:854-856`): `normalize_cues(segments, track.lang)` → `normalize_cues(segments, verdict.effective)`, where `verdict` is the track decision Task 6 builds right before this. Comment: the script follows the effective language of the decision, not the raw label, otherwise Cyrillic under `sr-Cyrl` or `SR` would go to the translator. `fetch_manual_track`, the `source` stage label and `job.source` still get the raw label.
 
-- [ ] **Step 6: Запустить и убедиться, что проходят**
+- [ ] **Step 6: Run them and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_author_track.py -v`
 Expected: PASS, 32 passed
@@ -4364,44 +4366,45 @@ Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 478 passed
 
 Run: `grep -rn --include='*.py' -e "BCMS_LANG" -e '"sh", "me", "cnr"' helper spikes`
-Expected: пусто
+Expected: empty
 
-- [ ] **Step 7: Коммит**
+- [ ] **Step 7: Commit**
 
 ```bash
 /usr/bin/git add helper/sources/ytdlp.py helper/script.py helper/jobs.py tests/test_author_track.py
 /usr/bin/git commit -m "Дорожка автора: метка сверяется по семье языка, кириллица латинизируется при любой записи метки" -m "usable_manual_track берёт ручную дорожку сербского семейства в любой записи метки (sr-Latn, sr-Cyrl, SR, sh, cnr), live_chat — никогда; закреп вне семейства дорожку не берёт: сербская дорожка у несербской речи — перевод. normalize_cues сверяет семью через is_bcms, а ветка дорожки нормализует текст по действующему языку решения, а не по сырой метке: кириллица под sr-Cyrl или SR больше не уходит в переводчик. BCMS_LANG и script.BCMS удалены — семья языка теперь в одном месте, helper/language.py."
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command goes in a separate Bash call, via `/usr/bin/git`; the timeout must be at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message is in Russian, without `Co-Authored-By` lines or any other signatures.
 
 ---
 
-### Task 11: Версия кэша и документация
+### Task 11: Cache version and documentation
 
-Задача закрывает работу: поднимает `PROMPT_VERSION` — версия входит в ключ и метит смену правил языка; поднятая, она
-обесценивает записи прежних правил, — и записывает построенное: в `docs/running.md` для хозяина и пометками «Как
-построено» в спецификации.
-Поведения не меняет: кроме версии, правятся только комментарии и докстроки. `helper/asr/worker.py` задача не трогает:
-его комментарии и мёртвые параметры правят задачи 5 и 8, а здесь это только проверяется (шаг 6).
+This task closes the work: it raises `PROMPT_VERSION` — the version is part of the key and marks a
+change of the language rules; once raised, it devalues entries made under the previous rules — and
+records what was built: in `docs/running.md` for the owner and with “How it was built” notes in the
+spec. It changes no behaviour: apart from the version, only comments and docstrings are edited. The
+task does not touch `helper/asr/worker.py`: its comments and dead parameters are edited by Tasks 5
+and 8, and here they are only checked (Step 6).
 
 **Files:**
-- Modify: `helper/cache.py`: `PROMPT_VERSION` и комментарий над ним
-- Modify: `helper/sources/ytdlp.py:285-290` (докстрока `probe`)
-- Modify: `helper/jobs.py:201-203` (`JobCue.failed`), `:1134` (`_finish_translation`), `:1265-1266` (`_serve_cached`), `:1343-1344` (`_translate`) — только комментарии
-- Modify: `docs/running.md` (заголовок в первой строке и новый раздел в конце)
-- Modify: `docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md` (пометки после строк 290, 799, 909, 956, 965, 1178)
-- Test: `tests/test_cache_version.py` (новый)
+- Modify: `helper/cache.py`: `PROMPT_VERSION` and the comment above it
+- Modify: `helper/sources/ytdlp.py:285-290` (the `probe` docstring)
+- Modify: `helper/jobs.py:201-203` (`JobCue.failed`), `:1134` (`_finish_translation`), `:1265-1266` (`_serve_cached`), `:1343-1344` (`_translate`) — comments only
+- Modify: `docs/running.md` (the heading on the first line and a new section at the end)
+- Modify: `docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md` (notes after lines 290, 799, 909, 956, 965, 1178)
+- Test: `tests/test_cache_version.py` (new)
 
 **Interfaces:**
-- Consumes: фикстура `pipeline` (`run`, `workers`, `cache`, вход `pipeline.info`) и построитель `metadata` (задача 3); `Job`, `Stage` из `helper.jobs`. Для текстов — построенное задачами 4–10: константы `helper/language.py`, ключи `LanguageVerdict.wire()`, ключ кэша с закрепом и `SCHEMA_VERSION = 2` (задача 7), `helper/asr/prompt.py` (задача 8), правило склейки `split_sentences` (задача 9), `usable_manual_track` (задача 10).
-- Produces: `PROMPT_VERSION = 2`; `docs/running.md` с заголовком «Демон: запуск и диагностика» и разделом «Какой язык решил демон»; пометки «Как построено» в языковых разделах спецификации.
+- Consumes: the `pipeline` fixture (`run`, `workers`, `cache`, the `pipeline.info` input) and the `metadata` builder (Task 3); `Job`, `Stage` from `helper.jobs`. For the texts — what Tasks 4–10 built: the `helper/language.py` constants, the `LanguageVerdict.wire()` keys, the cache key with the pin and `SCHEMA_VERSION = 2` (Task 7), `helper/asr/prompt.py` (Task 8), the `split_sentences` joining rule (Task 9), `usable_manual_track` (Task 10).
+- Produces: `PROMPT_VERSION = 2`; `docs/running.md` with the heading “Daemon: startup and diagnostics” and the section “Which language the daemon decided”; “How it was built” notes in the language sections of the spec.
 
-- [ ] **Step 1: Написать падающий тест**
+- [ ] **Step 1: Write a failing test**
 
 ```python
 # tests/test_cache_version.py
-"""Обновление обесценивает дорожки, сделанные прежними правилами языка."""
+"""An update devalues tracks made under the previous language rules."""
 
 from conftest import metadata
 from helper import cache
@@ -4411,7 +4414,7 @@ from helper.jobs import Job, Stage
 async def test_a_track_made_before_the_update_is_made_again(pipeline, monkeypatch):
     pipeline.info = metadata(video_id="beforebump1")
 
-    # Запись под версией 1 — правила языка до поднятия версии.
+    # An entry under version 1 — the language rules before the version was raised.
     with monkeypatch.context() as old_rules:
         old_rules.setattr(cache, "PROMPT_VERSION", 1)
         await pipeline.run(Job("beforebump1"))
@@ -4420,36 +4423,37 @@ async def test_a_track_made_before_the_update_is_made_again(pipeline, monkeypatc
     await pipeline.run(job)
 
     assert job.stage is Stage.DONE
-    # Распознано заново, а не отдано из кэша.
+    # Recognised again, not served from the cache.
     assert len(pipeline.workers) == 2
-    # Прежняя запись не удалена: удалять её — решение хозяина.
+    # The previous entry is not deleted: deleting it is the owner's decision.
     assert len(pipeline.cache.variants("beforebump1")) == 2
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падает**
+- [ ] **Step 2: Run it and make sure it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_cache_version.py -v`
-Expected: FAIL — `assert 1 == 2` на `len(pipeline.workers)`: версия всё ещё 1, и второй прогон отдан из кэша записью под версией 1.
+Expected: FAIL — `assert 1 == 2` on `len(pipeline.workers)`: the version is still 1, and the second run is served from the cache by the entry under version 1.
 
-- [ ] **Step 3: Поднять версию**
+- [ ] **Step 3: Raise the version**
 
-`helper/cache.py`, `PROMPT_VERSION`: значение 2, а комментарий над ним (после задачи 7 он говорит только о `PROMPT_VERSION`) заменить целиком, чтобы он говорил, что версия покрывает всё, что делает дорожку:
+`helper/cache.py`, `PROMPT_VERSION`: the value is 2, and the comment above it (after Task 7 it speaks only about `PROMPT_VERSION`) is replaced entirely so that it says the version covers everything that makes a track:
 
 ```python
-# Версия всего, что делает дорожку из звука или из дорожки автора, кроме самих
-# моделей (они в ключе отдельно): правила выбора языка распознавания вместе с
-# константами helper/language.py, затравки и фильтров распознавания, нарезки на
-# реплики и промпта переводчика. Поднимать при любой их правке: версия входит в
-# ключ, и прежние записи перестают находиться. С диска они при этом не уходят:
-# вытеснение срабатывает, только когда кэш перерастёт бюджет.
-# 2 — «Язык источника»: определитель всегда, затравка по языку, фильтры тишины,
-# повторов и эха, сокращения в нарезке.
+# The version of everything that makes a track out of audio or out of an author
+# track, except the models themselves (they are in the key separately): the rules
+# for choosing the recognition language together with the helper/language.py
+# constants, the recognition prompts and filters, the cutting into cues and the
+# translator prompt. Raise it on any edit of those: the version is part of the
+# key, and previous entries stop being found. They do not leave the disk, though:
+# eviction runs only when the cache outgrows its budget.
+# 2 — “Source language”: the detector always, a prompt by language, the silence,
+# repetition and echo filters, abbreviations in the cutting.
 PROMPT_VERSION = 2
 ```
 
-`SCHEMA_VERSION` и его комментарий (задача 7) не трогать.
+Do not touch `SCHEMA_VERSION` and its comment (Task 7).
 
-- [ ] **Step 4: Запустить и убедиться, что проходит**
+- [ ] **Step 4: Run it and make sure it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_cache_version.py -v`
 Expected: PASS, 1 passed
@@ -4457,81 +4461,82 @@ Expected: PASS, 1 passed
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 479 passed
 
-- [ ] **Step 5: Докстрока `probe`**
+- [ ] **Step 5: The `probe` docstring**
 
-`helper/sources/ytdlp.py:285-290`, `probe`. Обещание «без него yt-dlp материализует ~200 tlang-вариантов» для yt-dlp 2026.08.19 неверно: экстрактор строит машинные переводы, только когда просят автосубтитры (`get_translated_subs` требует `writeautomaticsub` или `listsubtitles`, `yt_dlp/extractor/youtube/_video.py`), и кладёт их в `automatic_captions`, а не в `subtitles`. Новая докстрока:
+`helper/sources/ytdlp.py:285-290`, `probe`. The promise “without it yt-dlp materialises ~200 tlang variants” is wrong for yt-dlp 2026.08.19: the extractor builds machine translations only when auto-subtitles are requested (`get_translated_subs` requires `writeautomaticsub` or `listsubtitles`, `yt_dlp/extractor/youtube/_video.py`), and puts them in `automatic_captions`, not in `subtitles`. The new docstring:
 
 ```python
-    """Метаданные ролика одним вызовом: дорожки, заголовок, описание, теги, главы.
+    """The video's metadata in one call: tracks, title, description, tags, chapters.
 
-    `skip=translated_subs` оставлен как страховка от смены версии yt-dlp, а не ради
-    скорости: в 2026.08.19 машинные переводы дорожек строятся, только когда просят
-    автосубтитры (--write-auto-subs или --list-subs), и ложатся в automatic_captions,
-    а не в subtitles, так что ни на этот вызов, ни на fetch_manual_track флаг не
-    влияет. Перевод, который автор загрузил сам, — обычная ручная дорожка, и флаг его
-    не отсекает: от оригинала её отличает только язык речи (см. usable_manual_track).
+    `skip=translated_subs` is kept as insurance against a yt-dlp version change, not
+    for speed: in 2026.08.19 machine translations of tracks are built only when
+    auto-subtitles are requested (--write-auto-subs or --list-subs), and they land in
+    automatic_captions, not in subtitles, so the flag affects neither this call nor
+    fetch_manual_track. A translation the author uploaded themselves is an ordinary
+    manual track, and the flag does not cut it out: only the spoken language tells it
+    from the original (see usable_manual_track).
     """
 ```
 
-Сам флаг в `probe` и `fetch_manual_track` не трогать.
+Do not touch the flag itself in `probe` and `fetch_manual_track`.
 
-- [ ] **Step 6: Устаревшие комментарии**
+- [ ] **Step 6: Outdated comments**
 
-Комментарии `helper/jobs.py` (строки 98a3ad2; искать по тексту, номера сдвинулись):
+Comments in `helper/jobs.py` (line numbers from 98a3ad2; search by text, the numbers have shifted):
 
-| Где | Что не так | Что сделать |
+| Where | What is wrong | What to do |
 |---|---|---|
-| `jobs.py:201-203` (`JobCue.failed`), `:1134` (`_finish_translation`), `:1265-1266` (`_serve_cached`), `:1343-1344` (`_translate`) | непереведённая реплика названа сербской, а источник теперь любой | «исходный сербский» → «исходный текст реплики, на языке ролика»; «исходным сербским» → «исходным текстом»; «с непереведённым сербским» → «с непереведённым исходным текстом»; «Показывать сербский вместо русского» → «Показывать исходный текст вместо русского». |
+| `jobs.py:201-203` (`JobCue.failed`), `:1134` (`_finish_translation`), `:1265-1266` (`_serve_cached`), `:1343-1344` (`_translate`) | an untranslated cue is called Serbian, but the source is now any language | “исходный сербский” → “исходный текст реплики, на языке ролика”; “исходным сербским” → “исходным текстом”; “с непереведённым сербским” → “с непереведённым исходным текстом”; “Показывать сербский вместо русского” → “Показывать исходный текст вместо русского”. |
 
-Затем проверить, что от прежних правил ничего не осталось:
+Then check that nothing is left of the previous rules:
 
 Run: `grep -rn --include='*.py' -e "уедет по LRU" -e "язык берётся из метаданных" -e "def _source_language" -e "def _initial_prompt" -e "def _proper_nouns" -e "40% длительности" -e "VAD вернёт пусто" -e "смотрит только первые 30 секунд" -e "Лестницу оставляем" -e "вытесняет initial_prompt" -e "до приведения bs/hr/sr" -e "initial-prompt" -e "tlang-вариантов" -e "BCMS_LANG" -e '"sh", "me", "cnr"' -e "PROBE_WINDOWS" -e "_merge_bcms" -e "исходным сербским" -e "исходный сербский" -e "непереведённым сербским" -e "Показывать сербский вместо" helper`
-Expected: пусто
+Expected: empty
 
 Run: `grep -n "автодетект не используется" config.example.toml`
-Expected: пусто
+Expected: empty
 
-Из этих шаблонов сама задача снимает только `tlang-вариантов` (шаг 5) и четыре «сербских» (таблица выше). Остальные — работа других задач: «уедет по LRU» — задачи 7; «язык берётся из метаданных» и `config.example.toml` — задачи 4; `def _source_language`, «40% длительности», «VAD вернёт пусто», «смотрит только первые 30 секунд», «до приведения bs/hr/sr», `PROBE_WINDOWS`, `_merge_bcms` — задачи 5; `def _initial_prompt`, `def _proper_nouns`, «Лестницу оставляем», «вытесняет initial_prompt», `initial-prompt` — задачи 8; `BCMS_LANG` и шестикодовый `BCMS` — задач 5 и 10. Если что-то из этого нашлось — у задачи-владельца дефект: остановиться и доложить, здесь не чинить. `helper/asr/worker.py` в этой задаче не правится.
+Of these patterns, this task itself removes only `tlang-вариантов` (Step 5) and the four “Serbian” ones (the table above). The rest are the work of other tasks: “уедет по LRU” — Task 7; “язык берётся из метаданных” and `config.example.toml` — Task 4; `def _source_language`, “40% длительности”, “VAD вернёт пусто”, “смотрит только первые 30 секунд”, “до приведения bs/hr/sr”, `PROBE_WINDOWS`, `_merge_bcms` — Task 5; `def _initial_prompt`, `def _proper_nouns`, “Лестницу оставляем”, “вытесняет initial_prompt”, `initial-prompt` — Task 8; `BCMS_LANG` and the six-code `BCMS` — Tasks 5 and 10. If any of these is found, the owning task has a defect: stop and report, do not fix it here. `helper/asr/worker.py` is not edited in this task.
 
-- [ ] **Step 7: Раздел в `docs/running.md`**
+- [ ] **Step 7: A section in `docs/running.md`**
 
-Заголовок первой строки `# Демон без графического сеанса` заменить на `# Демон: запуск и диагностика`: файл
-теперь не только о сеансе. Разделы ниже него не трогать.
+Replace the first-line heading `# Daemon without a graphical session` with `# Daemon: startup and
+diagnostics`: the file is no longer only about the session. Do not touch the sections below it.
 
-В конец файла (после раздела «Решение») добавить:
+At the end of the file (after the “Decision” section), add:
 
 ````markdown
-## Какой язык решил демон
+## Which language the daemon decided
 
-Язык речи демон решает у каждого ролика сам. Определитель Whisper слушает до
-восьми окон по 30 секунд, разложенных по 10–90 % длины ролика, и окна голосуют;
-окно, где речи меньше трёх секунд, не голосует. Метка языка от YouTube — только
-подсказка: она решает, лишь когда не проголосовало ни одно окно, потому что
-сербские каналы YouTube бывает называет английскими. Код в `[asr] language`
-файла `~/.config/yt-trans/config.toml` — закреп: распознавание идёт им, а
-определитель работает и при нём, так что расхождение видно. Дорожка автора
-берётся только сербского семейства (sr, hr, bs в любой записи метки), и её язык —
-метка дорожки: речь при этом не слушают.
+The daemon decides the speech language of every video itself. The Whisper detector
+listens to up to eight windows of 30 seconds spread over 10–90 % of the video's length,
+and the windows vote; a window where there is less than three seconds of speech does not
+vote. The language label from YouTube is only a hint: it decides only when no window
+voted, because YouTube sometimes calls Serbian channels English. The code in
+`[asr] language` of `~/.config/yt-trans/config.toml` is a pin: recognition runs with it,
+and the detector runs with it too, so the mismatch is visible. The author track is taken
+only from the Serbian family (sr, hr, bs in any spelling of the label), and its language
+is the track's label: the speech is not listened to in that case.
 
-Решение лежит в снимке задания, в поле `language` (`null`, пока не принято):
+The decision lies in the job snapshot, in the `language` field (`null` until accepted):
 
 ```
 TOKEN=$(cat ~/.config/yt-trans/token)
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8756/v1/jobs/<id> | jq .language
 ```
 
-`<id>` — идентификатор ролика из адреса (`watch?v=…`). Задания живут в памяти до
-перезапуска демона, а готовых держится не больше двенадцати; ролик, который уже
-лежит в кэше, смотрят через `/restore` — он ничего не запускает:
+`<id>` — the video id from the address (`watch?v=…`). Jobs live in memory until the
+daemon restarts, and no more than twelve finished ones are kept; a video that is already
+in the cache is viewed through `/restore` — it starts nothing:
 
 ```
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8756/v1/jobs/<id>/restore | jq .snapshot.language
 ```
 
-Ролик без единой реплики не кэшируется: новое задание по нему — после 12 других
-готовых или перезапуска — снова качает звук и распознаёт под пропуском.
+A video with no cues at all is not cached: a new job for it — after 12 other finished
+ones or a restart — downloads the audio and recognises it under a GPU lease again.
 
-Пример — ролик, где YouTube назвал сербскую речь английской:
+An example — a video where YouTube called Serbian speech English:
 
 ```json
 {"effective": "sr", "declared": "en", "declaredBy": "metadata", "detected": "sr",
@@ -4539,52 +4544,52 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8756/v1/jobs/<id>/res
  "verified": null, "mismatch": true, "note": "YouTube указал en, по речи sr"}
 ```
 
-| Поле | Что значит |
+| Field | What it means |
 |---|---|
-| `effective` | язык, которым распознано; у дорожки автора — язык её метки |
-| `declared`, `declaredBy` | что объявлено и кем: `config` — закреп, `metadata` — YouTube; `null` — никто |
-| `detected`, `confidence` | что услышал определитель и доля этого языка в голосах окон (0–1); `null` — речи не нашлось или её не слушали |
-| `reason` | откуда `effective`: `pin` — закреп; `detector` — определитель; `floor` — победил язык, который не славянский сосед сербского (mk, bg, sl, ru, uk, be, cs, sk, pl), а сербская доля не ниже 0.2: так Whisper на сербской речи склонен называть английский; `hint` — речи не нашлось, взята метка YouTube; `fallback` — речи не нашлось и метки нет, принят сербский; `track` — дорожка автора |
-| `source`, `track` | `asr` — распознавание, `manual` — дорожка автора; `track` — её метка |
-| `verified` | пока всегда `null`: сверки дорожки автора с речью нет |
-| `mismatch`, `note` | объявленное разошлось с услышанным (или с меткой дорожки) — и фраза об этом |
+| `effective` | the language it was recognised with; for an author track — the language of its label |
+| `declared`, `declaredBy` | what was declared and by whom: `config` — a pin, `metadata` — YouTube; `null` — nobody |
+| `detected`, `confidence` | what the detector heard and that language's share in the window votes (0–1); `null` — no speech was found or it was not listened to |
+| `reason` | where `effective` comes from: `pin` — a pin; `detector` — the detector; `floor` — a language won that is not a Slavic neighbour of Serbian (mk, bg, sl, ru, uk, be, cs, sk, pl), while the Serbian share is not below 0.2: that is how Whisper on Serbian speech tends to say English; `hint` — no speech was found, the YouTube label was taken; `fallback` — no speech was found and there is no label, Serbian was accepted; `track` — the author track |
+| `source`, `track` | `asr` — recognition, `manual` — the author track; `track` — its label |
+| `verified` | always `null` for now: there is no check of the author track against the speech |
+| `mismatch`, `note` | what was declared diverged from what was heard (or from the track label) — and the phrase about it |
 
-`mismatch: true` — повод заглянуть в ролик. Либо YouTube снова ошибся меткой, и
-тогда всё верно: `effective` взят по речи. Либо ошибся определитель — тогда
-средство одно: закреп в `[asr] language`. Он действует на все ролики сразу и
-годится, только когда язык у всех один; объявить язык ролику или ссылке пока
-нельзя. Закреп читается при старте — после правки перезапустить демон. Пока он
-стоит, дорожки, сделанные без него, не находятся: каждый открытый ролик
-распознаётся заново. Снятый закреп возвращает прежнюю запись вместе с прежней
-ошибкой — исправить один ролик насовсем пока нельзя. В журнале у каждого
-распознанного ролика есть строка с решением и голосами окон, а расхождение и
-окна с речью, на которых определитель не ответил, выходят предупреждениями:
+`mismatch: true` is a reason to look into the video. Either YouTube got the label wrong
+again, and then everything is right: `effective` is taken from the speech. Or the
+detector got it wrong — then there is one remedy: a pin in `[asr] language`. It applies
+to all videos at once and works only when the language is the same for all; declaring a
+language for a video or a link is not possible yet. The pin is read at startup — after
+editing it, restart the daemon. While it is set, tracks made without it are not found:
+every opened video is recognised again. A removed pin brings back the previous entry
+together with the previous mistake — fixing one video for good is not possible yet. In
+the journal, every recognised video has a line with the decision and the window votes,
+while a mismatch and windows with speech where the detector did not answer come out as
+warnings:
 
 ```
 journalctl --user -u yt-trans --since today | grep <id>
 ```
 
-### После обновления
+### After the update
 
-Сразу после слияния в рабочую копию, из которой запущен демон (`~/Work/yt-trans`), —
-`systemctl --user restart yt-trans`: демон держит код с запуска, а воркер
-распознавания берёт с диска; прежний процесс шлёт новому воркеру `--initial-prompt`,
-которого тот не знает, и каждое распознавание падает отказом «ASR не справился:
-usage: …».
+Right after merging into the working copy from which the daemon runs
+(`~/Work/yt-trans`) — `systemctl --user restart yt-trans`: the daemon holds the code from
+startup, while the recognition worker takes it from disk; the previous process sends the
+new worker `--initial-prompt`, which it does not know, and every recognition fails with
+the refusal “ASR не справился: usage: …”.
 
-Обновление с этой работой (новый ключ кэша: `SCHEMA_VERSION` и `PROMPT_VERSION` 2
-в `helper/cache.py`) обесценивает весь кэш дорожек: каждый уже переведённый ролик
-при следующем просмотре распознаётся и переводится заново — один раз, дальше он
-снова в кэше. До этого F5 на таком ролике показывает кнопку запуска, а не готовые
-субтитры.
+An update with this work (a new cache key: `SCHEMA_VERSION` and `PROMPT_VERSION` 2 in
+`helper/cache.py`) devalues the whole track cache: every already translated video is
+recognised and translated again on the next view — once, and after that it is in the
+cache again. Before that, F5 on such a video shows the start button, not ready subtitles.
 
-Прежние записи остаются на диске — около 18 МБ (169 записей на 2026-11-01) — и
-сами не уйдут: вытеснение срабатывает, только когда кэш перерастёт 2 ГиБ.
-Удалять ли их — решение хозяина. Решив удалить, сначала остановить демон: он
-держит `index.sqlite` открытым, а при запуске заводит пустые индекс и каталог
-заново. Удаляются только эти два пути: рядом в `~/.cache/yt-trans` лежат веса
-моделей (`hf/`), их удалять нельзя. Вместе с прежними уходят и записи,
-сделанные уже после обновления, — такие ролики распознаются ещё раз.
+Previous entries stay on disk — about 18 MB (169 entries as of 2026-11-01) — and do not
+go away on their own: eviction runs only when the cache outgrows 2 GiB. Whether to delete
+them is the owner's decision. Having decided to delete, stop the daemon first: it keeps
+`index.sqlite` open, and at startup it creates empty index and directory anew. Only these
+two paths are deleted: next to them in `~/.cache/yt-trans` lie the model weights (`hf/`),
+which must not be deleted. Along with the previous ones, entries made after the update
+also go — such videos are recognised one more time.
 
 ```
 systemctl --user stop yt-trans
@@ -4593,213 +4598,209 @@ systemctl --user start yt-trans
 ```
 ````
 
-Перед вставкой сверить с кодом каждое число и имя: окна, 3 с, 0.2 и список соседей — `helper/language.py`; ключи и
-`reason` — `LanguageVerdict`; путь токена — `TOKEN_PATH` в `helper/app.py`. Где построенное разошлось с этим текстом,
-писать построенное.
+Before inserting, check every number and name against the code: the windows, 3 s, 0.2 and the
+neighbour list — `helper/language.py`; the keys and `reason` — `LanguageVerdict`; the token path —
+`TOKEN_PATH` in `helper/app.py`. Where what was built diverges from this text, write what was built.
 
-- [ ] **Step 8: Пометки «Как построено» в спецификации**
+- [ ] **Step 8: “How it was built” notes in the spec**
 
-`docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md`, шесть вставок, каждая отдельным абзацем после
-указанной строки (номера на 98a3ad2, место узнаётся по цитате). Дата в пометках — день коммита (`date +%F`). Где
-построенное разошлось с текстом ниже, писать построенное.
+`docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md`, six insertions, each a separate paragraph
+after the given line (numbers from 98a3ad2, the place is recognised by the quote). The date in the notes
+is the commit day (`date +%F`). Where what was built diverges from the text below, write what was built.
 
-После строки 290 («`targetLang` и `generation`; остальных трёх пока нет.»):
-
-````markdown
-**Как построено** (ветка `source-language`, ГГГГ-ММ-ДД): источник реплик и язык лежат
-в объекте `language` (`source` — `asr` или `manual`, `track` — метка дорожки автора),
-а не в поле `source` на верхнем уровне снимка: его расширение показало бы надписью
-«качаю asr…» (`extension/content.js`, ветка `message.source`). Поля — в разделе
-«Решения» ниже.
-````
-
-После строки 799 («дописывается исследованием и ляжет ниже.»):
+After line 290 (“`targetLang` and `generation`; the other three are not there yet.”):
 
 ````markdown
-**Как построено** (ветка `source-language`, ГГГГ-ММ-ДД). Сохранённых ссылок в демоне
-пока нет, и объявить язык человек может одним способом: кодом в `[asr] language`
-файла `config.toml`, сразу для всех роликов (закреп); `auto` — не объявлять.
-Определитель запускается на каждом распознаваемом ролике, и при закрепе тоже: закреп
-решает токен декодера, а расхождение с услышанным уходит на провод (см. «Решения»).
-Объявление на ссылку или на ролик отложено вместе со своим последствием: язык в ключ
-реестра заданий не входит, а при объявлении на ссылку войти должен. Дешёвый путь для
-английских роликов не открыт: дорожка автора по-прежнему берётся только сербского
-семейства.
+**How it was built** (branch `source-language`, YYYY-MM-DD): the source of the cues and the language
+live in the `language` object (`source` — `asr` or `manual`, `track` — the author track's label), and
+not in a `source` field at the top level of the snapshot: the extension would show that as the label
+“качаю asr…” (`extension/content.js`, the `message.source` branch). The fields are in the “Decisions”
+section below.
 ````
 
-После строки 909 (конец пункта 10, «строку по признаку `failed`.»):
+After line 799 (“is filled in by the research and will go below.”):
 
 ````markdown
-**Как построено** (ветка `source-language`, ГГГГ-ММ-ДД). Пункт 3 закрыт: затравка
-есть только у сербского семейства, имена берутся из заголовка и тегов, сегменты
-отсеиваются по `no_speech_prob`, `avg_logprob` и `compression_ratio` (у «повтора» —
-только зациклившиеся предложения), эхо затравки в реплики не попадает, а пустые в
-пакетном режиме заградители из вызова убраны. Пункт 4 закрыт: раннего возврата на
-метаданных нет, расхождение пишется в журнал предупреждением и уходит на провод.
-Пункт 5 закрыт частично и иначе, чем предлагалось, — см. «Решения». Пункт 6 закрыт:
-коды проверяются, `""` до Whisper не доходит. Пункт 7 закрыт наполовину: сокращения
-(«U.S. market, e.g.», «5. maja») реплику больше не рвут, а `CONJUNCTIONS` не тронуты —
-перенос строк до провода не доходит (`_to_job_cues` берёт только текст). Пункт 8 закрыт наполовину: метки сербского
-семейства годятся в любой записи, другие языки отложены. Пункт 9 закрыт:
-`targetLang` вышел из ключа кэша, в снимке остался. Пункты 1, 2 и 10 — работа
-«Проверка перевода».
+**How it was built** (branch `source-language`, YYYY-MM-DD). The daemon has no saved links yet, and a
+person can declare the language in one way: with the code in `[asr] language` of the `config.toml`
+file, for all videos at once (a pin); `auto` — do not declare. The detector runs on every recognised
+video, with a pin as well: the pin sets the decoder token, while a mismatch with what was heard goes
+onto the wire (see “Decisions”). Declaring a language for a link or a video is deferred together with
+its consequence: the language is not part of the job registry key, but with a per-link declaration it
+would have to be. A cheap path for English videos is not open: the author track is still taken only
+from the Serbian family.
 ````
 
-После строки 956 (конец списка «Решения», «…вытеснив собственное задание демона.»):
+After line 909 (the end of item 10, “the line by the `failed` attribute.”):
 
 ````markdown
-**Как построено** (ветка `source-language`, ГГГГ-ММ-ДД), по решениям:
-
-- **Определитель всегда.** Воркер слушает до восьми окон по 30 секунд, разложенных
-  по 10–90 % длины (запись не длиннее окна — одно окно). Окно, где речи по VAD меньше
-  трёх секунд, в модель не идёт и не голосует; окно, на котором модель упала, тоже.
-  Доли bs/hr/sr складываются в одну семью, победитель — наибольшая средняя доля по
-  голосовавшим окнам. Если победил не сербский язык и не славянский сосед (mk, bg,
-  sl, ru, uk, be, cs, sk, pl), а сербская доля не ниже 0.2, решение — сербский
-  (`reason: "floor"`): так Whisper проигрывал сербскую речь английскому
-  (3XJLfTSZy6I: en 0.55 против 0.44). Не проголосовало ни одно окно — один проход по
-  первым 30 секундам речи всего ролика; и там пусто — метка YouTube, а без неё
-  сербский (`fallback`, `detected: null`). Метаданные решают только тогда; при
-  голосах окон они лишь помечают расхождение (Juske: YouTube en, речь sr → sr,
-  «YouTube указал en, по речи sr»). Закреп решает токен декодера как задан (hr и bs
-  сохраняются), определитель работает и при нём. Всё — в том же запуске воркера и
-  под тем же пропуском на карту: ни второй модели, ни второй загрузки. Константы — в
-  `helper/language.py`, и любая их правка требует поднять `PROMPT_VERSION`.
-- **На проводе** — объект `language` в снимке и событие `{"type": "language"}`; оно
-  приходит раньше `segmented` и `cues` на каждом пути: распознавание, дорожка автора,
-  кэш, восстановление. Поля: `effective`, `declared`, `declaredBy`, `detected`,
-  `confidence` (два знака), `reason`, `source`, `track`, `verified`, `mismatch`,
-  `note`. `note` — готовая фраза не длиннее 60 знаков: «YouTube указал en, по речи
-  sr», «в настройках sr, по речи en», «речи почти нет, язык принят за sr». Задание,
-  возобновлённое после паузы, решение сохраняет. Расширение его не показывает — оно
-  заморожено; до экрана решение дойдёт со страницей для планшета, а пока видно в
-  снимке и в журнале (`docs/running.md`, «Какой язык решил демон»).
-- **Ключ кэша — отступление от «поиска по объявленному, записи под действующим».**
-  В ключе объявление человека (закреп; `""`, если его нет), а не действующий язык:
-  кэш обязан ответить до любой работы карты, а действующий язык появляется только
-  внутри воркера. Где человек объявил, действующий язык с объявленным совпадает, и
-  формула выполняется; где нет — решение лежит в записи и приезжает на провод при
-  каждом просмотре из кэша. `targetLang` из ключа вышел (`Job.target_lang` и
-  `targetLang` в снимке остались). `PROMPT_VERSION` и `SCHEMA_VERSION` подняты до 2:
-  прежние записи не находятся, с диска не удалены (около 18 МБ на 2026-11-01; удалять
-  ли — решает хозяин). Результат без единой реплики в кэш не пишется, а такую старую
-  запись не отдают ни конвейер, ни восстановление. Восстановление перебирает записи
-  от новых к старым и пересчитывает ключ по сохранённому отпечатку и нынешнему
-  закрепу; версиям и моделям из файла не верит. Решение с низкой уверенностью
-  кэшируется: повтор стоил бы карты на каждом просмотре, а средство от ошибки —
-  пометка на проводе и закреп.
-- **Коды.** Сто кодов faster-whisper 1.2.1 вписаны в `helper/language.py` и сверяются
-  тестом с установленным пакетом. Замены: sh, me, cnr → sr; iw → he, jv → jw, fil →
-  tl, nb → no, in → id. Неверный закреп не роняет демон: при запуске — `log.error`, а
-  каждому заданию — отказ до запроса к YouTube фразой «неизвестный язык «…»: [asr]
-  language в config.toml», без повтора. Метка YouTube, которой нет в списке, просто
-  не подсказывает.
-- **Затравка** — функция действующего языка: фраза есть только у сербского семейства,
-  у остальных затравки нет вовсе. Имена — из заголовка и тегов, не из описания (эхо в
-  поле шло из его шаблонных строк), латиницей; имя, оставшееся кириллицей,
-  выбрасывается. Сегменты отсеиваются: «тишина» (`no_speech_prob` > 0.6 при
-  `avg_logprob` < −1.0) выбрасывает сегмент целиком, а «повтор»
-  (`compression_ratio` > 2.4) только помечает его: сегмент пакетного режима — кусок
-  речи до 30 с, и из него уходят одни зациклившиеся предложения — со своей степенью
-  сжатия выше 2.4 или повторяющие уже сказанное в этом сегменте; диалог перед петлёй
-  остаётся. Каждый отсев пишется в журнал. Эхо — отступление от «совпадающая с
-  затравкой»: точного совпадения нет ни в одной из 66 620 реплик кэша, поэтому эхом
-  считается предложение хотя бы из двух разных слов, все слова которого есть в
-  затравке, хотя бы одно не из служебных (ovo, je, video, na, se, srpskom, jeziku), и
-  среди них есть необиходное слово фразы или вводки имён (transkript, snimka, pominju)
-  либо два разных имени не из служебных: одно имя заголовка в обиходной фразе
-  («Šta je ovo?») — речь.
-- **Дорожка автора на любом языке — отложено.** Сверять метку с речью без карты нечем:
-  определителя меньше large-v3 и turbo на диске нет, зонд на карте отнял бы у пути
-  дорожки его смысл, а брать чужую дорожку без сверки значит вернуть случай Juske
-  (метка en на сербской речи). Условия возврата — в плане, раздел «Отложено». Сделано
-  меньшее: метки сербского семейства годятся в любой записи (sr-Latn, sr-Cyrl, SR, sh,
-  cnr) и латинизируются, `live_chat` не годится никогда, закреп вне семейства
-  дорожку не берёт. Решение по дорожке: `source: "manual"`, `reason: "track"`,
-  `detected` и `verified` — `null`.
-- **Не сделано здесь** (работа «Проверка перевода»): типизированная вторая строка,
-  приговор проверяльщиков, языконезависимая защита от съезда реплик и видимые пометки
-  «выравнивание не проверено» и «вторая строка не удостоверена». «Одна модель на все
-  направления» верна без правок.
+**How it was built** (branch `source-language`, YYYY-MM-DD). Item 3 is closed: the prompt exists only
+for the Serbian family, names come from the title and tags, segments are filtered by `no_speech_prob`,
+`avg_logprob` and `compression_ratio` (for “повтор” — only the looping sentences), the prompt echo does
+not reach the cues, and the guards that are empty in batched mode are removed from the call. Item 4 is
+closed: there is no early return on metadata, the mismatch is written to the journal as a warning and
+goes onto the wire. Item 5 is closed in part and differently from what was proposed — see “Decisions”.
+Item 6 is closed: the codes are checked, `""` does not reach Whisper. Item 7 is half closed:
+abbreviations (“U.S. market, e.g.”, “5. maja”) no longer tear a cue apart, and `CONJUNCTIONS` are
+untouched — the line break does not reach the wire (`_to_job_cues` takes only the text). Item 8 is half
+closed: Serbian-family labels are accepted in any spelling, other languages are deferred. Item 9 is
+closed: `targetLang` left the cache key and stayed in the snapshot. Items 1, 2 and 10 are the
+“Translation check” work.
 ````
 
-После строки 965 («…Это одна строка.»):
+After line 956 (the end of the “Decisions” list, “…having evicted the daemon's own job.”):
 
 ````markdown
-**Как построено** (ветка `source-language`, ГГГГ-ММ-ДД): в `config.example.toml`
-стоит `language = "auto"` и объяснение, что определитель работает всегда, а код
-закрепляет язык каждого ролика и годится, только когда язык у всех один; sh, me и
-cnr принимаются как sr.
+**How it was built** (branch `source-language`, YYYY-MM-DD), by decision:
+
+- **The detector always.** The worker listens to up to eight windows of 30 seconds spread over
+  10–90 % of the length (a recording no longer than a window — one window). A window where VAD hears
+  less than three seconds of speech does not go to the model and does not vote; nor does a window
+  where the model failed. The bs/hr/sr shares fold into one family, and the winner is the largest
+  average share over the voting windows. If the winner is not Serbian and not a Slavic neighbour (mk,
+  bg, sl, ru, uk, be, cs, sk, pl), while the Serbian share is at least 0.2, the decision is Serbian
+  (`reason: "floor"`): that is how Whisper lost Serbian speech to English (3XJLfTSZy6I: en 0.55
+  against 0.44). If no window voted — one pass over the first 30 seconds of speech of the whole video;
+  and if that is empty too — the YouTube label, and without it Serbian (`fallback`, `detected: null`).
+  Metadata decides only then; with window votes it only flags the mismatch (Juske: YouTube en, speech
+  sr → sr, “YouTube указал en, по речи sr”). The pin sets the decoder token as given (hr and bs are
+  kept), and the detector runs with it too. All of it in the same worker run and under the same GPU
+  lease: neither a second model nor a second load. The constants are in `helper/language.py`, and any
+  edit of them requires raising `PROMPT_VERSION`.
+- **On the wire** — the `language` object in the snapshot and the `{"type": "language"}` event; it
+  arrives before `segmented` and `cues` on every path: recognition, author track, cache, restore. The
+  fields: `effective`, `declared`, `declaredBy`, `detected`, `confidence` (two decimals), `reason`,
+  `source`, `track`, `verified`, `mismatch`, `note`. `note` is a ready-made phrase no longer than 60
+  characters: “YouTube указал en, по речи sr”, “в настройках sr, по речи en”, “речи почти нет, язык
+  принят за sr”. A job resumed after a pause keeps the decision. The extension does not show it — it
+  is frozen; the decision will reach the screen with the tablet page, and meanwhile it is visible in
+  the snapshot and the journal (`docs/running.md`, “Which language the daemon decided”).
+- **The cache key — a departure from “look up by the declared, write under the effective”.** The key
+  holds the human's declaration (the pin; `""` if there is none), not the effective language: the
+  cache must answer before any GPU work, while the effective language appears only inside the worker.
+  Where the human declared a language, the effective one matches the declared one, and the formula
+  holds; where not, the decision lies in the entry and arrives on the wire on every view from the
+  cache. `targetLang` left the key (`Job.target_lang` and `targetLang` in the snapshot stayed).
+  `PROMPT_VERSION` and `SCHEMA_VERSION` are raised to 2: previous entries are not found and not
+  deleted from the disk (about 18 MB as of 2026-11-01; whether to delete them is the owner's call). A
+  result with no cues is not written to the cache, and such an old entry is served by neither the
+  pipeline nor restore. Restore walks entries from newest to oldest and recomputes the key from the
+  saved fingerprint and the current pin; it trusts neither the versions nor the models from the file.
+  A low-confidence decision is cached: a repeat would cost the GPU on every view, and the remedy for a
+  mistake is the flag on the wire and the pin.
+- **Codes.** The hundred faster-whisper 1.2.1 codes are written into `helper/language.py` and checked
+  against the installed package by a test. Substitutions: sh, me, cnr → sr; iw → he, jv → jw, fil →
+  tl, nb → no, in → id. A wrong pin does not bring the daemon down: at startup — `log.error`, and
+  every job — a refusal before the YouTube request with the phrase “неизвестный язык «…»: [asr]
+  language в config.toml”, without a retry. A YouTube label that is not in the list simply does not
+  hint.
+- **The prompt** is a function of the effective language: the phrase exists only for the Serbian
+  family, the rest get no prompt at all. Names come from the title and tags, not from the description
+  (the field echo came from its template lines), in Latin; a name that stays Cyrillic is dropped.
+  Segments are filtered: “тишина” (`no_speech_prob` > 0.6 with `avg_logprob` < −1.0) drops the segment
+  whole, while “повтор” (`compression_ratio` > 2.4) only marks it: a batched-mode segment is a piece
+  of speech up to 30 s, and only the looping sentences leave it — ones with their own compression
+  ratio above 2.4 or repeating what was already said in this segment; the dialogue before the loop
+  stays. Every drop is written to the journal. Echo is a departure from “matching the prompt”: no
+  exact match occurs in any of the 66 620 cues in the cache, so a sentence counts as echo when it has
+  at least two different words, all of them present in the prompt, at least one not a service word
+  (ovo, je, video, na, se, srpskom, jeziku), and among them there is an uncommon word of the phrase or
+  of the names lead-in (transkript, snimka, pominju) or two different names that are not service
+  words: one title name in an everyday phrase (“Šta je ovo?”) is speech.
+- **The author track in any language — deferred.** There is no way to check a label against speech
+  without a GPU: no detector smaller than large-v3 and turbo is on disk, a probe on the GPU would take
+  away the point of the author-track path, and taking a foreign track without checking means bringing
+  back the Juske case (label en on Serbian speech). The conditions for coming back are in the plan,
+  the “Deferred” section. The lesser thing is done: Serbian-family labels are accepted in any spelling
+  (sr-Latn, sr-Cyrl, SR, sh, cnr) and are latinised, `live_chat` is never accepted, and a pin outside
+  the family does not take the track. The track decision: `source: "manual"`, `reason: "track"`,
+  `detected` and `verified` — `null`.
+- **Not done here** (the “Translation check” work): the typed second line, the checkers' verdict, the
+  language-independent protection against cue drift and the visible notes “выравнивание не
+  проверено” and “вторая строка не удостоверена”. “One model for all directions” is correct without
+  edits.
 ````
 
-После строки 1178 («— не выбор одного из двух молча, а пометка на экране.»):
+After line 965 (“This is one line.”):
 
 ````markdown
-**Как построено** (ветка `source-language`, ГГГГ-ММ-ДД). Первое сделано, см. «Решения».
-Зонда для дорожки автора нет: он отложен вместе с дорожками на других языках (там
-же). Пока дорожки берутся только сербского семейства, и решение по ним честно
-говорит, что речь не слушали: `detected` и `verified` — `null`, а расхождение
-считается между объявлением и меткой дорожки («YouTube указал en, дорожка автора
-sr»).
+**How it was built** (branch `source-language`, YYYY-MM-DD): `config.example.toml` has
+`language = "auto"` and an explanation that the detector always runs, while the code pins the language
+of every video and works only when the language is the same for all; sh, me and cnr are accepted as
+sr.
 ````
 
-- [ ] **Step 9: Проверить**
+After line 1178 (“— not a silent choice of one of the two, but a note on the screen.”):
+
+````markdown
+**How it was built** (branch `source-language`, YYYY-MM-DD). The first is done, see “Decisions”.
+There is no probe for the author track: it is deferred together with tracks in other languages (in the
+same place). While tracks are taken only from the Serbian family, the decision on them honestly says
+the speech was not listened to: `detected` and `verified` are `null`, and the mismatch is counted
+between the declaration and the track label (“YouTube указал en, дорожка автора sr”).
+````
+
+- [ ] **Step 9: Verify**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS, 479 passed
 
 Run: `/usr/bin/git status --short`
-Expected: только `helper/cache.py`, `helper/sources/ytdlp.py`, `helper/jobs.py`, `docs/running.md`, спецификация и новый `tests/test_cache_version.py`; `helper/asr/worker.py` и `extension/` не тронуты (и сам файл плана, если в нём отмечали шаги, — в этот коммит его не добавлять).
+Expected: only `helper/cache.py`, `helper/sources/ytdlp.py`, `helper/jobs.py`, `docs/running.md`, the spec and the new `tests/test_cache_version.py`; `helper/asr/worker.py` and `extension/` untouched (and the plan file itself, if steps were ticked in it — do not add it in this commit).
 
-- [ ] **Step 10: Коммит**
+- [ ] **Step 10: Commit**
 
 ```bash
 /usr/bin/git add helper/cache.py helper/sources/ytdlp.py helper/jobs.py docs/running.md docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md tests/test_cache_version.py
 /usr/bin/git commit -m "PROMPT_VERSION 2: дорожки прежних правил языка делаются заново; как читать решение о языке" -m "Версия покрывает всё, что делает дорожку, кроме моделей: правила языка и константы helper/language.py, затравку и фильтры распознавания, нарезку, промпт переводчика. После обновления каждый ролик распознаётся и переводится заново один раз; прежние записи (около 18 МБ) остаются на диске, удалять их — решение хозяина. docs/running.md объясняет, как прочесть поле language снимка; пометки «Как построено» в спецификации записывают построенное и отступления (ключ кэша по закрепу, правило эха, дорожки на других языках отложены). Поправлены устаревшие докстроки и комментарии: skip=translated_subs и «сербский» у непереведённых реплик. docs/running.md теперь называется «Демон: запуск и диагностика»."
 ```
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command goes in a separate Bash call, via `/usr/bin/git`; the timeout must be at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message is in Russian, without `Co-Authored-By` lines or any other signatures.
 
 ---
 
-### Task 12: Калибровка на карте
+### Task 12: Calibration on the GPU
 
-Ручной шаг для хозяина: нужны карта и YouTube, автотеста нет и быть не может. Делается после задачи 11 и до слияния
-ветки. Константы определителя (`MIN_SPEECH_SECONDS = 3.0`, `BCMS_FLOOR = 0.2`, `SLAVIC_NEIGHBOURS`) выведены из
-полевых чисел, снятых, когда окна без речи ещё голосовали; после задачи 5 они не голосуют, и доли сдвинутся. Шаг
-проверяет, что на тех же роликах решение осталось верным, и ничего не трогает, если так. Заодно он прогоняет ответ
-воркера через `asr_cues` демона и смотрит, что выбрасывают фильтры задачи 8: их пороги на этом корпусе не проверены, в
-кэше метрик нет.
+A manual step for the owner: it needs a GPU and YouTube, and there is no automated test and cannot be one.
+Do it after Task 11 and before merging the branch. The detector constants (`MIN_SPEECH_SECONDS = 3.0`,
+`BCMS_FLOOR = 0.2`, `SLAVIC_NEIGHBOURS`) were derived from field numbers collected when windows without
+speech still voted; after Task 5 they do not vote, and the shares will shift. The step checks that the
+decision on the same videos is still correct, and touches nothing if it is. Along the way it runs the
+worker's answer through the daemon's `asr_cues` and looks at what Task 8's filters drop: their thresholds
+have not been checked on this corpus, and the cache has no metrics.
 
-Четвёртый ролик — с русской речью: `2zcvNJdxPHE` (525 с), он есть в кэше хозяина, и в его репликах русские буквы ы,
-э, ъ, ё и ни одной сербской. Запасной — `tXuNg8BxieA` (украинская речь, 1126 с, оттуда же). Пятый — `jWrDvxtofLk`: в
-кэше у него на 201,8–229,6 с шесть реплик диалога, а за ними в том же куске Whisper ушёл в петлю «tak, tak…»; ролик
-проверяет, что «повтор» уносит петлю, а не диалог. Шестой — сербская песня со вступлением без слов; id выбирает хозяин
-и вписывает в переменную `song` в начале шага 2. Песня проверяет путь, которого нет в тестах: как Silero слышит пение,
-проход по всему файлу, запасной язык и что фильтры делают со строками песни.
+The fourth video has Russian speech: `2zcvNJdxPHE` (525 s), it is in the owner's cache, and its cues
+contain the Russian letters ы, э, ъ, ё and not a single Serbian one. The fallback is `tXuNg8BxieA`
+(Ukrainian speech, 1126 s, from the same place). The fifth is `jWrDvxtofLk`: in the cache, at
+201,8–229,6 s it has six dialogue cues, and after them in the same chunk Whisper fell into a “tak,
+tak…” loop; the video checks that “повтор” (repetition) carries away the loop, not the dialogue. The
+sixth is a Serbian song with an intro without words; the owner picks the id and writes it into the
+`song` variable at the start of Step 2. The song checks the path the tests do not have: how Silero
+hears singing, the pass over the whole file, the fallback language, and what the filters do to the
+song's lines.
 
 **Files:**
-- Modify (только если приёмка не прошла): `helper/language.py` — `BCMS_FLOOR`, `SLAVIC_NEIGHBOURS` (задача 5); с ними `tests/test_language.py` — литерал в `test_detector_constants_are_pinned`, при смене `BCMS_FLOOR` первые две строки `test_floor_boundary`; `docs/running.md` — порог и список соседей (таблица `reason`, строка `floor`)
-- Modify (только если константа менялась, а ветку уже развернули): `helper/cache.py` — `PROMPT_VERSION` 3 и строка истории над ним; с ним число в `docs/running.md` («После обновления»)
-- Modify: `docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md` — запись калибровки в конце пометки «Как построено» после списка «Решения» (её добавила задача 11)
-- Test: ручная проверка на карте
+- Modify (only if acceptance fails): `helper/language.py` — `BCMS_FLOOR`, `SLAVIC_NEIGHBOURS` (Task 5); with them `tests/test_language.py` — the literal in `test_detector_constants_are_pinned`, and when `BCMS_FLOOR` changes, the first two lines of `test_floor_boundary`; `docs/running.md` — the threshold and the neighbour list (the `reason` table, the `floor` row)
+- Modify (only if a constant changed and the branch has already been deployed): `helper/cache.py` — `PROMPT_VERSION` 3 and a history line above it; with it the number in `docs/running.md` (“After the update”)
+- Modify: `docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md` — the calibration record at the end of the “How it was built” note after the “Decisions” list (Task 11 added it)
+- Test: a manual check on the GPU
 
 **Interfaces:**
-- Consumes: CLI воркера из задачи 5 — `--language auto`, `--hint CODE`, `--pcm FILE` — и его ответ: `verdict` (`LanguageVerdict.wire()`), `detection` (`bcmsShare`, `votes`, `probed`, `windows`, где окно — `[семья или null, её доля в окне, секунды речи]`); константы `helper/language.py` (задача 5). Из задачи 8: флаг `--prompt-names JSON`, `harvest_names(title, tags)` из `helper/asr/prompt.py`, в ответе — `prompt` и у каждой реплики `no_speech_prob`, `avg_logprob`, `compression_ratio`; `helper.jobs.asr_cues(segments, language, prompt)` — реплики и выбросы `(причина, текст)`, ровно то, что делает с ответом `_accept_asr`. `helper.sources.ytdlp.probe` и `audio_pcm`; `helper.language.hint` (задача 4); `PROMPT_VERSION = 2` (задача 11).
-- Produces: запись калибровки в спецификации; если приёмка шага 7 не прошла — исправленные константы определителя (шаг 8). Пороги фильтров здесь не меняются.
+- Consumes: the Task 5 worker CLI — `--language auto`, `--hint CODE`, `--pcm FILE` — and its answer: `verdict` (`LanguageVerdict.wire()`), `detection` (`bcmsShare`, `votes`, `probed`, `windows`, where a window is `[family or null, its share in the window, seconds of speech]`); the `helper/language.py` constants (Task 5). From Task 8: the `--prompt-names JSON` flag, `harvest_names(title, tags)` from `helper/asr/prompt.py`, and in the answer — `prompt` and, for every cue, `no_speech_prob`, `avg_logprob`, `compression_ratio`; `helper.jobs.asr_cues(segments, language, prompt)` — cues and drops `(reason, text)`, exactly what `_accept_asr` does with the answer. `helper.sources.ytdlp.probe` and `audio_pcm`; `helper.language.hint` (Task 4); `PROMPT_VERSION = 2` (Task 11).
+- Produces: a calibration record in the spec; if Step 7 acceptance fails, corrected detector constants (Step 8). The filter thresholds are not changed here.
 
-- [ ] **Step 1: Освободить карту**
+- [ ] **Step 1: Free the GPU**
 
 ```bash
 systemctl --user stop yt-trans
 nvidia-smi --query-gpu=memory.free --format=csv,noheader
 ```
 
-Expected: свободно не меньше 6144 MiB — столько просит large-v3/float16 (`ASR_VRAM_MIB` в `helper/config.py`). Меньше — в карте ещё переводчик: `ollama ps`, затем `ollama stop qwen3.8:27b` (сам он уходит через минуту после последнего запроса); и тогда мало — память занял рабочий стол, закрыть тяжёлые окна. Демон именно остановить, а не оставить праздным: задание, начатое вкладкой посреди калибровки, встало бы ждать карту, а сторож счёл бы воркер чужой работой.
+Expected: at least 6144 MiB free — that is what large-v3/float16 asks for (`ASR_VRAM_MIB` in `helper/config.py`). If less, the translator is still on the GPU: `ollama ps`, then `ollama stop qwen3.8:27b` (it leaves on its own a minute after the last request); and if it is still low, the desktop took the memory — close the heavy windows. Stop the daemon, do not leave it idle: a job started by a tab in the middle of calibration would sit waiting for the GPU, and the watchdog would take the worker for someone else's work.
 
-- [ ] **Step 2: Скачать звук, метку языка и имена**
+- [ ] **Step 2: Download the audio, the language label and the names**
 
-Из корня рабочей копии ветки `source-language` (иначе `helper` не импортируется). В `song=` вписать id песни вместо `ID_ПЕСНИ`. Список роликов ложится в `$dir/ids`, и следующие шаги берут его оттуда — каждый блок самостоятелен и годится для новой оболочки:
+From the root of the working copy of the `source-language` branch (otherwise `helper` does not import). Put the song id into `song=` instead of `ID_ПЕСНИ`. The video list lands in `$dir/ids`, and the following steps take it from there — each block is self-contained and works in a new shell:
 
 ```bash
 dir=/var/tmp/yt-trans-calibration
@@ -4825,9 +4826,9 @@ print(video, "метка YouTube:", info.audio_language, "длина, с:", info
 done
 ```
 
-Expected: шесть строк; у `Q2QcYOBk0Jo` метка скорее всего `en`, у `3XJLfTSZy6I` — `None`. В `$dir/$id.names` — тот же JSON-список имён из заголовка и тегов, что демон передал бы воркеру в `--prompt-names` (`JobRunner._run_asr`, задача 8). В `$dir/$id.hint` — метка, приведённая `language.hint`, как в `JobRunner._declaration`: `en-US` → `en`, незнакомая — пусто, и тогда шаг 3 `--hint` не передаёт; в строке вывода — сырая метка YouTube. Звук берётся тем же `audio_pcm`, что у демона: та же сортировка `-S lang,+size`, то есть оригинальная дорожка, а не автодубляж. `/var/tmp` — на диске (`/tmp` в Fedora — память), а файл — 64 КБ на секунду ролика. Отказ 403 от googlevideo бывает разовым — повторить команду для этого ролика.
+Expected: six lines; `Q2QcYOBk0Jo` most likely has the label `en`, and `3XJLfTSZy6I` has `None`. In `$dir/$id.names` — the same JSON list of names from the title and tags that the daemon would pass to the worker in `--prompt-names` (`JobRunner._run_asr`, Task 8). In `$dir/$id.hint` — the label normalised by `language.hint`, as in `JobRunner._declaration`: `en-US` → `en`, an unfamiliar one — empty, and then Step 3 does not pass `--hint`; the output line shows the raw YouTube label. The audio is taken by the same `audio_pcm` as in the daemon: the same `-S lang,+size` sorting, that is, the original track, not the auto-dub. `/var/tmp` is on disk (`/tmp` on Fedora is memory), and the file is 64 KB per second of video. A 403 refusal from googlevideo is sometimes one-off — rerun the command for that video.
 
-- [ ] **Step 3: Прогнать воркер**
+- [ ] **Step 3: Run the worker**
 
 ```bash
 dir=/var/tmp/yt-trans-calibration
@@ -4843,9 +4844,9 @@ for id in $(cat "$dir/ids"); do
 done
 ```
 
-Expected: `код выхода 0` шесть раз, по десятку-другому секунд на ролик. `--hint` и `--prompt-names` — ровно то, что передал бы демон (`JobRunner._declaration`, `JobRunner._run_asr`), так что решение о языке и затравка те же, что увидит зритель: без `--prompt-names` воркер распознавал бы вовсе без затравки, и отсев шага 5 мерился бы не на том выводе. Не ноль — в `$dir/$id.json` лежит `{"error": …}`, причина — в выводе выше; `CUDA out of memory` значит, что шаг 1 не освободил карту.
+Expected: `exit code 0` six times, a dozen or so seconds per video. `--hint` and `--prompt-names` are exactly what the daemon would pass (`JobRunner._declaration`, `JobRunner._run_asr`), so the language decision and the prompt are the ones the viewer will see: without `--prompt-names` the worker would recognise with no prompt at all, and the drops of Step 5 would be measured on the wrong output. If not zero, `$dir/$id.json` contains `{"error": …}`, with the cause in the output above; `CUDA out of memory` means Step 1 did not free the GPU.
 
-- [ ] **Step 4: Снять поля**
+- [ ] **Step 4: Record the fields**
 
 ```bash
 dir=/var/tmp/yt-trans-calibration
@@ -4857,11 +4858,11 @@ for id in $(cat "$dir/ids"); do
 done
 ```
 
-Expected: по каждому ролику — `verdict` целиком, доля BCMS с числом голосовавших и пробованных окон, затем окна по строке вида `["sr",0.81,24.1]` (семья, её доля в окне, секунды речи; `null` вместо семьи — окно не голосовало). У песни секунды речи в каждом окне, `votes`/`probed` и решение записываются как есть: это и есть замер. Весь вывод сохранить: он идёт в запись и в коммит.
+Expected: per video — the whole `verdict`, the BCMS share with the number of voting and probed windows, then the windows one line each like `["sr",0.81,24.1]` (family, its share in the window, seconds of speech; `null` instead of a family — the window did not vote). For the song, the seconds of speech in each window, `votes`/`probed` and the decision are recorded as they are: that is the measurement. Keep the whole output: it goes into the record and into the commit.
 
-- [ ] **Step 5: Прогнать ответ воркера через фильтры демона**
+- [ ] **Step 5: Run the worker's answer through the daemon's filters**
 
-Выбрасывает демон, а не воркер: ответ несёт все сегменты с метриками, и `asr_cues` из `helper/jobs.py` (задача 8) делает с ним ровно то, что `_accept_asr`, — «тишина» уходит сегментом, «повтор» и эхо затравки — предложением:
+The daemon drops, not the worker: the answer carries all segments with their metrics, and `asr_cues` from `helper/jobs.py` (Task 8) does with it exactly what `_accept_asr` does — “тишина” (silence) goes as a whole segment, “повтор” (repetition) and “эхо затравки” (prompt echo) as a sentence:
 
 ```bash
 dir=/var/tmp/yt-trans-calibration
@@ -4882,7 +4883,7 @@ for reason, text in dropped:
 done
 ```
 
-Реплики `jWrDvxtofLk` вокруг петли:
+The cues of `jWrDvxtofLk` around the loop:
 
 ```bash
 dir=/var/tmp/yt-trans-calibration
@@ -4898,14 +4899,20 @@ for cue in cues:
 ' "$dir/jWrDvxtofLk.json"
 ```
 
-Expected: по каждому ролику — затравка (`None` у английского и русского: фраза есть только у сербского семейства), число сегментов и реплик, выбросы по причинам и текст каждого выброса — все, без обрезки; затем реплики `jWrDvxtofLk` с 195 по 235 с. Приёмка:
-- выброшенное — шум, а не речь: тишина с выдуманной фразой («Hvala na gledanju.»), петли повторов, эхо затравки;
-- `jWrDvxtofLk`: диалог перед петлёй (около 201,8–229,6 с) — в репликах, петля, если есть, выброшена как «повтор»; если в этот раз не зациклилось — так и записать;
-- песня: ни одна строка текста не выброшена как «тишина»; «повтор» может убрать только строку, повторённую в том же куске, а её первое исполнение остаётся; записать, вышло ли у песни ноль реплик.
+Expected: per video — the prompt (`None` for the English and Russian ones: the phrase exists only for the
+Serbian family), the number of segments and cues, the drops by reason and the text of every drop — all
+of them, uncut; then the cues of `jWrDvxtofLk` from 195 to 235 s. Acceptance:
+- what is dropped is noise, not speech: silence with an invented phrase (“Hvala na gledanju.”),
+  repetition loops, prompt echo;
+- `jWrDvxtofLk`: the dialogue before the loop (about 201,8–229,6 s) is in the cues, the loop, if any,
+  is dropped as “повтор” (repetition); if it did not loop this time, record that;
+- the song: not a single line of text is dropped as “тишина” (silence); “повтор” (repetition) may
+  remove only a line repeated in the same chunk, and its first performance stays; record whether the
+  song ended up with zero cues.
 
-Если среди выброшенного есть речь — пороги не менять: записать числа и тексты в запись калибровки (шаг 9) и отдать решение хозяину. Вывод сохранить вместе с выводом шага 4.
+If there is speech among what was dropped, do not change the thresholds: write the numbers and texts into the calibration record (Step 9) and leave the decision to the owner. Keep the output together with the output of Step 4.
 
-- [ ] **Step 6: Вернуть демон**
+- [ ] **Step 6: Bring the daemon back**
 
 ```bash
 systemctl --user start yt-trans
@@ -4914,62 +4921,64 @@ systemctl --user is-active yt-trans
 
 Expected: `active`
 
-- [ ] **Step 7: Сверить с приёмкой**
+- [ ] **Step 7: Check against acceptance**
 
-| Ролик | Речь | `verdict.effective` | И ещё |
+| Video | Speech | `verdict.effective` | And also |
 |---|---|---|---|
-| `Q2QcYOBk0Jo` (Juske) | сербская; YouTube называл её `en` | `sr` | `reason` `detector` (`floor`, если шаг 8 опускал `BCMS_FLOOR` ради этого ролика); если метка была `en` — `declared` `en`, `declaredBy` `metadata`, `mismatch` `true`, `note` «YouTube указал en, по речи sr» |
-| `3XJLfTSZy6I` (IZA MRAKA) | сербская, метки нет | `sr` | `reason` `detector` или `floor`; `bcmsShare` не ниже `BCMS_FLOOR` (0.2, пока шаг 8 его не менял) |
-| `3UbtKc9MlXg` | английская | `en` | `reason` `detector`; `bcmsShare` ниже `BCMS_FLOOR` (0.2, пока шаг 8 его не менял; в поле было 0.00 во всех восьми окнах) |
-| `2zcvNJdxPHE` | русская | `ru` или код, который шаг 8 внёс в `SLAVIC_NEIGHBOURS` | `reason` `detector`, не `floor` |
-| `jWrDvxtofLk` | сербская: диалог, за ним петля в том же куске | `sr` | диалог 201,8–229,6 с — в репликах, петля, если есть, выброшена как «повтор» (шаг 5) |
-| песня (`song`) | сербское пение, вступление без слов | как вышло | ни одной строки текста в «тишине»; «повтор» убрал только строку, повторённую в том же куске, а её первое исполнение осталось (шаг 5) |
+| `Q2QcYOBk0Jo` (Juske) | Serbian; YouTube called it `en` | `sr` | `reason` `detector` (`floor` if Step 8 lowered `BCMS_FLOOR` for this video); if the label was `en` — `declared` `en`, `declaredBy` `metadata`, `mismatch` `true`, `note` “YouTube указал en, по речи sr” |
+| `3XJLfTSZy6I` (IZA MRAKA) | Serbian, no label | `sr` | `reason` `detector` or `floor`; `bcmsShare` not below `BCMS_FLOOR` (0.2, unless Step 8 changed it) |
+| `3UbtKc9MlXg` | English | `en` | `reason` `detector`; `bcmsShare` below `BCMS_FLOOR` (0.2, unless Step 8 changed it; in the field it was 0.00 in all eight windows) |
+| `2zcvNJdxPHE` | Russian | `ru` or the code Step 8 added to `SLAVIC_NEIGHBOURS` | `reason` `detector`, not `floor` |
+| `jWrDvxtofLk` | Serbian: dialogue, followed by a loop in the same chunk | `sr` | the dialogue 201.8–229.6 s is in the cues, the loop, if any, is dropped as “повтор” (repetition) (Step 5) |
+| the song (`song`) | Serbian singing, an intro without words | as it came out | not a single line of text in “тишина” (silence); “повтор” (repetition) removed only a line repeated in the same chunk, and its first performance stayed (Step 5) |
 
-У первых пяти `votes` не меньше 1: речь есть везде; у песни `votes` — как вышло, это и записывается. Сошлись все строки — константы не трогать, сразу шаг 9.
+For the first five, `votes` is at least 1: there is speech everywhere; for the song `votes` is whatever came out, and that is what gets recorded. If every row matches, do not touch the constants, go straight to Step 9.
 
-- [ ] **Step 8: Если строка не сошлась**
+- [ ] **Step 8: If a row does not match**
 
-- `3XJLfTSZy6I` дал `en` с `reason` `detector`: сербская доля ниже порога. Если его `bcmsShare` хотя бы на 0.1 выше, чем у `3UbtKc9MlXg`, опустить `BCMS_FLOOR` до середины между ними, округлив вниз до 0.05. Зазор меньше 0.1 — константы не трогать: порог эти два ролика не разделяет; записать числа и отдать решение хозяину (средство для такого канала — закреп).
-- `3UbtKc9MlXg` дал `sr` с `reason` `floor`: английский набрал сербскую долю выше порога. То же правило середины, но вверх; при зазоре меньше 0.1 — так же стоп.
-- `Q2QcYOBk0Jo` дал не `sr`: с `reason` `hint` — окна не проголосовали, см. пункт про `votes` ниже; с `detector` и `en` — как первый пункт.
-- `2zcvNJdxPHE` дал `sr`: с `reason` `floor` — победитель не значится соседом; добавить в `SLAVIC_NEIGHBOURS` код, который в `detection.windows` стоит первым в большинстве окон. С `reason` `detector` — сербский у определителя наверху сам по себе, константы этого не лечат: записать и отдать хозяину.
-- `votes` 0 или меньше половины `probed` у ролика с речью: смотреть третье число окон, секунды речи. Если у окон, где речь заведомо есть, оно меньше 3 — VAD считает не так, как ждала задача 5. Это разбор её кода, а не правка константы: остановиться.
-- `jWrDvxtofLk` или песня не сошлись — константы и пороги по ним не трогать: записать числа и тексты в шаг 9 и отдать решение хозяину.
+- `3XJLfTSZy6I` gave `en` with `reason` `detector`: the Serbian share is below the threshold. If its `bcmsShare` is at least 0.1 higher than that of `3UbtKc9MlXg`, lower `BCMS_FLOOR` to the midpoint between them, rounded down to 0.05. If the gap is less than 0.1, do not touch the constants: the threshold does not separate these two videos; record the numbers and leave the decision to the owner (the remedy for such a channel is a pin).
+- `3UbtKc9MlXg` gave `sr` with `reason` `floor`: English picked up a Serbian share above the threshold. The same midpoint rule, but upward; with a gap under 0.1 — stop as well.
+- `Q2QcYOBk0Jo` gave something other than `sr`: with `reason` `hint` — the windows did not vote, see the `votes` item below; with `detector` and `en` — as in the first item.
+- `2zcvNJdxPHE` gave `sr`: with `reason` `floor` — the winner is not listed as a neighbour; add to `SLAVIC_NEIGHBOURS` the code that comes first in most of the windows in `detection.windows`. With `reason` `detector` — Serbian is on top in the detector on its own, and constants do not cure that: record it and leave it to the owner.
+- `votes` 0 or less than half of `probed` for a video that has speech: look at the third number of the windows, the seconds of speech. If for windows where speech certainly exists it is less than 3, VAD counts differently from what Task 5 expected. That is a review of its code, not a constant change: stop.
+- `jWrDvxtofLk` or the song did not match — do not touch the constants and thresholds for them: write the numbers and texts into Step 9 and leave the decision to the owner.
 
-После правки константы:
+After changing a constant:
 
-1. Значение — в `helper/language.py`, у константы — строка с замером (ролик, доля, дата). Вместе с ним: литерал в `test_detector_constants_are_pinned` (`tests/test_language.py`); если `BCMS_FLOOR` стал f, первые две строки `test_floor_boundary` становятся `([("en", 1−f), ("sr", f)], "sr", True)` и `([("en", 1−f+0.01), ("sr", f−0.01)], "en", False)`, литералами с двумя знаками (для 0.15 — `([("en", 0.85), ("sr", 0.15)], "sr", True)` и `([("en", 0.86), ("sr", 0.14)], "en", False)`); порог и список соседей — в `docs/running.md` (таблица «Какой язык решил демон», строка `floor`) и в пометке спецификации после «Решений». `IZA_MRAKA`, `ENGLISH`, `RUSSIAN`, строку с `mk` и тесты воркера не трогать.
-2. `.venv/bin/python -m pytest -q` — PASS, 479 passed. Тесты полевых случаев — `test_floor_turns_the_english_bias_into_serbian`, `test_serbian_speech_under_an_english_label`, `test_english_without_bcms_stays_english`, `test_slavic_neighbour_keeps_its_language_over_the_floor` — не правятся и обязаны остаться зелёными: значение, которое ломает их, противоречит полю — его не брать.
-3. Шаги 1 и 3–7 заново, на всех роликах (звук, метки, имена и список роликов в `$dir/ids` уже есть, шаг 2 не нужен).
-4. `PROMPT_VERSION` второй раз не поднимать: задача 11 уже подняла его до 2, а под двойкой вне тестов ничего не закэшировано — ветка ещё не развёрнута. Если ветку уже развернули, поднять до 3 (правило из комментария к константам): над `PROMPT_VERSION` в `helper/cache.py` — строка истории `# 3 — калибровка …`, число — в `docs/running.md` («После обновления») и в пометке спецификации («`PROMPT_VERSION` и `SCHEMA_VERSION` подняты до 2»); `helper/cache.py` — в `git add` шага 10.
+1. The value goes into `helper/language.py`, with a measurement line at the constant (video, share, date). Along with it: the literal in `test_detector_constants_are_pinned` (`tests/test_language.py`); if `BCMS_FLOOR` becomes f, the first two lines of `test_floor_boundary` become `([("en", 1−f), ("sr", f)], "sr", True)` and `([("en", 1−f+0.01), ("sr", f−0.01)], "en", False)`, as literals with two decimal places (for 0.15 — `([("en", 0.85), ("sr", 0.15)], "sr", True)` and `([("en", 0.86), ("sr", 0.14)], "en", False)`); the threshold and the neighbour list go into `docs/running.md` (the “Which language the daemon decided” table, the `floor` row) and into the spec note after “Decisions”. Do not touch `IZA_MRAKA`, `ENGLISH`, `RUSSIAN`, the `mk` line or the worker tests.
+2. `.venv/bin/python -m pytest -q` — PASS, 479 passed. The field-case tests — `test_floor_turns_the_english_bias_into_serbian`, `test_serbian_speech_under_an_english_label`, `test_english_without_bcms_stays_english`, `test_slavic_neighbour_keeps_its_language_over_the_floor` — are not edited and must stay green: a value that breaks them contradicts the field — do not take it.
+3. Steps 1 and 3–7 again, on all videos (the audio, labels, names and the video list in `$dir/ids` are already there, Step 2 is not needed).
+4. Do not raise `PROMPT_VERSION` a second time: Task 11 has already raised it to 2, and nothing outside the tests is cached under 2 — the branch has not been deployed yet. If the branch has been deployed, raise it to 3 (the rule from the constants comment): above `PROMPT_VERSION` in `helper/cache.py` — a history line `# 3 — calibration …`, and the number — in `docs/running.md` (“After the update”) and in the spec note (“`PROMPT_VERSION` and `SCHEMA_VERSION` raised to 2”); `helper/cache.py` — in the `git add` of Step 10.
 
-- [ ] **Step 9: Записать калибровку**
+- [ ] **Step 9: Record the calibration**
 
-В спецификации, в конец пометки «Как построено», которую задача 11 поставила после списка «Решения», добавить абзац
-с числами из шагов 4 и 5:
+In the spec, at the end of the “How it was built” note that Task 11 placed after the “Decisions” list, add a
+paragraph with the numbers from Steps 4 and 5:
 
 ````markdown
-Калибровка на карте (ГГГГ-ММ-ДД, `python -m helper.asr.worker --language auto` с меткой YouTube в `--hint` и
-именами в `--prompt-names`, как их передал бы демон; выбросы — `asr_cues` демона по ответу воркера):
+Calibration on the GPU (YYYY-MM-DD, `python -m helper.asr.worker --language auto` with the YouTube label in
+`--hint` and the names in `--prompt-names`, as the daemon would pass them; drops are the daemon's
+`asr_cues` over the worker's answer):
 
-| Ролик | Речь | Окна (голоса/всего) | Доля BCMS | Решение | `reason` | Выброшено (тишина / повтор / эхо) |
+| Video | Speech | Windows (votes/total) | BCMS share | Decision | `reason` | Dropped (silence / repetition / echo) |
 |---|---|---|---|---|---|---|
-| Q2QcYOBk0Jo | сербская, метка en | … | … | sr | detector | … / … / … из … |
-| 3XJLfTSZy6I | сербская, метки нет | … | … | sr | … | … / … / … из … |
-| 3UbtKc9MlXg | английская | … | … | en | detector | … / … / … из … |
-| 2zcvNJdxPHE | русская | … | … | ru | detector | … / … / … из … |
-| jWrDvxtofLk | сербская, петля в куске | … | … | sr | … | … / … / … из …; диалог 201,8–229,6 с: … |
-| … (песня) | сербское пение | … | … | … | … | … / … / … из …; реплик … |
+| Q2QcYOBk0Jo | Serbian, label en | … | … | sr | detector | … / … / … out of … |
+| 3XJLfTSZy6I | Serbian, no label | … | … | sr | … | … / … / … out of … |
+| 3UbtKc9MlXg | English | … | … | en | detector | … / … / … out of … |
+| 2zcvNJdxPHE | Russian | … | … | ru | detector | … / … / … out of … |
+| jWrDvxtofLk | Serbian, a loop in the chunk | … | … | sr | … | … / … / … out of …; dialogue 201.8–229.6 s: … |
+| … (the song) | Serbian singing | … | … | … | … | … / … / … out of …; cues … |
 
-Константы не менялись. Выброшенное фильтрами — шум: …
+The constants did not change. What the filters dropped is noise: …
+
+The last lines are factual: if a constant changed, “`BCMS_FLOOR` 0.2 → …: …” with the reasoning from
+Step 8; if the filters dropped speech, say so, with the numbers and texts from Step 5, and leave the
+thresholds to the owner's decision.
 ````
 
-Последние строки — по факту: если константа менялась, «`BCMS_FLOOR` 0.2 → …: …» с доводом из шага 8; если фильтры
-выбросили речь — так и написать, с числами и текстами из шага 5, и оставить пороги на решение хозяина.
+- [ ] **Step 10: Commit and clean up**
 
-- [ ] **Step 10: Коммит и уборка**
-
-Коммитить после шага 6, а не посреди калибровки: хук грузит `qwen3.8:27b` в карту.
+Commit after Step 6, not in the middle of calibration: the hook loads `qwen3.8:27b` onto the GPU.
 
 ```bash
 /usr/bin/git add docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md
@@ -4977,10 +4986,10 @@ Expected: `active`
 rm -r /var/tmp/yt-trans-calibration
 ```
 
-В `git add` — ровно то, что менялось. Константа менялась — первая строка становится `/usr/bin/git add docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md helper/language.py tests/test_language.py docs/running.md`, а в первой строке сообщения названа правка; поднимали ещё и `PROMPT_VERSION` до 3 — к ним `helper/cache.py`.
+In `git add` — exactly what changed. If a constant changed, the first line becomes `/usr/bin/git add docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md helper/language.py tests/test_language.py docs/running.md`, and the first line of the message names the change; if `PROMPT_VERSION` was also raised to 3, add `helper/cache.py` to them.
 
-После слияния в `~/Work/yt-trans` — `systemctl --user restart yt-trans`: демон держит код с запуска, а воркер распознавания берёт с диска (`docs/running.md`, «После обновления»).
+After merging into `~/Work/yt-trans` — `systemctl --user restart yt-trans`: the daemon holds the code from startup, while the recognition worker takes it from disk (`docs/running.md`, “After the update”).
 
-Каждая команда git — отдельным вызовом Bash, через `/usr/bin/git`; таймаут не меньше 360000 мс (хук гоняет обзор диффа до 300 с); `--no-verify` не использовать; сообщение по-русски, без строк `Co-Authored-By` и других подписей.
+Each git command goes in a separate Bash call, via `/usr/bin/git`; the timeout must be at least 360000 ms (the hook runs a diff review for up to 300 s); do not use `--no-verify`; the message is in Russian, without `Co-Authored-By` lines or any other signatures.
 
 ---

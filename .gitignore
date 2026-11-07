@@ -1,15 +1,15 @@
-# Окружение: 2.9 ГБ, воспроизводится из requirements.txt
+# Environment: 2.9 GB, reproduced from requirements.txt
 .venv/
 __pycache__/
 *.py[cod]
 
-# Выходы спайков: генерируемые данные. Воспроизводимая часть — сами скрипты,
-# а выводы замеров записаны в план.
+# Spike outputs: generated data. The reproducible part is the scripts themselves,
+# and the measurement outputs are recorded in the plan.
 spikes/*.json
 
-# Данные плагина remember
+# remember plugin data
 .remember/
 
-# Локальные артефакты
+# Local artifacts
 *.log
 *.wav

@@ -1,11 +1,11 @@
-"""Диагностический слушатель: показывает, что именно шлёт браузер.
+"""Diagnostic listener: shows exactly what the browser sends.
 
-Демон видит «Invalid HTTP request», но не показывает байты. Этот слушатель
-принимает соединение, печатает первые байты и закрывает его — по ним сразу
-видно, TLS это (начинается с 0x16 0x03), нормальный HTTP-апгрейд или что-то ещё.
+The daemon sees "Invalid HTTP request" but does not show the bytes. This listener
+accepts a connection, prints the first bytes and closes it — from them it is immediately
+clear whether it is TLS (starts with 0x16 0x03), a normal HTTP upgrade, or something else.
 
-  python spikes/sniff.py            # слушает 8757
-Затем в настройках расширения поменять порт на 8757 и перезагрузить страницу.
+  python spikes/sniff.py            # listens on 8757
+Then in the extension settings change the port to 8757 and reload the page.
 """
 
 from __future__ import annotations
@@ -25,18 +25,18 @@ def dump(data: bytes) -> str:
 
 def classify(data: bytes) -> str:
     if not data:
-        return "пусто — соединение открыли и закрыли, ничего не отправив"
+        return "empty — the connection was opened and closed without sending anything"
 
     if data[0] == 0x16 and data[1:3] == b"\x03\x01" or data[:1] == b"\x16":
-        return "TLS ClientHello — клиент пришёл по wss://, то есть схему кто-то повысил"
+        return "TLS ClientHello — the client came over wss://, that is, someone upgraded the scheme"
 
     if data[:3] in (b"GET", b"POS", b"OPT", b"HEA"):
         line = data.split(b"\r\n", 1)[0].decode("latin1")
         upgrade = b"upgrade" in data.lower()
 
-        return f"HTTP: {line}" + ("  (с Upgrade — нормальный WebSocket)" if upgrade else "  (БЕЗ Upgrade)")
+        return f"HTTP: {line}" + ("  (with Upgrade — a normal WebSocket)" if upgrade else "  (WITHOUT Upgrade)")
 
-    return "не TLS и не HTTP — неизвестный протокол"
+    return "neither TLS nor HTTP — unknown protocol"
 
 
 def handle(conn: socket.socket, addr) -> None:
@@ -48,8 +48,8 @@ def handle(conn: socket.socket, addr) -> None:
         data = b""
 
     stamp = time.strftime("%H:%M:%S")
-    print(f"\n[{stamp}] соединение с {addr[0]}:{addr[1]}, {len(data)} байт")
-    print(f"    вывод : {classify(data)}")
+    print(f"\n[{stamp}] connection from {addr[0]}:{addr[1]}, {len(data)} bytes")
+    print(f"    verdict: {classify(data)}")
 
     if data:
         print(dump(data))
@@ -67,7 +67,7 @@ def main() -> int:
     server.bind(("127.0.0.1", args.port))
     server.listen(16)
 
-    print(f"слушаю 127.0.0.1:{args.port} — поставь этот порт в настройках расширения")
+    print(f"listening on 127.0.0.1:{args.port} — set this port in the extension settings")
 
     while True:
         conn, addr = server.accept()

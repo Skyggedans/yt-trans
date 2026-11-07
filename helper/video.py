@@ -1,7 +1,7 @@
-"""Скачанные ролики на диске: одна загрузка на ролик, потолок и вытеснение по давности.
+"""Downloaded videos on disk: one download per video, a cap and eviction by age.
 
-Готовность определяется файлом, а не памятью процесса: после перезапуска демона
-скачанное остаётся готовым, и заново его никто не тянет.
+Readiness is determined by a file, not by process memory: after a daemon restart
+what was downloaded stays ready, and nobody pulls it again.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ from helper.env import CACHE_DIR
 from helper.sources.ytdlp import YtDlpError, fetch_video
 
 VIDEO_DIR = CACHE_DIR / "video"
-# Двадцать гибибайт — это примерно пятьдесят часовых роликов в 1080p. Потолок нужен
-# не ради места на диске, а чтобы кэш не рос вечно: смотреть планшетом «ещё одну
-# серию» можно годами, и без вытеснения диск кончился бы молча.
+# Twenty gibibytes is about fifty hour-long videos in 1080p. The cap is needed not
+# for disk space, but so the cache doesn't grow forever: one can watch "one more
+# episode" on a tablet for years, and without eviction the disk would silently run out.
 VIDEO_CACHE_MAX_BYTES = 20 * 1024**3
 VIDEO_TIMEOUT = 1800.0
 
@@ -42,14 +42,14 @@ class VideoStore:
         self.directory = Path(directory)
         self.max_bytes = max_bytes
         self._fetch = fetch
-        # 0o700, а не по umask: каталог может лежать в /tmp, где рядом чужие
-        # процессы, а имена файлов — это id ролика, то есть предсказуемы.
+        # 0o700, not by umask: the directory may sit in /tmp where foreign processes
+        # are nearby, and the file names are the video id, i.e. predictable.
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._states: dict[str, str] = {}
         self._errors: dict[str, str] = {}
         self._tasks: dict[str, asyncio.Task] = {}
-        # Одна загрузка за раз на весь демон: две параллельные качалки делят
-        # полосу и обе не успевают к началу просмотра.
+        # One download at a time for the whole daemon: two parallel downloaders split
+        # the bandwidth and both fail to make it by the start of viewing.
         self._one_at_a_time = asyncio.Semaphore(1)
 
     def path(self, video_id: str) -> Path:
@@ -63,14 +63,15 @@ class VideoStore:
 
         state = self._states.get(video_id, "absent")
 
-        # Файл мог исчезнуть из-под нас: готовность — это файл, а не запись в памяти.
+        # The file may have disappeared from under us: readiness is a file, not a
+        # memory record.
         if state == "ready":
             state = "absent"
 
         return VideoStatus(state, self._errors.get(video_id, ""))
 
     def ensure(self, video_id: str, *, cookies: Path | None = None) -> VideoStatus:
-        """Начать подготовку, если её ещё нет. Возвращается сразу, без ожидания."""
+        """Start preparing if it isn't already. Returns immediately, without waiting."""
         status = self.status(video_id)
 
         if status.state in ("ready", "preparing"):
@@ -97,14 +98,15 @@ class VideoStore:
         try:
             async with self._one_at_a_time:
                 try:
-                    # Анонимно, как и всё прочее: аккаунт yt-dlp YouTube может забанить,
-                    # поэтому cookies идут только туда, где без них никак.
+                    # Anonymously, like everything else: YouTube may ban a yt-dlp
+                    # account, so cookies go only where it's impossible without them.
                     await asyncio.to_thread(
                         self._fetch, video_id, target, VIDEO_TIMEOUT, cookies=None
                     )
                 except YtDlpError as exc:
-                    # Ролик 18+ без входа не отдаётся вовсе. Если аккаунт есть —
-                    # одна вторая попытка с ним; без аккаунта отказ окончательный.
+                    # An 18+ video isn't served at all without signing in. If there's
+                    # an account — one second attempt with it; without an account the
+                    # refusal is final.
                     if not (exc.age_restricted and cookies):
                         raise
 
@@ -114,17 +116,17 @@ class VideoStore:
 
             self._states[video_id] = "ready"
             self.evict()
-        except Exception as exc:  # noqa: BLE001 — любая причина отказа уходит зрителю
+        except Exception as exc:  # noqa: BLE001 — any reason for refusal goes to the viewer
             self._states[video_id] = "error"
             self._errors[video_id] = str(exc) or exc.__class__.__name__
         finally:
             self._tasks.pop(video_id, None)
 
     def evict(self) -> int:
-        """Удалить самые давние ролики, пока кэш не влезет в потолок. Возвращает байты.
+        """Delete the oldest videos until the cache fits the cap. Returns bytes.
 
-        Самый свежий файл не трогается никогда: его только что скачали, чтобы
-        смотреть, и вытеснение ради арифметики стёрло бы именно его.
+        The freshest file is never touched: it was just downloaded to watch, and
+        eviction for the sake of arithmetic would wipe exactly it.
         """
         files = sorted(
             (path for path in self.directory.glob("*.mp4") if path.is_file()),

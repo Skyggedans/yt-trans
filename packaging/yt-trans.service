@@ -1,26 +1,26 @@
-# Юнит пользовательского уровня: systemctl --user, не системный.
+# User-level unit: systemctl --user, not system.
 #
-# Демон работает с видеокартой и с сессией пользователя — ему нужны и переменные
-# сессии, и доступ к /dev/nvidia*, и домашний каталог с настройками и кэшем. Системный
-# юнит пришлось бы городить с User=, окружением и правами; пользовательский
-# получает всё это по построению.
+# The daemon works with the graphics card and with the user session — it needs both session
+# variables and access to /dev/nvidia*, and a home directory with settings and cache. A system
+# unit would have to be built up with User=, environment and permissions; a user one
+# gets all of this by construction.
 #
-# Установка:
+# Installation:
 #   systemctl --user enable --now ~/Work/yt-trans/packaging/yt-trans.service
-# Журнал:
+# Log:
 #   journalctl --user -u yt-trans -f
 
 [Unit]
-Description=yt-trans — субтитры к роликам YouTube локальными моделями
-# Ждать сети на старте незачем: сам демон никуда не ходит, пока из браузера
-# не придёт задание, а к тому моменту сеть давно поднята.
+Description=yt-trans — subtitles for YouTube videos with local models
+# There is no point waiting for the network at startup: the daemon itself goes nowhere until
+# a job comes from the browser, and by that time the network has long been up.
 
-# Сдаться, если он падает на старте раз за разом. Умолчание systemd — пять
-# попыток за десять секунд — при RestartSec=3 не срабатывает НИКОГДА: четыре
-# попытки занимают двенадцать секунд и в окно не помещаются. Ошибка в конфиге
-# (демон намеренно падает на старте, а не через минуту посреди задания) крутилась
-# бы вечно, а systemctl status показывал бы бодрое activating вместо failed —
-# и настоящая причина пряталась бы в журнале под сотней одинаковых трассировок.
+# Give up if it crashes at startup again and again. The systemd default — five
+# attempts in ten seconds — NEVER triggers with RestartSec=3: four
+# attempts take twelve seconds and do not fit in the window. A config error
+# (the daemon deliberately crashes at startup, not a minute into a job) would spin
+# forever, and systemctl status would show a cheerful activating instead of failed —
+# and the real cause would hide in the log under a hundred identical tracebacks.
 StartLimitIntervalSec=60
 StartLimitBurst=4
 
@@ -29,20 +29,20 @@ Type=exec
 WorkingDirectory=%h/Work/yt-trans
 ExecStart=%h/Work/yt-trans/.venv/bin/python -W ignore -m helper.app
 
-# Иначе Python буферизует вывод блоками, раз он идёт не в терминал: journalctl -f
-# молчал бы минутами и вываливал всё разом, ровно тогда, когда лог нужен живым.
+# Otherwise Python buffers output in blocks, since it does not go to a terminal: journalctl -f
+# would be silent for minutes and dump everything at once, exactly when the log is needed live.
 Environment=PYTHONUNBUFFERED=1
 
-# Демон падать не должен, но если упал — поднять. Не Restart=always: чистый выход
-# по SIGTERM это остановка по команде, и перезапускать её значит не уметь остановить.
+# The daemon must not crash, but if it did — bring it up. Not Restart=always: a clean exit
+# on SIGTERM is a stop by command, and restarting it would mean being unable to stop.
 Restart=on-failure
 RestartSec=3
 
-# Остановка гасит всю группу процессов, а не только питон, — так стоит по умолчанию,
-# и здесь это существенно: распознавание живёт в отдельном короткоживущем процессе
-# и держит около 6 ГБ видеопамяти. Переживи он остановку демона, память не вернулась
-# бы никому: сторож, который её отпускает, уже мёртв. Запас времени — чтобы успеть
-# отдать карту и дописать кэш до того, как systemd перейдёт к SIGKILL.
+# Stopping kills the whole process group, not just Python — that is the default,
+# and here it matters: recognition lives in a separate short-lived process
+# and holds about 6 GB of video memory. If it survived the daemon's stop, the memory would not return
+# to anyone: the watchdog that releases it is already dead. The time reserve is to manage
+# to give the card back and finish writing the cache before systemd moves to SIGKILL.
 TimeoutStopSec=30
 
 [Install]

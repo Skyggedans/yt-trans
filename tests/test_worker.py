@@ -1,4 +1,4 @@
-"""Воркер распознавания без карты: окна определителя, решение о языке, разбор аргументов."""
+"""Recognition worker without a graphics card: detector windows, the language decision, argument parsing."""
 
 import io
 import json
@@ -16,11 +16,11 @@ WINDOW = language.WINDOW_SAMPLES
 
 
 class Model:
-    """WhisperModel для _detect: отвечает распределениями по очереди и помнит, что слушал."""
+    """WhisperModel for _detect: answers with distributions in turn and remembers what it heard."""
 
     def __init__(self, *answers) -> None:
         self.answers = list(answers)
-        # Длины отрывков, отданных detect_language, по порядку.
+        # Lengths of the excerpts given to detect_language, in order.
         self.heard: list[int] = []
 
     def detect_language(self, audio=None, features=None, vad_filter=False, **kwargs):
@@ -36,7 +36,7 @@ class Model:
 
 @pytest.fixture
 def vad(monkeypatch):
-    """VAD без silero: речь — это ненулевые отсчёты отрывка."""
+    """VAD without silero: speech is the non-zero samples of the excerpt."""
     import faster_whisper.vad
 
     def speech(audio, vad_options=None, sampling_rate=16000, **kwargs):
@@ -48,7 +48,7 @@ def vad(monkeypatch):
 
 
 def recording(seconds: float, speech: list[float]) -> np.ndarray:
-    """Тишина длиной seconds; в начале каждого окна — столько секунд «речи», сколько в speech."""
+    """Silence of length seconds; at the start of each window as many seconds of "speech" as in speech."""
     audio = np.zeros(int(seconds * SR), dtype="<f4")
 
     for offset, voiced in zip(language.probe_offsets(audio.size), speech):
@@ -69,7 +69,7 @@ def test_detect_hears_only_windows_with_speech(vad):
 
 
 def test_window_where_the_detector_fails_does_not_vote(vad):
-    # Без доли сербской семьи: исход не зависит от BCMS_FLOOR и его калибровки (задача 12).
+    # No Serbian-family share: the outcome does not depend on BCMS_FLOOR and its calibration (task 12).
     model = Model(RuntimeError("CUDA"), *[[("en", 0.95), ("de", 0.05)]] * 7)
 
     detection = worker._detect(model, recording(20 * 60, [30] * 8))
@@ -87,7 +87,7 @@ def test_short_audio_is_one_window_on_the_same_path(vad):
 
     assert model.heard == [audio.size]
     assert detection.probed == 1
-    # Семья, а не верхняя метка: сегодня этот путь отдавал hr 0.45.
+    # The family, not the top label: today this path returned hr 0.45.
     assert detection.language == "sr"
     assert detection.confidence == pytest.approx(0.85)
 
@@ -103,7 +103,7 @@ def test_audio_between_30_and_37_5_seconds_gives_whole_windows(vad):
 
 def test_no_votes_means_one_pass_over_the_whole_file(vad):
     audio = recording(20 * 60, [2] * 8)
-    # Десять секунд речи в заставке, вне окон: окна начинаются со 120-й секунды.
+    # Ten seconds of speech in the intro, outside the windows: the windows start at second 120.
     audio[: 10 * SR] = 0.1
     model = Model([("sr", 0.8), ("en", 0.2)])
 
@@ -150,7 +150,7 @@ AUDIO = np.zeros(5 * SR, dtype="<f4")
 
 
 def detector_says(monkeypatch, detection) -> list[int]:
-    """_detect отвечает готовым Detection; список — длины записей, на которых его звали."""
+    """_detect answers with a ready Detection; the list holds the lengths of the recordings it was called on."""
     heard: list[int] = []
 
     def detect(model, audio):
@@ -173,7 +173,7 @@ def test_detector_runs_even_with_a_pin(whisper, monkeypatch):
     assert result["language"] == "sr"
     assert result["verdict"]["reason"] == "pin"
     assert result["verdict"]["detected"] == "en"
-    assert result["verdict"]["note"] == "в настройках sr, по речи en"
+    assert result["verdict"]["note"] == "in the settings sr, by speech en"
 
 
 def test_speech_outweighs_the_youtube_label(whisper, monkeypatch):
@@ -219,7 +219,7 @@ def test_result_carries_the_verdict_and_the_windows(whisper, monkeypatch):
 def test_unknown_pin_fails_before_the_model_loads(monkeypatch):
     import faster_whisper
 
-    monkeypatch.setattr(faster_whisper, "WhisperModel", lambda *a, **k: pytest.fail("модель грузить рано"))
+    monkeypatch.setattr(faster_whisper, "WhisperModel", lambda *a, **k: pytest.fail("too early to load the model"))
 
     with pytest.raises(language.UnknownLanguage):
         worker.transcribe(AUDIO, language="serbian")
@@ -228,7 +228,7 @@ def test_unknown_pin_fails_before_the_model_loads(monkeypatch):
 def test_parser_keeps_the_cli_contract():
     args = worker.build_parser().parse_args([])
 
-    # helper/measure.py не передаёт --language и рассчитывает на sr.
+    # helper/measure.py does not pass --language and counts on sr.
     assert args.language == "sr"
     assert args.hint is None
     assert (args.model, args.compute_type, args.batch_size) == (worker.DEFAULT_MODEL, "float16", 16)
@@ -237,11 +237,11 @@ def test_parser_keeps_the_cli_contract():
 
 def test_main_refuses_an_unknown_pin_before_reading_audio(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["helper.asr.worker", "--language", "serbian"])
-    monkeypatch.setattr(worker, "transcribe", lambda *a, **k: pytest.fail("до распознавания доходить нельзя"))
+    monkeypatch.setattr(worker, "transcribe", lambda *a, **k: pytest.fail("must not reach recognition"))
 
     assert worker.main() == 2
     assert json.loads(capsys.readouterr().out) == {
-        "error": "неизвестный язык «serbian»: [asr] language в config.toml",
+        "error": 'unknown language "serbian": [asr] language in config.toml',
         "permanent": True,
     }
 

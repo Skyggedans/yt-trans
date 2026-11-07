@@ -1,14 +1,16 @@
-"""Задания: от идентификатора ролика до русских реплик в браузере.
+"""Jobs: from a video identifier to Russian lines in the browser.
 
-Порядок стадий не произволен. Нормализация письменности идёт до сегментации, потому
-что Whisper колеблется между алфавитами внутри одной записи. Сегментация идёт до
-перевода, потому что Whisper отдаёт тридцатисекундные окна по ~300 знаков: их нельзя
-ни показать зрителю, ни отправить в модель — батч таких окон не помещается в ответ,
-и грамматика не даёт закрыть JSON, теряя весь батч целиком.
+The order of the stages is not arbitrary. Script normalization goes before segmentation
+because Whisper wavers between alphabets within one recording. Segmentation goes before
+translation because Whisper returns thirty-second windows of ~300 characters: they can
+neither be shown to the viewer nor sent to the model — a batch of such windows does not
+fit in the answer, and the grammar does not let the JSON be closed, losing the whole
+batch at once.
 
-Реплики вокруг плейхеда переводятся первыми. На медианном двадцатиминутном ролике
-получается около 290 реплик и примерно 75 секунд перевода: ждать их целиком, глядя
-в пустой экран, незачем, когда зритель смотрит одно конкретное место.
+The cues around the playhead are translated first. On the median twenty-minute video
+that is about 290 cues and roughly 75 seconds of translation: there is no reason to wait
+for all of them staring at an empty screen when the viewer is watching one particular
+place.
 """
 
 from __future__ import annotations
@@ -70,103 +72,103 @@ log = logging.getLogger(__name__)
 BATCH_SIZE = 40
 CONTEXT_CUES = 3
 
-# Сбои, после которых имеет смысл дробить батч и пробовать снова: и отказ модели,
-# и битый JSON, и обрыв связи с ollama лечатся одинаково. Ошибка вытеснения сюда
-# намеренно НЕ входит — она должна пройти насквозь и приостановить задание.
+# Failures after which it makes sense to split the batch and try again: a model refusal,
+# broken JSON and a dropped connection to ollama are all cured the same way. The preemption
+# error is deliberately NOT included — it must pass through and pause the job.
 RETRYABLE = (TranslateError, json.JSONDecodeError, httpx.HTTPError)
 
-# Предел длины ролика. Аудио декодируется в память целиком: час записи в 16 кГц
-# float32 — это 230 МБ, и ещё столько же на копию в tobytes() при передаче воркеру.
-# Медиана корпуса 20 минут, самый длинный найденный ролик 78 минут.
+# Video length limit. Audio is decoded into memory in full: an hour of 16 kHz float32
+# recording is 230 MB, and as much again for the copy in tobytes() when handing it to the
+# worker. The corpus median is 20 minutes, the longest video found is 78 minutes.
 MAX_VIDEO_SECONDS = 3 * 3600
 
-# Сколько завершённых заданий держать в памяти. Реплики двадцатиминутного ролика —
-# это сотни объектов, и без вытеснения реестр рос бы всю жизнь процесса.
+# How many finished jobs to keep in memory. The cues of a twenty-minute video are
+# hundreds of objects, and without eviction the registry would grow for the whole life
+# of the process.
 MAX_RETAINED_JOBS = 12
 
-# Сколько незавершённых заданий демон держит разом. Предел от злоупотребления, а не
-# глубина очереди: порт станет доступен домашней сети, и клиент, что заводит задания без
-# счёта, набрал бы их сколько угодно, а каждое — это задача и запрос метаданных, на
-# паузе ещё и сотни мегабайт отложенного звука. Ожидающее задание само по себе дёшево:
-# его задача стоит на пропуске к карте, а звук качается уже под пропуском. Поэтому
-# предел не мал: расширение ставит в очередь столько роликов, сколько у зрителя открыто
-# вкладок, и пятая вкладка обычного вечера не должна получать отказ. Брошенная пауза
-# в счёт не идёт: см. JobManager._unfinished.
+# How many unfinished jobs the daemon holds at once. The limit is against abuse, not the
+# queue depth: the port will be reachable from the home network, and a client that creates
+# jobs without count would pile up any number of them, each of which is a task and a
+# metadata request, and on pause also hundreds of megabytes of stashed audio. A waiting job
+# is cheap by itself: its task sits on the GPU lease, and the audio is downloaded under the
+# lease. That is why the limit is not small: the extension queues as many videos as the
+# viewer has tabs open, and the fifth tab of an ordinary evening should not be refused. An
+# abandoned pause does not count: see JobManager._unfinished.
 MAX_ACTIVE_JOBS = 16
 
-# Длина журнала событий. Реплики дублируются в job.cues, поэтому отставшему
-# клиенту дешевле отдать снимок, чем хранить всю историю ради него одного.
+# Event log length. The cues are duplicated in job.cues, so it is cheaper to give a
+# lagging client a snapshot than to keep the whole history for its sake alone.
 MAX_EVENT_LOG = 2000
 
-# Повторы метаданных и звука внутри одного задания — только для временных сбоев
-# (YtDlpError.transient). Паузы растут: первый повтор ловит разовый 403 от
-# googlevideo, второй — моргнувшую сеть, которой нужно время подняться.
+# Retries of metadata and audio within one job are only for transient failures
+# (YtDlpError.transient). The delays grow: the first retry catches the one-off 403 from
+# googlevideo, the second — a network that blinked and needs time to come up.
 FETCH_ATTEMPTS = 3
 FETCH_BACKOFF = (5.0, 20.0)
 
-# Сколько секунд после начала загрузки звука ещё можно начать новую попытку.
-# Звук качается под пропуском на карту, а пропуск один на весь демон: пока
-# идут повторы, чужие фазы на карте ждут. Обычная загрузка укладывается
-# в секунды, и разовый 403 бюджет пропускает с запасом, а затяжной обрыв
-# сети пусть лучше провалит задание — повторяемо, — чем держит всех.
+# How many seconds after the start of the audio download a new attempt may still begin.
+# The audio is downloaded under the graphics card lease, and the lease is one for the whole
+# daemon: while retries run, other phases on the card wait. An ordinary download fits into
+# seconds, and the one-off 403 fits the budget with room to spare, while a prolonged network
+# outage had better fail the job — repeatably — than hold everyone.
 FETCH_RETRY_BUDGET = 90.0
 
-# Через сколько секунд после отказа опрос может начать задание заново. Только
-# для повторяемых отказов — см. JobManager.get_or_create.
+# How many seconds after a failure the poll may start the job over. Only for retryable
+# failures — see JobManager.get_or_create.
 RETRY_COOLDOWN = 60.0
 
-# Звук задания, которое карту отдало уже после загрузки. На диске и рядом с кэшем,
-# а не в /tmp: в Fedora /tmp — это tmpfs, то есть та же память, а держать в ней
-# десятки и сотни мегабайт на приостановленный ролик и нужно было избежать.
+# Audio of a job that gave the card back already after the download. On disk and next to
+# the cache, not in /tmp: on Fedora /tmp is tmpfs, that is, the same memory, and keeping
+# tens and hundreds of megabytes in it for a paused video was what had to be avoided.
 PAUSED_AUDIO_DIR = YTDLP_CACHE.parent / "paused-audio"
 
-# Сколько хранить отложенный звук паузы, к которой никто не обращается.
-# Открытая вкладка опрашивает демон каждые двадцать пять секунд и каждый раз
-# продлевает срок; полчаса тишины значат, что вкладку закрыли или ушли на другой
-# ролик. Задание при этом остаётся — пропадает только звук, и если к нему всё же
-# вернутся, возобновление скачает его заново.
+# How long to keep the stashed audio of a pause nobody touches.
+# An open tab polls the daemon every twenty-five seconds and every time extends the term;
+# half an hour of silence means the tab was closed or the viewer went to another video. The
+# job stays — only the audio goes away, and if they do come back to it, resuming will
+# download it anew.
 #
-# Этот же срок решает и допуск: простоявшая дольше пауза перестаёт занимать место под
-# MAX_ACTIVE_JOBS (см. Job.is_stale_pause). Подбирая срок ради диска, заодно меняешь,
-# когда брошенные паузы освобождают места под новые ролики.
+# The same term also decides admission: a pause that has stood longer stops taking a place
+# under MAX_ACTIVE_JOBS (see Job.is_stale_pause). Tuning the term for the disk, you also
+# change when abandoned pauses free up places for new videos.
 PAUSED_AUDIO_TTL = 30 * 60.0
 
-# Сколько байт отложенного звука держать на диске всего. Звук паузы — float32 на
-# 16 кГц, то есть около 659 МиБ на ролик в MAX_VIDEO_SECONDS, а PAUSED_AUDIO_TTL убирает
-# только брошенные паузы: пока вкладка опрашивает демон, срок продлевается, и карту
-# могут занимать часами. Без потолка каталог ограничивал бы лишь свободный диск.
-# Четыре гигабайта — это примерно шесть таких заданий в паузе. Сверх потолка _evict
-# убирает самый старый по времени записи звук, а возобновление такого задания
-# скачивает его заново.
+# How many bytes of stashed audio to keep on disk in total. Pause audio is float32 at
+# 16 kHz, that is about 659 MiB per video in MAX_VIDEO_SECONDS, and PAUSED_AUDIO_TTL only
+# removes abandoned pauses: while a tab polls the daemon the term is extended, and the card
+# can be occupied for hours. Without a ceiling the directory would be limited only by free
+# disk. Four gigabytes is roughly six such paused jobs. Above the ceiling _evict removes
+# the audio oldest by write time, and resuming such a job downloads it anew.
 PAUSED_AUDIO_MAX_BYTES = 4 * 1024**3
 
-# Сколько секунд позиция просмотра остаётся в силе после последнего сообщения о ней.
-# Расширение шлёт её раз в секунду, а вкладку в фоне браузер может душить до одного
-# срабатывания таймера в минуту, поэтому порог вдвое больше минуты: придушенная
-# вкладка остаётся в круге, а закрытая, уснувшая и убитая из него выпадают. Снять
-# такого клиента некому — /drop он не присылал, — и без срока его позиция вечно
-# оттягивала бы перевод от тех, кто ещё смотрит. Когда замолчали все, остаётся
-# последняя известная позиция: см. Job.aim.
+# How many seconds the view position stays valid after the last report about it.
+# The extension sends it once a second, and the browser may throttle a background tab to
+# one timer firing a minute, so the threshold is twice a minute: a throttled tab stays in
+# the circle, while a closed, sleeping or killed one falls out of it. There is nobody to
+# remove such a client — it did not send /drop — and without the term its position would
+# forever pull the translation away from those still watching. When everyone has gone
+# silent, the last known position remains: see Job.aim.
 PLAYHEAD_TTL = 120.0
 
-# Клиент, не приславший ключ, — расширение, которое о ключах не знает. Все такие
-# сливаются в одного, как и было, пока позиция просмотра была одним числом.
+# A client that did not send a key is an extension that knows nothing about keys. All such
+# clients merge into one, as it was while the view position was a single number.
 LEGACY_CLIENT = "legacy"
 
-# Предельная длина ключа клиента. Ключ приходит снаружи и становится ключом словаря
-# в каждом задании ролика, поэтому абсурдный (пустой, не строка, слишком длинный) не
-# отвергается, а сводится к LEGACY_CLIENT: позиция просмотра — подсказка приоритета,
-# отвечать на неё ошибкой незачем, а в словаре такому ключу не место.
+# Maximum client key length. The key comes from outside and becomes a dictionary key in
+# every job of the video, so an absurd one (empty, not a string, too long) is not rejected
+# but reduced to LEGACY_CLIENT: the view position is a priority hint, there is no reason to
+# answer it with an error, and such a key has no place in the dictionary.
 MAX_CLIENT_ID = 64
 
-# Потолок на распознавание одного ролика. С запасом: самый длинный допустимый
-# ролик (MAX_VIDEO_SECONDS) large-v3 на карте проходит за минуты.
+# Ceiling on the recognition of one video. With room to spare: the longest allowed video
+# (MAX_VIDEO_SECONDS) takes minutes for large-v3 on the card.
 ASR_TIMEOUT = 3600.0
 
-# Сколько видеопамяти просить под каждую фазу, берётся из конфигурации вместе
-# с именем модели: см. helper/config.py. Цифра не может жить отдельно от модели —
-# у turbo расход втрое меньше, чем у large-v3, и постоянная здесь означала бы,
-# что контроль допуска врёт при любой смене модели.
+# How much video memory to ask for each phase is taken from the configuration together
+# with the model name: see helper/config.py. The figure cannot live apart from the model —
+# turbo consumes three times less than large-v3, and a constant here would mean that
+# admission control lies whenever the model changes.
 
 
 class Stage(str, Enum):
@@ -181,21 +183,21 @@ class Stage(str, Enum):
 
 
 class PermanentJobError(RuntimeError):
-    """Отказ, который не пройдёт сам: эфир, слишком длинный ролик.
+    """A failure that will not pass by itself: a live stream, a video that is too long.
 
-    Наследник RuntimeError, чтобы любой обработчик, ловящий RuntimeError, ловил
-    и его. Отдельный тип нужен ровно для одного — задание с таким отказом
-    не пересоздаётся опросом, сколько бы времени ни прошло.
+    A RuntimeError subclass, so that any handler catching RuntimeError catches
+    this one too. A separate type is needed for exactly one thing — a job with such
+    a failure is not recreated by the poll, however much time passes.
     """
 
 
 class CapacityError(RuntimeError):
-    """Новое задание не берём: незавершённых уже MAX_ACTIVE_JOBS (брошенные паузы не в счёт).
+    """We do not take a new job: there are already MAX_ACTIVE_JOBS unfinished (abandoned pauses do not count).
 
-    Не PermanentJobError: тот значит отказ, который не пройдёт сам, и бегун по нему
-    ставит заданию retryable=False, а переполнение проходит, как только закончится
-    любое задание. Текст — готовая фраза зрителю: сколько роликов уже в работе и что
-    место освободится.
+    Not a PermanentJobError: that one means a failure that will not pass by itself, and the
+    runner sets retryable=False on it, while an overflow passes as soon as any job finishes.
+    The text is a ready-made phrase for the viewer: how many videos are already in progress
+    and that a place will free up.
     """
 
 
@@ -206,12 +208,12 @@ class JobCue:
     end: float
     src: str
     lines: list[str] = field(default_factory=list)
-    # Вторая строка для изучения языка: черногорский перевод той же реплики.
-    # Пусто, если режим выключен.
+    # Second line for language study: the Montenegrin translation of the same cue.
+    # Empty if the mode is off.
     study: str = ""
-    # Перевод не удался ни батчем, ни половинами, ни поштучно: на экран уходит
-    # исходный текст реплики, на языке ролика. Расширение показывает такие реплики
-    # иначе, чтобы зритель видел, что это не перевод.
+    # The translation failed both as a batch, in halves, and one by one: the screen gets
+    # the original text of the cue, in the language of the video. The extension shows such
+    # cues differently so that the viewer sees this is not a translation.
     failed: bool = False
 
     @property
@@ -231,12 +233,12 @@ class JobCue:
 
 
 def _client_key(client_id: object) -> str:
-    """Ключ клиента в словаре позиций: присланный, если пригоден, иначе LEGACY_CLIENT.
+    """The client key in the positions dictionary: the sent one if fit, otherwise LEGACY_CLIENT.
 
-    Пригодна непустая строка не длиннее MAX_CLIENT_ID. Всё остальное — None, число,
-    список, пустая или слишком длинная строка — сводится к одному клиенту без ключа.
-    Тип проверяется первым: у числа нет длины, а список или словарь в роли ключа
-    словаря упали бы TypeError на хэшировании.
+    Fit is a non-empty string no longer than MAX_CLIENT_ID. Anything else — None, a number,
+    a list, an empty or too long string — is reduced to one client without a key.
+    The type is checked first: a number has no length, and a list or dict as a dictionary
+    key would raise TypeError on hashing.
     """
     if isinstance(client_id, str) and 0 < len(client_id) <= MAX_CLIENT_ID:
         return client_id
@@ -245,127 +247,129 @@ def _client_key(client_id: object) -> str:
 
 
 class Job:
-    """Одно задание на один ролик и один вариант дорожки автора."""
+    """One job for one video and one author track variant."""
 
     def __init__(
         self, video_id: str, target_lang: str = "ru", use_author_track: bool = True
     ) -> None:
         self.video_id = video_id
         self.target_lang = target_lang
-        # Брать ли готовую дорожку автора вместо распознавания. Выключается
-        # из настроек расширения: дорожка бывает не транскриптом, а вольным
-        # пересказом или переводом, и тогда своё распознавание точнее. Вместе
-        # с роликом это ключ задания в реестре: у каждого варианта своё задание.
+        # Whether to take the ready author track instead of recognition. Turned off
+        # from the extension settings: the track is sometimes not a transcript but a free
+        # retelling or a translation, and then our own recognition is more accurate. Together
+        # with the video this is the job key in the registry: each variant has its own job.
         self.use_author_track = use_author_track
         self.stage = Stage.QUEUED
-        # Чего задание ждёт в очереди: "gpu" — видеокарту под распознавание.
+        # What the job is waiting for in the queue: "gpu" — the graphics card for recognition.
         self.waiting: str | None = None
         self.error: str | None = None
-        # Может ли отказ пройти сам: сеть, 403, ограничение частоты — да; эфир,
-        # удалённый ролик — нет. От этого зависит, предложит ли расширение
-        # повтор и пересоздаст ли задание опрос. Время отказа монотонное:
-        # остывание не должно зависеть от перевода системных часов.
+        # Whether the failure can pass by itself: network, 403, rate limiting — yes; a live
+        # stream, a removed video — no. This decides whether the extension offers
+        # a retry and whether the poll recreates the job. The failure time is monotonic:
+        # cooling must not depend on the system clock being changed.
         self.retryable = False
         self.failed_at: float | None = None
         self.cues: list[JobCue] = []
         self.info: VideoInfo | None = None
-        # Где смотрит каждый клиент: ключ клиента → (позиция, момент сообщения по
-        # монотонным часам). Часы монотонные по той же причине, что у failed_at:
-        # возраст записи не должен зависеть от перевода системных часов. Писать только
-        # через report_playhead и forget_client: они приводят ключ к одному виду.
+        # Where each client is watching: client key → (position, moment of the report by
+        # the monotonic clock). The clock is monotonic for the same reason as failed_at:
+        # the age of the record must not depend on the system clock being changed. Write only
+        # through report_playhead and forget_client: they bring the key to one form.
         self._playheads: dict[str, tuple[float, float]] = {}
-        # Сколько раз aim() выдал позицию. По остатку от деления на число различных
-        # позиций выбирается, чья очередь переводить.
+        # How many times aim() has handed out a position. The remainder modulo the number of
+        # distinct positions decides whose turn it is to translate.
         self._turn = 0
-        # Откуда взяты реплики: 'asr' или 'manual:<язык>'. Входит в ключ кэша —
-        # дорожка автора и результат распознавания это разные дорожки.
+        # Where the cues came from: 'asr' or 'manual:<language>'. Part of the cache key —
+        # the author track and the recognition result are different tracks.
         self.source = "asr"
-        # Какой язык решил демон и почему: на каком языке реплики и откуда это известно.
-        # None, пока решения нет. Пишется только через _set_language: оно же сообщает о
-        # решении клиентам. В ключ реестра не входит — вариант ролика это
-        # (video_id, use_author_track), а язык — свойство материала, а не варианта.
+        # Which language the daemon decided on and why: what language the cues are in and
+        # how that is known. None while there is no decision. Written only through
+        # _set_language: it also tells the clients about the decision. Not part of the
+        # registry key — the video variant is (video_id, use_author_track), and the language
+        # is a property of the material, not of the variant.
         self.language: LanguageVerdict | None = None
-        # Дорожка автора есть в метаданных, но не скачалась. Запоминаем, чтобы
-        # возобновление после паузы не обращалось за ней к YouTube снова: пока
-        # карта занята, пауза повторяется каждые две минуты.
+        # The author track is in the metadata but did not download. Remembered so that
+        # resuming after a pause does not go to YouTube for it again: while the card is
+        # occupied, the pause repeats every two minutes.
         self.track_failed = False
-        # Ролик 18+, и анонимно YouTube его не отдал. Дальше всё по нему — метаданные,
-        # дорожка, звук, в том числе после паузы — идёт с аккаунтом из настроек;
-        # любой другой ролик аккаунта не касается.
+        # The video is 18+, and YouTube did not give it out anonymously. Everything further
+        # about it — metadata, track, audio, including after a pause — goes with the account
+        # from the settings; no other video touches the account.
         self.account = False
         self.created_at = time.time()
-        # Какое по счёту это задание под своим ключом (ролик и вариант дорожки): 0
-        # у созданного впервые, а пересозданное после отказа получает на единицу
-        # больше (см. get_or_create). Пересозданное может получить другой язык
-        # или взять дорожку автора там, где прежнее откатилось на распознавание, а
-        # нумерация реплик у них разная, поэтому клиенту нужен способ отличить его
-        # снимок от снимка прежнего задания — см. snapshot. Сброшенное через /drop
-        # реестр забывает, так что следующее задание под тем же ключом снова
-        # начинает с 0.
+        # Which number this job is under its key (video and track variant): 0 for the one
+        # created for the first time, and one recreated after a failure gets one more
+        # (see get_or_create). A recreated job may get a different language or take the
+        # author track where the previous one fell back to recognition, and their cue
+        # numbering differs, so the client needs a way to tell its snapshot from the
+        # snapshot of the previous job — see snapshot. The registry forgets a job dropped
+        # through /drop, so the next job under the same key again starts from 0.
         self.generation = 0
 
-        # Журнал событий с курсором. Нужен для длинных опросов: клиент говорит,
-        # что видел до позиции N, и получает всё, что появилось после. Очередей
-        # на подписчика для этого мало — они одноразовые, а опрос переподключается
-        # после каждого ответа и должен продолжать ровно с того места.
+        # Event log with a cursor. Needed for long polls: the client says how far it has
+        # seen up to position N, and receives everything that appeared after. Per-subscriber
+        # queues are not enough for this — they are one-shot, while the poll reconnects
+        # after every answer and must continue from exactly that place.
         self.events: list[dict] = []
-        # Абсолютная позиция первого события, что ещё лежит в журнале. Курсор у
-        # клиента абсолютный, а обрезка сдвигает индексы списка — без этой позиции
-        # после переполнения журнала курсор указывал бы не туда. Конец журнала
-        # читают через journal_end, а не складывают вручную.
+        # The absolute position of the first event still in the log. The client's cursor is
+        # absolute, while trimming shifts the list indices — without this position, after
+        # the log overflows the cursor would point to the wrong place. The end of the log
+        # is read through journal_end, not added up by hand.
         #
-        # Отсчёт идёт от случайного основания, а не от нуля. С нуля у всех журналов
-        # позиции совпадали бы: курсор, унесённый с соседнего варианта того же
-        # ролика или со сброшенного задания, оказался бы допустимым и здесь, если
-        # он короче журнала, и клиент получил бы хвост чужого журнала, не увидев
-        # его начала. Со своим основанием у каждого журнала свой диапазон позиций,
-        # чужой курсор в него не попадает и получает снимок обычной веткой poll.
+        # The count starts from a random base, not from zero. From zero all logs would have
+        # matching positions: a cursor carried over from a neighbouring variant of the same
+        # video or from a dropped job would turn out valid here too, if it is shorter than
+        # the log, and the client would get the tail of someone else's log without seeing
+        # its beginning. With its own base each log has its own range of positions,
+        # someone else's cursor does not fall into it and gets a snapshot through the usual
+        # poll branch.
         #
-        # Основание 48-битное, а не шире: курсор уходит в расширение числом JSON
-        # и возвращается query-параметром, а целые в JavaScript точны только до
-        # 2^53, так что 62-битное основание браузер исказил бы. Следствие: первый
-        # опрос свежего клиента с курсором 0 тоже получает снимок сразу. Это та же
-        # ветка «слишком старого курсора», и она безвредна.
+        # The base is 48-bit, not wider: the cursor goes into the extension as a JSON number
+        # and comes back as a query parameter, and integers in JavaScript are exact only up
+        # to 2^53, so the browser would distort a 62-bit base. Consequence: the first poll of
+        # a fresh client with cursor 0 also gets a snapshot right away. This is the same
+        # "cursor too old" branch, and it is harmless.
         self._dropped = secrets.randbits(48)
         self._wakeup = asyncio.Event()
 
         self._subscribers: set[asyncio.Queue] = set()
         self._task: asyncio.Task | None = None
-        # Ручка на процесс распознавания. Без неё его нечем убить: subprocess.run
-        # внутри asyncio.to_thread не прерывается отменой задачи, поэтому Whisper
-        # пережил бы и отмену, и вытеснение, продолжая держать ~6 ГБ уже без сторожа.
+        # A handle on the recognition process. Without it there is nothing to kill it with:
+        # subprocess.run inside asyncio.to_thread is not interrupted by task cancellation,
+        # so Whisper would survive both the cancellation and the preemption, continuing to
+        # hold ~6 GB already without a watchdog.
         self._asr_proc: subprocess.Popen | None = None
-        # Просьба убить распознавание, которая переживает гонку с его запуском.
-        # Вытеснение может прийти, пока воркер ещё только создаётся и ручки нет:
-        # одна ручка тогда не убила бы ничего, и Whisper отработал бы до конца на
-        # отданной карте. Флаг ставится до чтения ручки, а воркер читает его после
-        # того, как ручку выставил, — так хотя бы одна сторона видит другую.
-        # Он же отличает наше убийство от чужого: см. JobRunner._run_asr.
+        # A request to kill recognition that survives the race with its start.
+        # Preemption may come while the worker is only being created and there is no handle
+        # yet: one handle alone would then kill nothing, and Whisper would run to the end on
+        # the card given up. The flag is set before reading the handle, and the worker reads
+        # it after it has set the handle — so at least one side sees the other.
+        # It also distinguishes our kill from someone else's: see JobRunner._run_asr.
         self._asr_kill = False
-        # Звук, отложенный на диск, когда карту отобрали после загрузки: см.
-        # stash_audio. Файл свой у каждого задания — пересозданное задание
-        # по тому же ролику чужой звук не подхватит.
+        # Audio stashed to disk when the card was taken away after the download: see
+        # stash_audio. Each job has its own file — a recreated job for the same video will
+        # not pick up someone else's audio.
         self._audio_path: Path | None = None
-        # Задание сброшено: откладывать звук больше незачем. См. cancel.
+        # The job was dropped: there is no more point in stashing audio. See cancel.
         self._audio_dead = False
-        # Когда к заданию последний раз обращались — опрос или возобновление.
-        # Отложенный звук брошенной паузы по нему убирает _evict.
+        # When the job was last touched — by a poll or a resume.
+        # _evict uses it to remove the stashed audio of an abandoned pause.
         self.touched_at = time.monotonic()
 
-    # ── подписка на события ──────────────────────────────────────────────
+    # ── subscribing to events ────────────────────────────────────────────
 
     def subscribe(self, queue: asyncio.Queue) -> asyncio.Queue:
-        """Подписать очередь вызывающего на события задания.
+        """Subscribe the caller's queue to the job events.
 
-        Очередь передаётся снаружи, а не создаётся здесь, чтобы одно соединение
-        могло слушать несколько заданий через одну очередь. Иначе читателю пришлось
-        бы ждать сразу на нескольких очередях, а брошенные задачи `get()` успевают
-        забрать сообщение и потерять его.
+        The queue is passed from outside rather than created here so that one connection
+        can listen to several jobs through one queue. Otherwise the reader would have to
+        wait on several queues at once, and abandoned `get()` tasks manage to take a message
+        and lose it.
         """
         self._subscribers.add(queue)
 
-        # Догоняющий снимок: подключившийся позже получает всё, что уже готово,
-        # и дальше следит за потоком наравне с остальными.
+        # A catch-up snapshot: one who connected later gets everything already ready,
+        # and then follows the stream on a par with the rest.
         queue.put_nowait(self.snapshot())
 
         return queue
@@ -374,22 +378,22 @@ class Job:
         self._subscribers.discard(queue)
 
     def is_subscribed(self, queue: asyncio.Queue) -> bool:
-        """Стоит ли очередь среди подписчиков.
+        """Whether the queue is among the subscribers.
 
-        Нужно, чтобы не подписывать её дважды: каждая подписка шлёт догоняющий снимок.
+        Needed so as not to subscribe it twice: every subscription sends a catch-up snapshot.
         """
         return queue in self._subscribers
 
     def _emit(self, event: dict) -> None:
-        # Ролик ставится на каждое событие, а не только на снимок: сокет
-        # подписан сразу на несколько заданий (сцена, идущая копия), и без
-        # ролика клиент не может отличить чужую реплику от своей, а значит и
-        # дописать титры сохранённой копии.
+        # The video is put on every event, not only on the snapshot: the socket
+        # is subscribed to several jobs at once (the stage, the running copy), and without
+        # the video the client cannot tell someone else's cue from its own, and so cannot
+        # finish the subtitles of a saved copy either.
         event.setdefault("videoId", self.video_id)
         self.events.append(event)
 
-        # Журнал ограничен: реплики всё равно целиком лежат в job.cues, поэтому
-        # отставший клиент получит их снимком, а не будет держать нас за хвост.
+        # The log is bounded: the cues lie in job.cues in full anyway, so
+        # a lagging client will get them as a snapshot instead of holding us by the tail.
         if len(self.events) > MAX_EVENT_LOG:
             excess = len(self.events) - MAX_EVENT_LOG
             del self.events[:excess]
@@ -403,32 +407,32 @@ class Job:
 
     @property
     def journal_end(self) -> int:
-        """Позиция сразу за последним событием: с неё клиент получает только новое.
+        """The position right after the last event: from it the client gets only new things.
 
-        Курсор абсолютный, и отсчёт идёт от основания журнала, а не от нуля —
-        см. комментарий у _dropped. Считать позицию вручную, например по
-        len(events), нельзя: она не совпадёт с той, что понимает poll.
+        The cursor is absolute, and the count starts from the log base, not from zero —
+        see the comment at _dropped. Counting the position by hand, for example from
+        len(events), will not do: it would not match the one poll understands.
         """
         return self._dropped + len(self.events)
 
     async def poll(self, cursor: int, timeout: float) -> dict:
-        """События после позиции cursor. Ждёт до timeout, если новых пока нет.
+        """Events after position cursor. Waits up to timeout if there are none yet.
 
-        Отрицательный или слишком старый курсор означает, что клиент отстал или
-        подключился впервые: отдаём снимок и текущую позицию, чтобы он начал
-        с согласованного состояния, а не с середины.
+        A negative or too old cursor means the client has lagged or
+        connected for the first time: we give a snapshot and the current position so that it
+        starts from an agreed state rather than from the middle.
 
-        Курсор ЗА концом журнала означает обратное — он из другого задания на тот
-        же ролик: опрос перешёл на другой вариант дорожки, когда сменили
-        переключатель, либо задание пересоздано после отказа или сброшено через
-        /drop. Это тоже рассинхронизация, и лечится тем же снимком: без него
-        клиент молча ждал бы, пока журнал дорастёт до его позиции, потерял бы все
-        события до неё и подмешал бы новые реплики к показанным старым.
+        A cursor BEYOND the end of the log means the opposite — it is from another job for the
+        same video: the poll moved to another track variant when the switch was changed, or
+        the job was recreated after a failure or dropped through /drop. This is a
+        desynchronization too, and is cured by the same snapshot: without it the client
+        would silently wait until the log grows to its position, would lose all events
+        before it and would mix new cues into the old ones shown.
 
-        Чужой курсор попадает в одну из этих двух веток всегда: позиции каждого
-        журнала отсчитываются от своего случайного основания (см. Job.__init__),
-        и курсор другого задания не сойдёт за позицию внутри этого. Нуль, с
-        которого начинает свежий клиент, для такого журнала тоже слишком стар.
+        Someone else's cursor always falls into one of these two branches: the positions of
+        each log are counted from its own random base (see Job.__init__), and a cursor of
+        another job will not pass for a position inside this one. Zero, from which a fresh
+        client starts, is also too old for such a log.
         """
         end = self.journal_end
 
@@ -436,8 +440,9 @@ class Job:
             return {"cursor": end, "snapshot": self.snapshot(), "events": []}
 
         if cursor >= end:
-            # Ждём появления новых. Таймаут возвращает пустой ответ — это норма,
-            # клиент тут же спросит снова, и соединение не висит дольше лимита.
+            # Waiting for new ones to appear. A timeout returns an empty answer — this is
+            # normal, the client will ask again at once, and the connection does not hang
+            # longer than the limit.
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._wakeup.wait(), timeout)
 
@@ -446,14 +451,13 @@ class Job:
         return {"cursor": end, "events": self.events[cursor - self._dropped :]}
 
     def readiness(self) -> dict:
-        """Что уже переведено, а что ещё пусто — для страницы, которая ждёт на месте.
+        """What is already translated and what is still empty — for the page that waits in place.
 
-        Зритель ставит ролик на паузу там, где ждёт: перевод идёт от текущего места
-        просмотра батчами, поэтому «переведено 30 из 40» ничего не говорит о том,
-        есть ли субтитры именно здесь. pending — слитые интервалы реплик, до которых
-        рука ещё не дошла. translatedThrough — начало первого такого интервала,
-        то есть до какой секунды перевод идёт сплошняком; None значит, что
-        непереведённого не осталось вовсе.
+        The viewer pauses the video where they wait: the translation goes from the current
+        viewing place in batches, so "30 of 40 translated" says nothing about whether the
+        subtitles are here. pending — the merged intervals of cues the hand has not reached
+        yet. translatedThrough — the start of the first such interval, that is, up to which
+        second the translation goes solidly; None means nothing untranslated is left at all.
         """
         pending: list[list[float]] = []
 
@@ -475,27 +479,30 @@ class Job:
         return {
             "type": "snapshot",
             "videoId": self.video_id,
-            # Настройки, с которыми сделана эта дорожка. authorTrack входит в ключ
-            # задания, и по нему клиент видит, какой из вариантов ролика перед ним.
-            # targetLang в ключ не входит: язык один на всех, и его задало первое
-            # обращение к заданию, поэтому клиент с другим языком получает то же
-            # задание и видит расхождение здесь, см. get_or_create.
+            # The settings with which this track was made. authorTrack is part of the job
+            # key, and by it the client sees which of the video variants is before it.
+            # targetLang is not part of the key: the language is one for all, and it was set
+            # by the first request to the job, so a client with a different language gets the
+            # same job and sees the discrepancy here, see get_or_create.
             "authorTrack": self.use_author_track,
             "targetLang": self.target_lang,
-            # По смене номера клиент узнаёт, что задание пересоздано и реплики с
-            # курсором, которые он держит, относились к прежнему: см. Job.generation.
+            # From the change of the number the client learns that the job was recreated and
+            # the cues with the cursor it holds referred to the previous one: see
+            # Job.generation.
             "generation": self.generation,
-            # Решение о языке целиком, одним вложенным объектом. Ключи верхнего уровня
-            # source, message, waiting и retry читает extension/content.js (сборка
-            # надписи бейджа), и «source: asr» наверху превратил бы бейдж в «качаю
-            # asr…». Поэтому у решения свой ключ, а его поля лежат внутри. Снимок отказа
-            # (refusal_snapshot) собран из настоящего Job и получает language: null сам.
+            # The language decision as a whole, as one nested object. The top-level keys
+            # source, message, waiting and retry are read by extension/content.js (building
+            # the badge label), and "source: asr" at the top would turn the badge into
+            # "downloading asr…". That is why the decision has its own key, and its fields
+            # lie inside. The refusal snapshot (refusal_snapshot) is assembled from a real
+            # Job and gets language: null by itself.
             "language": self.language.wire() if self.language else None,
             "stage": self.stage.value,
             "error": self.error,
             "retryable": self.retryable,
-            # Снимок получает и тот, кто подключился посреди ожидания карты:
-            # без поля он видел бы обычную очередь, а не ожидание видеокарты.
+            # The snapshot is also received by one who connected in the middle of waiting
+            # for the card: without the field it would see an ordinary queue rather than
+            # waiting for the graphics card.
             "waiting": self.waiting,
             "title": self.info.title if self.info else "",
             "total": len(self.cues),
@@ -506,21 +513,21 @@ class Job:
 
     def _set_stage(self, stage: Stage, **extra) -> None:
         self.stage = stage
-        # Любая следующая стадия ожидание снимает, поэтому берётся из каждой.
+        # Any next stage removes the waiting, so it is taken from each of them.
         self.waiting = extra.get("waiting")
         self._emit({"type": "state", "stage": stage.value, **extra})
 
     def _set_language(self, verdict: LanguageVerdict) -> None:
-        """Решение о языке на задание и в журнал: клиенты услышат его событием language."""
+        """The language decision onto the job and into the log: the clients hear it as a language event."""
         self.language = verdict
-        # Не через _set_stage: тот снимает waiting и шлёт state, по которому
-        # extension/content.js (updateChip) перерисовывает бейдж, а extension/background.js
-        # (lastStage) решает, продолжать ли опрос. Событие нового типа расширение
-        # пропускает: trackStage, mergeCues и updateChip действуют только на state,
-        # snapshot и cues. Проверено прогоном неизменённых content.js и background.js
-        # в Node: снимок с вложенным language и событие language оставляют бейдж
-        # «перевожу… 2/290» как был, а lastStage по одному событию language даёт
-        # undefined — опрос идёт дальше.
+        # Not through _set_stage: that one removes waiting and sends state, by which
+        # extension/content.js (updateChip) redraws the badge, and extension/background.js
+        # (lastStage) decides whether to keep polling. The extension skips an event of a new
+        # type: trackStage, mergeCues and updateChip act only on state, snapshot
+        # and cues. Verified by running unchanged content.js and background.js
+        # in Node: a snapshot with a nested language and a language event leave the badge
+        # "translating… 2/290" as it was, while lastStage on a single language event yields
+        # undefined — the poll goes on.
         self._emit({"type": "language", "language": verdict.wire()})
 
     def _fail(self, message: str, retryable: bool) -> None:
@@ -529,17 +536,17 @@ class Job:
         self.failed_at = time.monotonic()
         self._set_stage(Stage.ERROR, message=message, retryable=retryable)
 
-    # ── жизненный цикл ───────────────────────────────────────────────────
+    # ── lifecycle ────────────────────────────────────────────────────────
 
     def start(self, runner: JobRunner) -> None:
         if self._task is None:
             self._task = asyncio.create_task(runner.run(self))
 
     def resume(self, runner: JobRunner) -> None:
-        """Продолжить после вытеснения, сохранив уже готовые реплики.
+        """Continue after preemption, keeping the cues already ready.
 
-        Задание то же самое: job.cues уже содержит сегментированные реплики
-        и часть переводов, поэтому _pipeline пойдёт сразу к недостающим.
+        The job is the same one: job.cues already contains the segmented cues
+        and part of the translations, so _pipeline will go straight to the missing ones.
         """
         if self._task and not self._task.done():
             return
@@ -547,11 +554,11 @@ class Job:
         self._task = asyncio.create_task(runner.run(self))
 
     def kill_asr(self) -> None:
-        """Убить процесс распознавания, если он идёт.
+        """Kill the recognition process if it is running.
 
-        Вызывается и при отмене, и при вытеснении: пропуск на GPU отпускается
-        сразу после отмены задачи, поэтому память надо освободить до этого,
-        а не через непредсказуемое время планировщика потоков.
+        Called both on cancellation and on preemption: the GPU lease is released
+        right after the task is cancelled, so the memory must be freed before that,
+        and not after an unpredictable time of the thread scheduler.
         """
         self._asr_kill = True
         proc = self._asr_proc
@@ -559,20 +566,21 @@ class Job:
         if proc and proc.poll() is None:
             proc.kill()
 
-    # ── отложенный звук ──────────────────────────────────────────────────
+    # ── stashed audio ────────────────────────────────────────────────────
 
     def stash_audio(self, audio) -> None:
-        """Отложить скачанный звук до возобновления.
+        """Stash the downloaded audio until the resume.
 
-        Нужно, когда карту отбирают уже после загрузки — посреди распознавания
-        или между ним и загрузкой. Иначе возобновление качало бы ролик заново.
-        Пишется один раз: повторное вытеснение того же задания файл уже застаёт.
+        Needed when the card is taken away already after the download — in the middle of
+        recognition or between it and the download. Otherwise the resume would download the
+        video again. Written once: a repeated preemption of the same job already finds the
+        file there.
         """
         if self._audio_dead:
             return
 
-        # Ручку читаем один раз: запись идёт в рабочем потоке, а уборка бюджета в цикле
-        # событий может сбросить её между проверкой на None и проверкой файла.
+        # Read the handle once: the write goes in a worker thread, and the budget cleanup in
+        # the event loop may reset it between the None check and the file check.
         path = self._audio_path
 
         if path is not None and path.exists():
@@ -588,25 +596,25 @@ class Job:
             with open(handle, "wb") as out:
                 audio.tofile(out)
         except BaseException:
-            # Недописанный файл — это обрезанный звук. Прочитанный при
-            # возобновлении, он распознался бы и ушёл в кэш как целый ролик.
+            # A half-written file is truncated audio. Read on resume,
+            # it would be recognized and go into the cache as a whole video.
             self.discard_audio()
             raise
 
-        # Задание сбросили, пока файл писался: сброс ручки ещё не видел,
-        # и файл остался бы ничьим до перезапуска демона.
+        # The job was dropped while the file was being written: the drop had not seen the
+        # handle yet, and the file would have remained ownerless until the daemon restarts.
         if self._audio_dead:
             self.discard_audio()
 
     def take_audio(self):
-        """Отложенный звук, если он есть. Файл остаётся до конца распознавания.
+        """The stashed audio, if there is any. The file stays until recognition ends.
 
-        Не прочитался — не беда: None, и возобновление скачает звук заново,
-        как если бы файла не было вовсе.
+        Not read — no matter: None, and the resume will download the audio again,
+        as if there had been no file at all.
         """
         self.touched_at = time.monotonic()
 
-        # Один раз, по той же причине, что в stash_audio: чтение идёт в рабочем потоке.
+        # Once, for the same reason as in stash_audio: the read goes in a worker thread.
         path = self._audio_path
 
         if path is None or not path.exists():
@@ -615,7 +623,7 @@ class Job:
         try:
             return np.fromfile(path, dtype="<f4")
         except OSError as exc:
-            log.warning("отложенный звук %s не прочитан: %s", self.video_id, exc)
+            log.warning("stashed audio %s not read: %s", self.video_id, exc)
             self.discard_audio()
 
             return None
@@ -627,45 +635,47 @@ class Job:
             path.unlink(missing_ok=True)
 
     def cancel(self) -> None:
-        # Приостановленное задание своей задачи не имеет — она уже завершилась
-        # паузой, — и убрать его звук, кроме как здесь, некому. Флаг ставится
-        # до сброса ручки, а запись читает его после того, как ручку выставила:
-        # так файл, дописанный уже после сброса, тоже не останется ничьим.
+        # A paused job has no task of its own — it already finished with a pause, — and
+        # there is nobody to remove its audio except here. The flag is set
+        # before the handle is reset, and the writer reads it after it has set the handle:
+        # so a file written already after the drop will not remain ownerless either.
         self._audio_dead = True
 
-        # Сначала то, что держит карту, — процесс распознавания и задача, — и только
-        # потом звук. Сбрасываемое задание реестр уже забыл (JobManager._remove), и
-        # ошибка диска, вылетавшая отсюда раньше, оставляла его работать без хозяина:
-        # Whisper на карте, за ним перевод и запись в кэш, а /drop отвечал 500.
+        # First what holds the card — the recognition process and the task — and only
+        # then the audio. The registry has already forgotten the dropped job
+        # (JobManager._remove), and a disk error that used to fly out of here left it running
+        # without an owner: Whisper on the card, translation and cache writes behind it, and
+        # /drop answering 500.
         self.kill_asr()
 
         if self._task:
             self._task.cancel()
 
-        # Не стёршийся звук остаётся на диске без хозяина: discard_audio снимает ручку
-        # до удаления. Его уберёт бюджет (_trim_paused_audio), когда звука станет
-        # больше PAUSED_AUDIO_MAX_BYTES, или перезапуск демона. Сброс от этого не зависит.
+        # Audio that failed to be erased stays on disk without an owner: discard_audio resets
+        # the handle before deleting. It will be removed by the budget (_trim_paused_audio)
+        # when the audio grows past PAUSED_AUDIO_MAX_BYTES, or by a daemon restart. The drop
+        # does not depend on this.
         try:
             self.discard_audio()
         except OSError as exc:
-            log.warning("звук %s не убран при сбросе: %s", self.video_id, exc)
+            log.warning("audio %s not removed on drop: %s", self.video_id, exc)
 
     @property
     def finished(self) -> bool:
         return self.stage in (Stage.DONE, Stage.ERROR)
 
     def is_stale_pause(self, now: float) -> bool:
-        """Приостановлено, задачи нет, и к заданию дольше PAUSED_AUDIO_TTL никто не обращался.
+        """Paused, no task, and nobody has touched the job for longer than PAUSED_AUDIO_TTL.
 
-        Пауза возобновляется только запросом клиента, сама она не продолжится, и такая,
-        что полчаса молчит, скорее всего брошена: вкладку закрыли или ушли на другой
-        ролик. Живая задача значит, что возобновление уже идёт. Признак общий для двух
-        мест: по нему _evict убирает звук паузы, а JobManager._unfinished не считает её
-        занятым местом. Задание при этом остаётся в реестре со своими репликами, и
-        вернувшийся зритель возобновит его как обычно.
+        A pause is resumed only by a client request, it will not continue by itself, and one
+        that has been silent for half an hour is most likely abandoned: the tab was closed or
+        the viewer went to another video. A live task means the resume is already under way.
+        The sign is shared by two places: _evict uses it to remove the pause audio, and
+        JobManager._unfinished does not count it as an occupied place. The job itself stays in
+        the registry with its cues, and a returning viewer will resume it as usual.
 
-        now передаёт вызывающий: монотонные часы читают один раз на весь обход реестра.
-        Сравнение строгое: ровно PAUSED_AUDIO_TTL ещё не старость.
+        now is passed by the caller: the monotonic clock is read once for the whole registry
+        walk. The comparison is strict: exactly PAUSED_AUDIO_TTL is not yet old age.
         """
         return (
             self.stage is Stage.PAUSED
@@ -673,35 +683,36 @@ class Job:
             and now - self.touched_at > PAUSED_AUDIO_TTL
         )
 
-    # ── плейхед ──────────────────────────────────────────────────────────
+    # ── playhead ─────────────────────────────────────────────────────────
 
     def report_playhead(self, client_id: str | None, t: float) -> None:
-        """Запомнить, где сейчас смотрит клиент.
+        """Remember where the client is watching now.
 
-        Одно сообщение — одна запись на клиента: новая позиция заменяет прежнюю, а место
-        клиента в круге остаётся тем, на котором он появился. Без пригодного ключа
-        клиент — это LEGACY_CLIENT, см. _client_key.
+        One report — one record per client: the new position replaces the previous one, while
+        the client's place in the circle stays the one it appeared at. Without a fit key the
+        client is LEGACY_CLIENT, see _client_key.
         """
         self._playheads[_client_key(client_id)] = (t, time.monotonic())
 
     def forget_client(self, client_id: str | None) -> None:
-        """Снять клиента с руля: его позиция больше не берётся в круг.
+        """Take the client off the wheel: its position is no longer taken into the circle.
 
-        Клиент, что отказался от задания сам, перестаёт влиять на перевод сразу, а не
-        через PLAYHEAD_TTL. Неизвестного клиента пропускаем молча: ключ приходит в запросе
-        снаружи, и он вполне может оказаться уже снятым или чужим.
+        A client that gave up the job itself stops influencing the translation at once,
+        rather than after PLAYHEAD_TTL. An unknown client is skipped silently: the key comes
+        in the request from outside, and it may well turn out already removed or foreign.
         """
         self._playheads.pop(_client_key(client_id), None)
 
     def live_slots(self) -> dict[str, tuple[float, float]]:
-        """Записи тех клиентов, что сообщали о себе не позже PLAYHEAD_TTL назад.
+        """The records of clients that reported themselves no later than PLAYHEAD_TTL ago.
 
-        Единственное место, где решается, жив ли клиент. Круг в aim() и вопрос «есть ли
-        ещё кому смотреть» в JobManager.drop читают этот один ответ, и разойтись им негде.
-        «Старше» значит строго старше: запись возраста ровно PLAYHEAD_TTL ещё жива.
+        The only place where it is decided whether a client is alive. The circle in aim() and
+        the question "is there still anyone watching" in JobManager.drop read this one answer,
+        and they have nowhere to diverge. "Older" means strictly older: a record of exactly
+        PLAYHEAD_TTL age is still alive.
 
-        Только читает: круг не проворачивает и записей не выбрасывает. Порядок — порядок
-        появления клиентов, на нём держится очерёдность круга.
+        Only reads: it does not turn the circle and does not throw records away. The order is
+        the order in which the clients appeared, and the order of the circle rests on it.
         """
         now = time.monotonic()
 
@@ -712,11 +723,11 @@ class Job:
         }
 
     def _position_ahead(self, alive: dict[str, tuple[float, float]]) -> float:
-        """Позиция, которую aim() выдаст следующей. Круг не проворачивает.
+        """The position aim() will hand out next. Does not turn the circle.
 
-        Общая часть aim() и playhead, чтобы «что дальше» считалось одним кодом. alive —
-        ответ live_slots(), уже полученный звавшим: так aim() решает, кто жив, один раз
-        за вызов, а не дважды по двум показаниям часов.
+        The common part of aim() and playhead, so that "what next" is counted by one code.
+        alive is the answer of live_slots(), already obtained by the caller: so aim() decides
+        who is alive once per call, rather than twice from two clock readings.
         """
         if alive:
             positions = list(dict.fromkeys(position for position, _ in alive.values()))
@@ -729,30 +740,33 @@ class Job:
         return 0.0
 
     def aim(self) -> float:
-        """Позиция, вокруг которой берётся следующий батч перевода.
+        """The position around which the next translation batch is taken.
 
-        Окно перевода одно, а смотреть могут сразу несколько клиентов, у каждого своё
-        место. Позиции идут по кругу: каждый вызов отдаёт следующую из различных
-        позиций живых клиентов, в порядке появления клиентов. Круг выбран вместо
-        «самого отстающего»: при зрителях на второй и двадцатой минутах минимум заставил
-        бы второго ждать весь ролик, а перевод и так обгоняет зрителя примерно в двадцать
-        раз, так что половина скорости остаётся десятикратным запасом.
+        There is one translation window, while several clients may be watching at once, each
+        at its own place. The positions go in a circle: each call hands out the next one
+        among the distinct positions of live clients, in the order the clients appeared. The
+        circle is chosen instead of "the most lagging": with viewers at the second and the
+        twentieth minute, the minimum would make the second wait for the whole video, while
+        the translation anyway overtakes the viewer about twenty times, so half the speed
+        remains a tenfold margin.
 
-        Кто жив, решает live_slots. Замолчавшие в круг не берутся, пока есть хоть один
-        живой. Замолчали все — отдаётся самая свежая из сообщённых позиций: раньше она
-        оставалась в задании навсегда, а возврат к нулю дёрнул бы окно перевода к началу
-        ролика у единственного зрителя, чья вкладка просто заморожена. Нуль — только когда
-        записей нет вовсе: о позиции не сообщал никто или всех сняли.
+        Who is alive is decided by live_slots. Those fallen silent are not taken into the
+        circle while there is at least one alive. If everyone fell silent, the freshest of the
+        reported positions is handed out: before, it stayed on the job forever, while a reset
+        to zero would jerk the translation window to the start of the video for the only
+        viewer whose tab is simply frozen. Zero — only when there are no records at all:
+        nobody reported a position or everyone was removed.
 
-        Каждый вызов проворачивает круг, поэтому звать надо один раз на батч.
+        Each call turns the circle, so it must be called once per batch.
         """
         alive = self.live_slots()
         position = self._position_ahead(alive)
 
         if alive:
-            # Просроченные записи выбрасываем, но только когда есть живые. Запасная позиция
-            # берётся из самих записей, и пока рулить некому, их трогать нельзя. С живыми же
-            # она не нужна, а выброс её не меняет: самая свежая запись всегда среди живых.
+            # We throw expired records away, but only when there are live ones. The fallback
+            # position is taken from the records themselves, and while there is nobody to
+            # steer, they must not be touched. With live ones it is not needed, and throwing
+            # them away does not change it: the freshest record is always among the alive.
             self._playheads = alive
             self._turn += 1
 
@@ -760,13 +774,13 @@ class Job:
 
     @property
     def playhead(self) -> float:
-        """Позиция, которую aim() выдаст следующей. Круг не проворачивает.
+        """The position aim() will hand out next. Does not turn the circle.
 
-        Поле осталось от времён, когда это было число для записи. Писать в него теперь
-        нельзя, и присваивание упадёт AttributeError: позицию сообщают через
-        report_playhead. Чтение — только взгляд: оно не тратит ничей ход и записей не
-        выбрасывает, так что читать можно сколько угодно, не отнимая очередь у зрителей.
-        Батч берёт позицию через aim().
+        The field is left from the times when this was a number for writing. Writing into it
+        is now impossible, and assignment will raise AttributeError: the position is reported
+        through report_playhead. Reading is just a look: it does not spend anyone's turn and
+        does not throw records away, so it can be read as much as you like without taking the
+        turn from the viewers. The batch takes the position through aim().
         """
         return self._position_ahead(self.live_slots())
 
@@ -774,12 +788,12 @@ class Job:
 def refusal_snapshot(
     video_id: str, target_lang: str, use_author_track: bool, message: str, retryable: bool
 ) -> dict:
-    """Снимок отказа для ролика, которого в реестре нет и не будет.
+    """A refusal snapshot for a video that is not in the registry and will not be.
 
-    Клиент, которому отказали, читает из ответа опроса снимок обычного вида. Собирается
-    он из настоящего Job, а не вручную: набор полей определяет Job.snapshot(), и вторая
-    их запись разошлась бы с ним при первом же новом поле. Задание нигде не
-    регистрируется и не запускается — оно нужно ровно на этот вызов.
+    The client that was refused reads from the poll answer a snapshot of the usual kind. It
+    is assembled from a real Job rather than by hand: the set of fields is determined by
+    Job.snapshot(), and a second record of them would diverge from it at the first new field.
+    The job is not registered or started anywhere — it is needed for exactly this call.
     """
     refused = Job(video_id, target_lang, use_author_track)
     refused._fail(message, retryable)
@@ -788,15 +802,16 @@ def refusal_snapshot(
 
 
 def _log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None:
-    """Решение о языке — в журнал: строка INFO и предупреждения словами.
+    """The language decision into the log: an INFO line and warnings in words.
 
-    Расширение решения не покажет, а страницы планшета ещё нет: до неё журнал и снимок
-    (GET /v1/jobs/{id}) — единственные места, где решение видно. windows — окна
-    определителя из ответа воркера: [код или None, доля, секунды речи].
+    The extension will not show the decision, and there is no tablet page yet: until then
+    the log and the snapshot (GET /v1/jobs/{id}) are the only places where the decision is
+    visible. windows — the detector windows from the worker answer: [code or None, share,
+    seconds of speech].
 
-    Всё, чего нет, пишется знаком «—»: объявление целиком, услышанный язык, уверенность,
-    код окна, которое не проголосовало, и сам список окон (дорожка автора определителя
-    не слушает).
+    Everything absent is written with the "—" sign: the declaration as a whole, the heard
+    language, the confidence, the code of a window that did not vote, and the window list
+    itself (the author track does not listen to the detector).
     """
     if verdict.declared:
         declared = f"{verdict.declared} ({verdict.declared_by or '—'})"
@@ -804,15 +819,16 @@ def _log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None:
         declared = "—"
 
     confidence = "—" if verdict.confidence is None else f"{verdict.confidence:.2f}"
-    # Секунды целые и вниз, как на проводе: окно, показанное с тремя секундами и больше,
-    # ушло в модель. Округление до ближайшего показало бы окно в 2,6–2,9 с, не дошедшее
-    # до модели, как «3с» — и не объяснило бы, почему о нём нет предупреждения ниже.
+    # The seconds are whole and rounded down, as on the wire: a window shown with three
+    # seconds and more went into the model. Rounding to the nearest would show a window of
+    # 2.6–2.9 s that did not reach the model as "3s" — and would not explain why there is no
+    # warning about it below.
     shown = ", ".join(
-        f"{code or '—'} {share:.2f}/{int(seconds)}с" for code, share, seconds in windows
+        f"{code or '—'} {share:.2f}/{int(seconds)}s" for code, share, seconds in windows
     )
 
     log.info(
-        "язык %s: %s (%s), объявлен %s, по речи %s, уверенность %s, окна: %s",
+        "language %s: %s (%s), declared %s, by speech %s, confidence %s, windows: %s",
         job.video_id, verdict.effective, verdict.reason, declared,
         verdict.detected or "—", confidence, shown or "—",
     )
@@ -820,37 +836,40 @@ def _log_language(job: Job, verdict: LanguageVerdict, windows: list) -> None:
     note = verdict.note()
 
     if verdict.mismatch and note:
-        log.warning("язык %s: %s", job.video_id, note)
+        log.warning("language %s: %s", job.video_id, note)
 
-    # Без голосов решение молча уходит к метке YouTube или к sr, и сломавшийся определитель
-    # (падает на каждом окне, например после обновления faster-whisper) выглядел бы как
-    # ролик без речи. Окно короче порога в модель не шло, и молчать о нём верно.
+    # Without votes the decision silently goes to the YouTube label or to sr, and a broken
+    # detector (failing on every window, for example after a faster-whisper update) would
+    # look like a video without speech. A window shorter than the threshold did not go into
+    # the model, and staying silent about it is right.
     silent = sum(
         1 for code, _, seconds in windows
         if code is None and seconds >= language.MIN_SPEECH_SECONDS
     )
 
     if silent:
-        log.warning("язык %s: определитель не ответил, окон с речью без ответа: %d",
+        log.warning("language %s: detector did not answer, speech windows without an answer: %d",
                     job.video_id, silent)
 
 
 def track_key(config: Config, video_id: str, fingerprint: str, pin: str | None) -> CacheKey:
-    """Ключ кэша дорожки. Рецепт один: по нему ищет и пишет конвейер и ищет восстановление.
+    """The track cache key. One recipe: the pipeline searches and writes by it, and restore searches.
 
-    Язык в ключе — закрепление человека (pin; None — не закреплён), а не действующий
-    язык, хотя замысел велел иначе: «в ключ кэша идёт действующий язык… поиск по
-    объявленному, запись под действующим». Кэш обязан ответить до любой работы на карте
-    (докстрока helper/cache.py), а действующий язык появляется только после воркера.
-    Когда язык закрепил человек, действующий с ним совпадает, а решение по
-    незакреплённому ролику лежит в самой записи и видно на проводе.
+    The language in the key is the human pin (pin; None — not pinned), not the effective
+    language, although the design prescribed otherwise: "the effective language goes into
+    the cache key… search by the declared one, write under the effective one". The cache must
+    answer before any work on the card (helper/cache.py docstring), while the effective
+    language appears only after the worker. When a human has pinned the language, the
+    effective one matches it, and the decision on an unpinned video lies in the record
+    itself and is visible on the wire.
 
-    Метаданные YouTube в ключ не входят: канал Juske помечен en при сербской речи, и язык
-    такого ролика решает определитель. targetLang не входит тоже: на выходе всегда
-    русская и черногорская строки, и клиент с другим targetLang получает ту же дорожку.
+    YouTube metadata is not part of the key: the Juske channel is labelled en with Serbian
+    speech, and the language of such a video is decided by the detector. targetLang is not
+    part of it either: the output is always a Russian and a Montenegrin line, and a client
+    with another targetLang gets the same track.
 
-    Обе модели входят в ключ, поэтому смена любой из них обесценивает старые дорожки
-    автоматически, а не подсовывает перевод от другой модели.
+    Both models are part of the key, so changing either of them devalues the old tracks
+    automatically rather than slipping in a translation from another model.
     """
     return CacheKey(
         video_id=video_id,
@@ -863,15 +882,15 @@ def track_key(config: Config, video_id: str, fingerprint: str, pin: str | None) 
 
 
 class JobRunner:
-    """Выполняет задание, соблюдая дисциплину GPU."""
+    """Runs a job while observing GPU discipline."""
 
     def __init__(self, lease: GpuLease, cache: TrackCache, config: Config) -> None:
         self._lease = lease
         self._cache = cache
         self._config = config
-        # Заявка обязана делаться настроенной моделью, а не константой. Сторож
-        # считает своей ровно объявленную: разойдись эти две вещи, и демон увидит
-        # собственного переводчика как чужую работу и вытеснит сам себя.
+        # The claim must be made by the configured model, not by a constant. The watchdog
+        # counts as its own exactly the declared one: should these two diverge, the daemon
+        # would see its own translator as someone else's work and preempt itself.
         self._lease.claim_model(config.translator.model)
 
     @property
@@ -879,10 +898,10 @@ class JobRunner:
         return self._config.translator.model
 
     def _cache_key(self, job: Job) -> CacheKey:
-        # Объявление — через _declaration, а не hint: негодное закрепление _pipeline уже
-        # отказал через _pin(), а объявление на ролик и на ссылку придёт тоже туда (см.
-        # _declaration). Возобновление после паузы пишет под тем же ключом, под которым
-        # задание искало: настройка не меняется до перезапуска демона.
+        # The declaration goes through _declaration, not hint: _pipeline has already refused
+        # an unfit pin through _pin(), and the declaration for the video and for the link will
+        # come there too (see _declaration). A resume after a pause writes under the same key
+        # the job searched under: the setting does not change until the daemon restarts.
         return track_key(self._config, job.video_id, job.source, self._declaration(job)[0])
 
     async def run(self, job: Job) -> None:
@@ -891,87 +910,89 @@ class JobRunner:
         except asyncio.CancelledError:
             raise
         except Preempted as exc:
-            # Не отказ. Пользователь занял карту, мы её отдали — реплики, которые
-            # успели перевести, остаются на месте, распознавание повторять не нужно.
-            # Возобновлением занимается _pipeline: он видит готовые job.cues и идёт
-            # сразу к переводу недостающих.
+            # Not a failure. The user took the card, we gave it away — the cues that managed
+            # to get translated stay in place, recognition does not need repeating.
+            # The resume is handled by _pipeline: it sees the ready job.cues and goes
+            # straight to translating the missing ones.
             job._set_stage(Stage.PAUSED, message=str(exc),
                            translated=sum(c.translated for c in job.cues))
-            log.info("задание %s приостановлено: %s", job.video_id, exc)
+            log.info("job %s paused: %s", job.video_id, exc)
         except YtDlpError as exc:
             job._fail(str(exc), retryable=not exc.permanent)
-            log.warning("задание %s провалено: %s", job.video_id, exc)
+            log.warning("job %s failed: %s", job.video_id, exc)
 
             if exc.diagnostics:
-                log.warning("задание %s, вывод yt-dlp:\n%s", job.video_id, exc.diagnostics)
+                log.warning("job %s, yt-dlp output:\n%s", job.video_id, exc.diagnostics)
         except PermanentJobError as exc:
             job._fail(str(exc), retryable=False)
-            log.warning("задание %s провалено: %s", job.video_id, exc)
+            log.warning("job %s failed: %s", job.video_id, exc)
         except (TranslateError, RuntimeError) as exc:
-            # Переводчик, распознавание, воркер — всё это машина, а не ролик:
-            # ollama перезапустили, память кончилась, процесс упал. Следующая
-            # попытка вполне может пройти, поэтому отказ повторяемый. Из ролика
-            # сюда попадает только эфир, запись которого ещё собирается, — и он
-            # тоже проходит сам.
+            # The translator, recognition, the worker — all of this is the machine, not the
+            # video: ollama was restarted, memory ran out, the process crashed. The next
+            # attempt may well succeed, so the failure is retryable. From the video only a
+            # live stream whose recording is still being assembled gets here — and it
+            # passes by itself too.
             job._fail(str(exc), retryable=True)
-            log.warning("задание %s провалено: %s", job.video_id, exc)
-        except Exception as exc:  # noqa: BLE001 — падение одного задания не роняет демон
+            log.warning("job %s failed: %s", job.video_id, exc)
+        except Exception as exc:  # noqa: BLE001 — one job crashing does not bring down the daemon
             job._fail(repr(exc), retryable=True)
-            log.exception("задание %s упало", job.video_id)
+            log.exception("job %s crashed", job.video_id)
         finally:
-            # Отложенный звук нужен только паузе. Готовое, упавшее и отменённое
-            # задание к нему больше не вернётся, а файл — это десятки мегабайт.
+            # Stashed audio is needed only by a pause. A finished, failed or cancelled
+            # job will not come back to it, and the file is tens of megabytes.
             if job.stage is not Stage.PAUSED:
                 job.discard_audio()
 
     async def _pipeline(self, job: Job) -> None:
-        # Возобновление после вытеснения: реплики уже распознаны и сегментированы,
-        # остаётся дописать перевод. Повторять ASR было бы тратой карты впустую.
+        # Resuming after preemption: the cues are already recognized and segmented, only
+        # the translation remains to be finished. Repeating ASR would waste the card.
         if job.cues:
             await self._finish_translation(job)
 
             return
 
-        # Негодный код в [asr] language — отказ до первого обращения к YouTube и к карте:
-        # ни метаданных, ни звука, ни пропуска. Отказ окончательный, иначе остывание
-        # в get_or_create пересоздавало бы задание раз в минуту, как было с трассировкой
-        # Whisper. Возобновление выше языка не спрашивает: распознавание уже позади.
+        # An unfit code in [asr] language — a refusal before the first request to YouTube and
+        # to the card: no metadata, no audio, no lease. The refusal is final, otherwise the
+        # cooling in get_or_create would recreate the job once a minute, as it was with the
+        # Whisper traceback. The resume above does not ask about the language: recognition is
+        # already behind.
         self._pin()
 
-        # Метаданные уже есть, если задание возобновляется после паузы: пока карта
-        # занята, пауза повторяется каждые две минуты, и спрашивать YouTube о том же
-        # ролике на каждом витке незачем. Проверки ниже они тогда тоже уже прошли —
-        # иначе задание упало бы, а не встало на паузу.
+        # The metadata are already there if the job is resuming after a pause: while the card
+        # is occupied, the pause repeats every two minutes, and there is no point in asking
+        # YouTube about the same video on every round. The checks below have then already
+        # passed too — otherwise the job would have failed instead of pausing.
         if job.info is None:
             job._set_stage(Stage.PROBING)
             job.info = await self._fetch(job, Stage.PROBING, probe)
 
-            # Проверка раньше is_live, который включает и этот случай. Эфир уже
-            # закончился, YouTube собирает из него запись, и через минуты или часы
-            # это обычный ролик. Отказ поэтому не окончательный: остывание в
-            # get_or_create и кнопка повтора подхватят ролик, когда запись будет готова.
+            # The check is earlier than is_live, which covers this case too. The live stream
+            # has already ended, YouTube is assembling a recording from it, and in minutes or
+            # hours it is an ordinary video. The refusal is therefore not final: the cooling
+            # in get_or_create and the retry button will pick the video up once the recording
+            # is ready.
             if job.info.live_status == "post_live":
-                raise RuntimeError("эфир закончился, запись ещё обрабатывается")
+                raise RuntimeError("the live stream has ended, the recording is still processing")
 
             if job.info.is_live:
-                raise PermanentJobError("прямые эфиры не поддерживаются")
+                raise PermanentJobError("live streams are not supported")
 
             if job.info.duration and job.info.duration > MAX_VIDEO_SECONDS:
                 raise PermanentJobError(
-                    f"ролик длиннее {MAX_VIDEO_SECONDS // 3600} ч "
-                    f"({job.info.duration / 3600:.1f} ч): аудио не поместится в память"
+                    f"the video is longer than {MAX_VIDEO_SECONDS // 3600} h "
+                    f"({job.info.duration / 3600:.1f} h): the audio will not fit in memory"
                 )
 
-        # Авторская дорожка, если она есть, снимает распознавание целиком: и
-        # минуты работы карты, и её ошибки. Реплики размечены человеком, тайминги
-        # его же — пересобирать их незачем, в отличие от тридцатисекундных окон Whisper.
+        # The author track, if there is one, saves recognition entirely: both minutes of card
+        # work and its errors. The cues are marked up by a human, the timings are theirs too —
+        # there is no point in reassembling them, unlike Whisper's thirty-second windows.
         #
-        # Источник определяется ДО обращения к кэшу, потому что входит в ключ.
-        # Считай мы ключ раньше, дорожка автора не попадала бы в кэш никогда —
-        # клали бы под один ключ, спрашивали под другой, — а с выключенным
-        # переключателем демон отдавал бы прежний результат распознавания,
-        # и переключатель выглядел бы не работающим вовсе.
-        # Закреп вне сербского семейства дорожку не берёт, см. usable_manual_track.
+        # The source is determined BEFORE the cache is consulted, because it is part of the
+        # key. Had we counted the key earlier, the author track would never get into the cache
+        # — we would put it under one key and ask under another, — and with the switch off the
+        # daemon would return the previous recognition result, and the switch would look like
+        # it does not work at all.
+        # A pin outside the Serbian family does not take the track, see usable_manual_track.
         pin, _ = self._declaration(job)
         track = (
             usable_manual_track(job.info, pin)
@@ -986,13 +1007,13 @@ class JobRunner:
             return
 
         if track:
-            source = f"дорожку автора ({track.lang})"
+            source = f"author track ({track.lang})"
             job._set_stage(Stage.FETCHING, source=source)
 
             try:
-                # С повторами, как метаданные и звук: отказ запоминается на всё
-                # задание (track_failed), и разовый 403 иначе навсегда променял бы
-                # дорожку автора на распознавание.
+                # With retries, like metadata and audio: the failure is remembered for the
+                # whole job (track_failed), and a one-off 403 would otherwise exchange the
+                # author track for recognition forever.
                 segments = await self._fetch(
                     job,
                     Stage.FETCHING,
@@ -1002,21 +1023,21 @@ class JobRunner:
                     source=source,
                 )
             except YtDlpError as exc:
-                # Дорожка есть в метаданных, но не скачалась — это не повод
-                # проваливать задание: звук на месте, распознаем сами. Источник
-                # возвращаем обратно, иначе распознанное легло бы в кэш под ключом
-                # дорожки, а кэш распознавания для этого ролика остался бы нетронут
-                # и карта молола бы одно и то же на каждом просмотре.
-                log.info("дорожка %s недоступна (%s), иду через распознавание", track.lang, exc)
+                # The track is in the metadata but did not download — that is no reason to
+                # fail the job: the audio is there, we will recognize it ourselves. We put the
+                # source back, otherwise the recognized text would go into the cache under the
+                # track key, while the recognition cache for this video would stay untouched
+                # and the card would grind the same thing on every viewing.
+                log.info("track %s unavailable (%s), going through recognition", track.lang, exc)
                 job.source = "asr"
                 job.track_failed = True
 
                 if await self._serve_cached(job):
                     return
             else:
-                # Объявление то же, что у decide: закрепление человека перекрывает
-                # метаданные. Дорожку определитель не слушает, и верна ли она речи,
-                # неизвестно (verified=None).
+                # The same declaration as in decide: the human pin overrides the metadata.
+                # The detector does not listen to the track, and whether it matches the speech
+                # is unknown (verified=None).
                 pin, hint = self._declaration(job)
                 verdict = LanguageVerdict(
                     effective=language.hint(track.lang) or "sr",
@@ -1031,8 +1052,8 @@ class JobRunner:
                 )
                 job._set_language(verdict)
                 _log_language(job, verdict, [])
-                # Письменность — по действующему языку решения, а не по сырой метке:
-                # иначе кириллица под sr-Cyrl или SR ушла бы в переводчик.
+                # The script is by the effective language of the decision, not by the raw
+                # label: otherwise Cyrillic under sr-Cyrl or SR would go to the translator.
                 job.cues = self._to_job_cues_from_track(
                     normalize_cues(segments, verdict.effective)
                 )
@@ -1041,37 +1062,36 @@ class JobRunner:
 
                 return
 
-        # Фазы берут пропуск по очереди, а не одним куском: им нужно разное
-        # количество памяти (6 ГБ Whisper против 17.8 ГБ переводчика), и общий
-        # захват под меньшую из потребностей означал бы, что допуск ни разу
-        # не проверил, поместится ли переводчик.
-        # Выгрузка обязана идти ДО контроля допуска. Переводчик мог остаться
-        # резидентным с прошлого ролика, и тогда свободно 1–3 ГБ: допуск ждал бы
-        # памяти, которую сам же и не освобождает, пока не истечёт keep_alive.
+        # The phases take the lease in turn rather than in one piece: they need different
+        # amounts of memory (6 GB for Whisper versus 17.8 GB for the translator), and a common
+        # capture for the smaller of the needs would mean that admission never once checked
+        # whether the translator fits.
+        # The unload must go BEFORE admission control. The translator may have remained
+        # resident from the previous video, and then 1–3 GB are free: admission would wait for
+        # memory it does not free itself until keep_alive expires.
         await asyncio.to_thread(self._lease.unload, self._mt_model)
 
-        # Ждём мы карту, а не сеть, и зритель должен видеть именно это.
+        # We are waiting for the card, not the network, and the viewer must see exactly that.
         job._set_stage(Stage.QUEUED, waiting="gpu")
 
-        # Звук качается уже под пропуском, а не до него. Не дождавшись карты,
-        # задание встаёт на паузу, и возобновление начинает всё заново —
-        # скачанный до допуска звук пропадал бы на каждом витке. Так и было:
-        # пока карту держал пользователь, один ролик скачался 43 раза подряд
-        # за полтора часа, по разу на две минуты ожидания, и на сорок четвёртый
-        # googlevideo ответил 403. Скачивать заранее и держать звук до допуска
-        # тоже не выход: приостановленное задание может ждать сколько угодно,
-        # а это десятки и сотни мегабайт на ролик. Откладывается на диск только
-        # звук, уже скачанный под пропуском, — когда карту отобрали после
-        # загрузки; см. Job.stash_audio.
+        # The audio is downloaded already under the lease, not before it. Without waiting for
+        # the card, the job pauses, and the resume starts everything over — audio downloaded
+        # before admission would be lost on every round. So it was: while the user held the
+        # card, one video was downloaded 43 times in a row in an hour and a half, once per two
+        # minutes of waiting, and on the forty-fourth googlevideo answered 403. Downloading in
+        # advance and keeping the audio until admission is no way out either: a paused job may
+        # wait indefinitely, and that is tens and hundreds of megabytes per video. Only the
+        # audio already downloaded under the lease is stashed to disk — when the card was taken
+        # away after the download; see Job.stash_audio.
         #
-        # Цена нового порядка: пропуск один на весь демон, и пока идёт загрузка,
-        # чужие фазы на карте ждут. Обычно это секунды. Повторы после 403 и обрыва
-        # сети добавляют до двадцати пяти секунд пауз, поэтому они ограничены
-        # FETCH_RETRY_BUDGET и прерываются вытеснением; мёртвое соединение
-        # обрывает таймаут сокета в audio_pcm. Сама попытка, если yt-dlp тянет
-        # медленно, но тянет, ограничена только его общим таймаутом. И ещё одна
-        # загрузка, если карту отберут посреди неудавшейся попытки: скачанного
-        # звука тогда нет, и откладывать нечего.
+        # The price of the new order: there is one lease for the whole daemon, and while the
+        # download runs, other phases on the card wait. Usually that is seconds. Retries after
+        # a 403 and a network outage add up to twenty-five seconds of delays, so they are
+        # limited by FETCH_RETRY_BUDGET and interrupted by preemption; a dead connection is cut
+        # by the socket timeout in audio_pcm. The attempt itself, if yt-dlp is slow but is
+        # pulling, is limited only by its overall timeout. And one more download, if the card
+        # is taken away in the middle of a failed attempt: then there is no downloaded audio,
+        # and there is nothing to stash.
         async with self._lease.acquire(self._config.asr_vram_mib) as held:
             audio = await asyncio.to_thread(job.take_audio)
 
@@ -1082,59 +1102,60 @@ class JobRunner:
             duration = audio.size / SAMPLE_RATE
 
             try:
-                # Пользователь мог занять карту, пока шла загрузка. Проверяем до
-                # запуска воркера: иначе он успел бы начать грузить в память
-                # Whisper только для того, чтобы его тут же убили.
+                # The user may have taken the card while the download ran. We check before
+                # starting the worker: otherwise it would manage to start loading Whisper into
+                # memory only to be killed at once.
                 held.check()
 
                 job._set_stage(Stage.ASR, duration=duration)
                 result = await self._run_asr_watched(audio, job, held)
             except Preempted:
-                # Звук уже скачан, и возобновление должно начаться с него, а не
-                # с новой загрузки. На диск, а не в памяти задания: сколько ждать
-                # карту, заранее неизвестно.
+                # The audio is already downloaded, and the resume must start from it rather
+                # than from a new download. To disk, not into the job memory: how long to wait
+                # for the card is not known in advance.
                 #
-                # Отложить — только выгода, не обязанность. Полный диск не должен
-                # превращать паузу в отказ: не вышло — задание всё равно встаёт
-                # на паузу, а возобновление просто скачает звук заново.
+                # Stashing is only a benefit, not an obligation. A full disk must not turn a
+                # pause into a failure: if it did not work out, the job pauses anyway, and the
+                # resume simply downloads the audio anew.
                 try:
                     await asyncio.to_thread(job.stash_audio, audio)
                 except OSError as exc:
-                    log.warning("звук %s не отложен: %s", job.video_id, exc)
+                    log.warning("audio %s not stashed: %s", job.video_id, exc)
                     job.discard_audio()
 
                 raise
 
-            # Распознано — отложенный звук больше не нужен. Вытеснение ниже
-            # уводит в паузу уже с репликами, и возобновление начнётся с перевода.
-            # Ошибка диска здесь не повод выбросить готовый транскрипт: файл
-            # остаётся без хозяина, как в cancel, а задание идёт дальше.
+            # Recognized — the stashed audio is no longer needed. A preemption below sends the
+            # job into a pause already with cues, and the resume will start from translation.
+            # A disk error here is no reason to throw away a ready transcript: the file stays
+            # without an owner, as in cancel, and the job goes on.
             try:
                 job.discard_audio()
             except OSError as exc:
-                log.warning("звук %s не убран после распознавания: %s", job.video_id, exc)
+                log.warning("audio %s not removed after recognition: %s", job.video_id, exc)
 
-            # Решение о языке и реплики — до проверки вытеснения. Транскрипт уже получен,
-            # и выбрасывать его только потому, что карту забрали секундой позже,
-            # значит потерять минуты работы GPU: возобновление начнётся с перевода, и
-            # решение о языке к этому времени должно лежать на задании вместе с репликами.
+            # The language decision and the cues — before the preemption check. The transcript
+            # is already obtained, and throwing it away only because the card was taken a
+            # second later would mean losing minutes of GPU work: the resume will start from
+            # translation, and the language decision by then must lie on the job together with
+            # the cues.
             self._accept_asr(job, result)
             held.check()
 
         await self._finish_translation(job)
 
     async def _fetch(self, job: Job, stage: Stage, fetch, **kwargs):
-        """Обращение к YouTube: анонимно, а за роликом 18+ — с аккаунтом из настроек.
+        """A request to YouTube: anonymously, and for an 18+ video — with the account from the settings.
 
-        Сначала всегда анонимно, и аккаунт подставляется, только когда YouTube
-        отказал именно возрастным ограничением. Заранее ролик 18+ от обычного
-        не отличить, а лишний запрос под аккаунтом — это лишний шанс его потерять:
-        по словам самого yt-dlp, YouTube банит аккаунты, через которые он ходит.
+        First always anonymously, and the account is substituted only when YouTube refused
+        specifically because of the age restriction. In advance an 18+ video cannot be told
+        from an ordinary one, and an extra request under the account is an extra chance to
+        lose it: according to yt-dlp itself, YouTube bans accounts it is used through.
 
-        Все отказы, связанные с аккаунтом, окончательные. Повторяемый пересоздаётся
-        опросом раз в минуту, пока вкладка открыта, и это значило бы стучаться
-        к YouTube под аккаунтом каждую минуту. Починить их всё равно может только
-        человек: подключить аккаунт или выгрузить свежие cookies — и перезапустить демон.
+        All account-related refusals are final. A retryable one would be recreated by the poll
+        once a minute while the tab is open, and that would mean knocking on YouTube under the
+        account every minute. Only a human can fix them anyway: connect an account or download
+        fresh cookies — and restart the daemon.
         """
         try:
             return await self._with_retries(job, stage, fetch, **kwargs)
@@ -1146,8 +1167,8 @@ class JobRunner:
 
             if job.account:
                 raise YtDlpError(
-                    "ролик 18+, и аккаунт из настроек YouTube его не открыл: cookies "
-                    "устарели или у аккаунта не подтверждён возраст",
+                    "the video is 18+, and the account from the settings did not open it on "
+                    "YouTube: the cookies have expired or the age of the account is not verified",
                     permanent=True,
                     diagnostics=diagnostics,
                 ) from exc
@@ -1156,48 +1177,49 @@ class JobRunner:
 
             if cookies is None:
                 raise YtDlpError(
-                    "ролик 18+: YouTube отдаёт его только вошедшему, а аккаунт для "
-                    "таких роликов не подключён — [youtube] cookies в config.toml демона",
+                    "the video is 18+: YouTube gives it out only to a signed-in user, and no "
+                    "account is connected for such videos — [youtube] cookies in the daemon's "
+                    "config.toml",
                     permanent=True,
                     diagnostics=diagnostics,
                 ) from exc
 
             if not cookies.is_file():
                 raise YtDlpError(
-                    f"ролик 18+, а файла cookies из настроек нет: {cookies}",
+                    f"the video is 18+, and the cookies file from the settings is missing: {cookies}",
                     permanent=True,
                     diagnostics=diagnostics,
                 ) from exc
 
-            log.info("%s: ролик 18+, иду за ним с аккаунтом из настроек", job.video_id)
+            log.info("%s: the video is 18+, going for it with the account from the settings", job.video_id)
             job.account = True
 
             return await self._fetch(job, stage, fetch, **kwargs)
 
     async def _with_retries(self, job: Job, stage: Stage, fetch, *, held=None, **extra):
-        """Метаданные или звук, с повтором временных сбоев на месте.
+        """Metadata or audio, with transient failures retried in place.
 
-        Повторять надо здесь, внутри задания. Отказ задания прилипает, и без
-        этого разовый 403 от googlevideo — а он случается примерно на каждой
-        пятидесятой загрузке — стоил бы зрителю провала, хотя следующая же
-        ссылка скачивается. Каждая попытка — новый вызов yt-dlp, то есть
-        и новое извлечение со свежей ссылкой.
+        The retry must happen here, inside the job. A job failure sticks, and without
+        this a one-off 403 from googlevideo — and it happens on roughly every
+        fiftieth download — would cost the viewer a failure, although the very next
+        link downloads. Each attempt is a new yt-dlp call, that is,
+        also a new extraction with a fresh link.
 
-        Паузы — asyncio.sleep в цикле событий, а не сон в рабочем потоке. Сам
-        вызов yt-dlp отменой не прерывается, но между попытками drop и отмена
-        должны снимать задание сразу, а не после двадцати секунд ожидания.
+        The delays are asyncio.sleep in the event loop, not a sleep in a worker thread. The
+        yt-dlp call itself is not interrupted by cancellation, but between attempts drop and
+        cancellation must remove the job at once, rather than after twenty seconds of waiting.
 
-        Неудачную попытку, за которой идёт повтор, пишем в журнал здесь, вместе
-        с выводом yt-dlp. Последнюю пишет run, когда проваливает задание.
+        A failed attempt followed by a retry is written to the log here, together
+        with the yt-dlp output. The last one is written by run, when it fails the job.
 
-        held — пропуск на карту, если загрузка идёт под ним. Тогда повторы
-        сверяются с вытеснением: карту отобрали — задание уходит в паузу сразу,
-        а не качает снова то, что всё равно будет выброшено. И новая попытка
-        начинается только в пределах FETCH_RETRY_BUDGET: пропуск один на весь
-        демон, и затянувшаяся загрузка держала бы чужие фазы на карте.
+        held — the lease on the card, if the download goes under it. Then the retries
+        are checked against preemption: the card was taken away — the job pauses at once,
+        rather than downloading again what will be thrown away anyway. And a new attempt
+        begins only within FETCH_RETRY_BUDGET: the lease is one for the whole
+        daemon, and a drawn-out download would hold other phases on the card.
 
-        extra уходит в событие о повторе вместе со стадией — например, источник,
-        чтобы кнопка не превращала «качаю дорожку автора» в «качаю звук».
+        extra goes into the retry event together with the stage — for example, the source,
+        so that the button does not turn "downloading author track" into "downloading audio".
         """
         started = time.monotonic()
         cookies = self._config.youtube.cookies_path if job.account else None
@@ -1218,20 +1240,20 @@ class JobRunner:
 
                 delay = FETCH_BACKOFF[min(attempt, len(FETCH_BACKOFF)) - 1]
                 log.warning(
-                    "%s %s: попытка %d из %d не удалась, повтор через %.0f с: %s%s",
+                    "%s %s: attempt %d of %d failed, retrying in %.0f s: %s%s",
                     stage.value, job.video_id, attempt, FETCH_ATTEMPTS, delay, exc,
                     f"\n{exc.diagnostics}" if exc.diagnostics else "",
                 )
 
-                # Та же стадия со счётчиком повтора, и сразу, до паузы: иначе
-                # зритель двадцать секунд смотрел бы на «качаю звук…», не зная,
-                # что первая попытка уже не удалась.
+                # The same stage with the retry counter, and at once, before the delay:
+                # otherwise the viewer would watch "downloading audio…" for twenty seconds
+                # without knowing that the first attempt has already failed.
                 job._set_stage(stage, retry=attempt, **extra)
                 await self._backoff(delay, held)
 
     @staticmethod
     async def _backoff(delay: float, held) -> None:
-        """Пауза между попытками, которую прерывает вытеснение."""
+        """The delay between attempts, which preemption interrupts."""
         if held is None:
             await asyncio.sleep(delay)
 
@@ -1249,12 +1271,12 @@ class JobRunner:
         held.check()
 
     async def _run_asr_watched(self, audio, job: Job, held):
-        """Распознавание, которое действительно прерывается.
+        """Recognition that actually gets interrupted.
 
-        `asyncio.to_thread` отменой не прерывается, поэтому единственный способ
-        освободить карту — убить сам процесс. Гоняем ожидание результата против
-        флага вытеснения и по срабатыванию убиваем воркер; тот завершается
-        по сигналу, и `_run_asr` поднимает Preempted.
+        `asyncio.to_thread` is not interrupted by cancellation, so the only way to
+        free the card is to kill the process itself. We race the wait for the result against
+        the preemption flag and on firing kill the worker; it exits
+        on the signal, and `_run_asr` raises Preempted.
         """
         job._asr_kill = False
         work = asyncio.create_task(asyncio.to_thread(self._run_asr, audio, job))
@@ -1264,26 +1286,27 @@ class JobRunner:
             done, _ = await asyncio.wait({work, preempt}, return_when=asyncio.FIRST_COMPLETED)
 
             if work not in done:
-                log.info("вытеснение во время распознавания — убиваю воркер")
+                log.info("preemption during recognition — killing the worker")
                 job.kill_asr()
 
             return await work
         except asyncio.CancelledError:
-            # Отмена задания: процесс надо убить здесь, иначе пропуск отпустится
-            # раньше, чем освободится память.
+            # Job cancellation: the process must be killed here, otherwise the lease is released
+            # before the memory is freed.
             job.kill_asr()
             raise
         finally:
             preempt.cancel()
 
     def _accept_asr(self, job: Job, result: dict) -> None:
-        """Ответ воркера — на задание: сначала решение о языке, потом реплики и segmented."""
+        """The worker answer onto the job: first the language decision, then the cues and segmented."""
         verdict = LanguageVerdict.from_wire(result.get("verdict"))
 
         if verdict is None:
-            # Решения в ответе нет или оно негодное: язык берётся из поля language тем же
-            # правилом, что и закрепление. Неизвестный код — отказ окончательный: повтор
-            # через минуту снова гонял бы распознавание на карте и получал тот же ответ.
+            # There is no decision in the answer or it is unfit: the language is taken from the
+            # language field by the same rule as the pin. An unknown code — the refusal is
+            # final: a retry in a minute would run recognition on the card again and get the
+            # same answer.
             raw = result.get("language")
 
             try:
@@ -1292,7 +1315,7 @@ class JobRunner:
                 effective = None
 
             if effective is None:
-                raise PermanentJobError(f"распознаватель вернул неизвестный язык «{raw}»")
+                raise PermanentJobError(f"the recognizer returned an unknown language \"{raw}\"")
 
             verdict = LanguageVerdict(
                 effective=effective, declared=None, declared_by=None,
@@ -1301,44 +1324,45 @@ class JobRunner:
 
         job._set_language(verdict)
         _log_language(job, verdict, (result.get("detection") or {}).get("windows") or [])
-        # Затравку составляет воркер, а его stderr при успехе выбрасывается: без этой
-        # строки эхо на экране не с чем сопоставить. Строка на каждый выброс — потому
-        # что «тишина» это до 30 секунд звука, а проверить пороги на этом корпусе нечем:
-        # в кэше метрик нет. Журнал — единственная проверка в поле.
+        # The seed is composed by the worker, and its stderr is discarded on success: without
+        # this line there is nothing to match the echo on the screen against. A line per
+        # emission — because "silence" is up to 30 seconds of audio, and there is nothing to
+        # check the thresholds against on this corpus: there are no metrics in the cache. The
+        # log is the only check in the field.
         prompt = result.get("prompt")
-        log.info("затравка %s: %s", job.video_id, prompt or "нет")
+        log.info("seed %s: %s", job.video_id, prompt or "none")
         cues, dropped = asr_cues(result["cues"], verdict.effective, prompt)
 
         for reason, text in dropped:
-            log.info("выброшено %s (%s): %s", job.video_id, reason, text)
+            log.info("dropped %s (%s): %s", job.video_id, reason, text)
 
-        # Индексы JobCue остаются сплошными: отсев идёт до _to_job_cues, а на index
-        # опираются _next_batch и _context_for.
+        # The JobCue indices stay contiguous: the filtering goes before _to_job_cues, and
+        # _next_batch and _context_for rely on index.
         job.cues = self._to_job_cues(cues)
         job._emit({"type": "segmented", "total": len(job.cues), **job.readiness()})
 
     async def _finish_translation(self, job: Job) -> None:
-        """Перевести недостающие реплики и, если всё готово, закэшировать дорожку."""
+        """Translate the missing cues and, if everything is ready, cache the track."""
         job._set_stage(Stage.TRANSLATING, total=len(job.cues))
 
-        # Переводить нечего — например, в ролике не распознано ни слова. Пропуск
-        # под переводчик тогда не нужен, а взятый, он мог бы увести задание
-        # в паузу без единой реплики, и возобновление начиналось бы с загрузки
-        # звука и распознавания заново — на каждом витке, пока карта занята.
+        # There is nothing to translate — for example, not a word was recognized in the video.
+        # Then the lease for the translator is not needed, and if taken, it could send the job
+        # into a pause without a single cue, and the resume would start with downloading
+        # the audio and recognition anew — on every round while the card is occupied.
         if any(not c.translated for c in job.cues):
             try:
-                # model= обязателен: если наш переводчик уже резидентен, память под него
-                # просить не нужно — иначе допуск требовал бы 17.8 ГБ свободных ровно
-                # тогда, когда 17.3 из них занял он сам.
+                # model= is mandatory: if our translator is already resident, there is no need
+                # to ask for memory for it — otherwise admission would require 17.8 GB free
+                # exactly when 17.3 of them are occupied by it itself.
                 async with self._lease.acquire(
                     self._config.translator_vram_mib, model=self._mt_model
                 ) as held:
                     await self._translate(job, held)
             except Preempted:
-                # Уступая карту, надо её и освободить. keep_alive у нас 60 секунд, то
-                # есть без явной выгрузки 17.3 ГБ оставались бы нашими ещё минуту после
-                # того, как мы объявили, что уходим, — ровно то поведение враждебного
-                # соседа, против которого написан gpulease.
+                # Giving up the card, we must free it too. Our keep_alive is 60 seconds, that
+                # is, without an explicit unload, 17.3 GB would remain ours for another minute
+                # after we announced we are leaving — exactly the behaviour of the hostile
+                # neighbour gpulease was written against.
                 await asyncio.to_thread(self._lease.unload, self._mt_model)
                 raise
 
@@ -1346,29 +1370,29 @@ class JobRunner:
         failed = sum(c.failed for c in job.cues)
 
         if pending:
-            # Работа не доделана — только это и есть пауза. Возобновление найдёт
-            # непереведённые реплики и продолжит с них.
+            # The work is not finished — this is the only thing that a pause is. The resume
+            # will find the untranslated cues and continue from them.
             job._set_stage(Stage.PAUSED, translated=len(job.cues) - pending)
 
             return
 
         if failed:
-            # Все реплики обработаны, но часть уходит на экран исходным текстом.
-            # Задание завершено — повторять нечего, лестница починки уже отработала
-            # батчем, половинами и поштучно. Но в кэш такая дорожка не идёт: иначе
-            # неудача закрепилась бы навсегда под валидным ключом, и следующий
-            # просмотр отдал бы её же вместо новой попытки.
+            # All the cues are processed, but part of them goes to the screen as the original
+            # text. The job is finished — there is nothing to repeat, the repair ladder has
+            # already worked through a batch, halves and one by one. But such a track does not
+            # go into the cache: otherwise the failure would be fixed forever under a valid
+            # key, and the next viewing would give it back instead of a new attempt.
             job._set_stage(Stage.DONE, total=len(job.cues), failed=failed, cached=False)
 
             return
 
         if not job.cues:
-            # Пустая дорожка в кэш не идёт. Записанная, она отдавалась бы готовой навсегда
-            # (в кэше демона таких три, одна на 41-минутный ролик), а восстановление
-            # считает её испорченной записью. Цена — ролик без единой реплики не
-            # кэшируется: новое задание по нему — когда реестр вытеснит это (см.
-            # MAX_RETAINED_JOBS) или демон перезапустят — снова качает звук и распознаёт
-            # под пропуском.
+            # An empty track does not go into the cache. Written, it would be given out as
+            # ready forever (there are three such in the daemon cache, one for a 41-minute
+            # video), while restore considers it a corrupted record. The price — a video
+            # without a single cue is not cached: a new job for it — when the registry evicts
+            # this one (see MAX_RETAINED_JOBS) or the daemon is restarted — downloads the
+            # audio and recognizes again under the lease.
             job._set_stage(Stage.DONE, total=0, cached=False)
 
             return
@@ -1383,7 +1407,7 @@ class JobRunner:
         job._set_stage(Stage.DONE, total=len(job.cues))
 
     def _run_asr(self, audio, job: Job) -> dict:
-        """Распознавание отдельным процессом — выход процесса гарантирует возврат VRAM."""
+        """Recognition in a separate process — the process exit guarantees VRAM return."""
         pin, hint = self._declaration(job)
         args = [
             sys.executable,
@@ -1400,10 +1424,10 @@ class JobRunner:
         if hint:
             args += ["--hint", hint]
 
-        # Имена, а не готовая затравка: язык решает воркер после определителя, и только
-        # он знает, есть ли для этого языка фраза. Описание не передаётся (см.
-        # harvest_names). ensure_ascii=False — имена читаемы в ps и в журнале. Флаг идёт
-        # в каждом запуске, даже со списком [].
+        # Names, not a ready seed: the language is decided by the worker after the detector,
+        # and only it knows whether there is a phrase for this language. The description is not
+        # passed (see harvest_names). ensure_ascii=False — the names are readable in ps and in
+        # the log. The flag goes into every run, even with the list [].
         args += [
             "--prompt-names",
             json.dumps(harvest_names(job.info.title, job.info.tags), ensure_ascii=False),
@@ -1418,42 +1442,42 @@ class JobRunner:
         )
         job._asr_proc = proc
 
-        # Убить велели, пока процесс создавался, — ручки тогда ещё не было.
+        # The kill was ordered while the process was being created — there was no handle then.
         if job._asr_kill:
             proc.kill()
 
         try:
             out, err = proc.communicate(input=audio.tobytes(), timeout=ASR_TIMEOUT)
         except subprocess.TimeoutExpired:
-            # communicate по таймауту процесс не убивает. Без этого Whisper
-            # продолжал бы держать ~6 ГБ, когда пропуск на карту уже отпущен,
-            # и следующее задание получило бы допуск на память, которой нет.
+            # communicate does not kill the process on timeout. Without this Whisper
+            # would keep holding ~6 GB when the lease on the card has already been released,
+            # and the next job would get admission for memory that does not exist.
             proc.kill()
             proc.communicate()
 
-            raise RuntimeError(f"распознавание не уложилось в {ASR_TIMEOUT:.0f} с") from None
+            raise RuntimeError(f"recognition did not fit into {ASR_TIMEOUT:.0f} s") from None
         finally:
             job._asr_proc = None
 
         if proc.returncode != 0:
-            # Убитый по вытеснению или отмене процесс — не ошибка распознавания:
-            # его прервали намеренно, и задание должно уйти в паузу, а не в отказ.
+            # A process killed by preemption or cancellation is not a recognition error:
+            # it was interrupted deliberately, and the job must pause rather than fail.
             if proc.returncode < 0 and job._asr_kill:
-                raise Preempted(f"распознавание прервано сигналом {-proc.returncode}")
+                raise Preempted(f"recognition interrupted by signal {-proc.returncode}")
 
-            # Сигнал пришёл не от нас: память кончилась, и процесс убило ядро,
-            # или воркер упал сам. Это отказ, а не пауза. Пауза возобновляется
-            # на каждом опросе, а реплик ещё нет, так что каждое возобновление
-            # заново качало бы звук и снова падало бы тем же сигналом. Отказ
-            # повторяемый и пересоздаётся не чаще раза в минуту.
+            # The signal did not come from us: memory ran out and the kernel killed the
+            # process, or the worker crashed itself. This is a failure, not a pause. A pause
+            # resumes on every poll, and there are no cues yet, so every resume would download
+            # the audio again and fail again with the same signal. The failure is retryable and
+            # is recreated no more often than once a minute.
             if proc.returncode < 0:
-                raise RuntimeError(f"распознавание убито сигналом {-proc.returncode}")
+                raise RuntimeError(f"recognition killed by signal {-proc.returncode}")
 
-            # Воркер отказал сам — фраза в stdout, а не трассировка в stderr. Отказ с
-            # "permanent" не пройдёт и при повторе (негодный код языка), поэтому
-            # окончательный: остывание не пересоздаёт такое задание. Фраза без флага
-            # («аудио короче половины секунды») — отказ повторяемый, но зритель видит её,
-            # а не пустой хвост stderr.
+            # The worker refused itself — the phrase is in stdout, not a traceback in stderr.
+            # A refusal with "permanent" will not pass on a retry either (an unfit language
+            # code), so it is final: the cooling does not recreate such a job. A phrase without
+            # the flag ("audio shorter than half a second") is a retryable failure, but the
+            # viewer sees it rather than an empty tail of stderr.
             try:
                 reply = json.loads(out)
             except ValueError:
@@ -1463,9 +1487,9 @@ class JobRunner:
                 if reply.get("permanent") is True:
                     raise PermanentJobError(str(reply["error"]))
 
-                raise RuntimeError(f"ASR не справился: {reply['error']}")
+                raise RuntimeError(f"ASR failed: {reply['error']}")
 
-            raise RuntimeError(f"ASR не справился: {err.decode(errors='replace')[-500:]}")
+            raise RuntimeError(f"ASR failed: {err.decode(errors='replace')[-500:]}")
 
         result = json.loads(out)
 
@@ -1475,11 +1499,11 @@ class JobRunner:
         return result
 
     def _pin(self) -> str | None:
-        """Язык, закреплённый хозяином в [asr] language: код Whisper или None («auto»).
+        """The language pinned by the owner in [asr] language: a Whisper code or None ("auto").
 
-        load() приводит значение к коду, а негодное лишь пишет в журнал: демон должен
-        подняться. Задание же с негодным кодом получает отказ человеческой фразой,
-        окончательный: повтор с тем же конфигом дал бы то же самое.
+        load() brings the value to a code, and only logs an unfit one: the daemon must come
+        up. A job with an unfit code gets a refusal in a human phrase, final: a retry with the
+        same config would give the same thing.
         """
         try:
             return language.normalize(self._config.asr.language)
@@ -1487,39 +1511,39 @@ class JobRunner:
             raise PermanentJobError(language.refusal(exc.raw)) from None
 
     def _declaration(self, job: Job) -> tuple[str | None, str | None]:
-        """Что сказано о языке до звука: (закрепление хозяина, метка YouTube).
+        """What is said about the language before the audio: (the owner's pin, the YouTube label).
 
-        Решает не это, а воркер (helper.language.decide): определитель слушает всегда.
-        Метка YouTube — только подсказка. yt-dlp выводит её из ASR-дорожки YouTube, а та
-        помечает сербские каналы английскими (Juske); у сербских роликов метки обычно нет
-        вовсе — сербский корпус из 60 роликов дал None во всех шестидесяти. Незнакомая
-        метка — просто «не знаем».
+        What decides is not this but the worker (helper.language.decide): the detector always
+        listens. The YouTube label is only a hint. yt-dlp derives it from the YouTube ASR track,
+        and that labels Serbian channels as English (Juske); Serbian videos usually have no
+        label at all — a Serbian corpus of 60 videos gave None in all sixty. An unfamiliar
+        label is just "we do not know".
 
-        Сюда потом придёт объявление на ролик и на ссылку (раздел «Отложено» в
-        docs/superpowers/plans/2026-11-01-source-language.md): объявление для решения,
-        ключа кэша и выбора дорожки читается только здесь. Исключения — проверка
-        закрепления в начале _pipeline (_pin) и восстановление (JobManager._key_for:
-        задания там нет, оно читает настройку через hint и меняется вместе с этой функцией).
+        A declaration per video and per link will come here later (the "Deferred" section in
+        docs/superpowers/plans/2026-11-01-source-language.md): the declaration for the decision,
+        the cache key and the track choice is read only here. The exceptions are the pin check
+        at the start of _pipeline (_pin) and restore (JobManager._key_for: there is no job
+        there, it reads the setting through hint and changes together with this function).
         """
         return self._pin(), (language.hint(job.info.audio_language) if job.info else None)
 
     async def _serve_cached(self, job: Job) -> bool:
-        """Отдать готовые реплики из кэша. True — задание закончено, идти дальше не нужно.
+        """Give out the ready cues from the cache. True — the job is finished, no need to go on.
 
-        Ключ зависит от job.source, поэтому звать это можно только после того,
-        как источник реплик выбран.
+        The key depends on job.source, so this can only be called after the source of the cues
+        has been chosen.
         """
         cached = await asyncio.to_thread(
             self._cache.get, self._cache_key(job), job.info.duration
         )
 
-        # Запись без реплик — промах, как у restore: готовой такая дорожка не бывает.
+        # A record without cues is a miss, as in restore: such a track is never ready.
         if not cached or not cached.get("cues"):
             return False
 
-        # Решение раньше реплик, как на свежем распознавании: иначе флаг расхождения
-        # пропадал бы на каждом повторном просмотре. Запись без поля или с негодным —
-        # язык null и события language нет, без падения.
+        # The decision before the cues, as on fresh recognition: otherwise the mismatch flag
+        # would disappear on every repeated viewing. A record without the field or with an
+        # unfit one — language null and no language event, without crashing.
         verdict = LanguageVerdict.from_wire(cached.get("language"))
 
         if verdict is not None:
@@ -1533,9 +1557,9 @@ class JobRunner:
                 src=c["src"],
                 lines=c["lines"],
                 study=c.get("study", ""),
-                # Флаг обязан пережить круг через кэш: без него реплика
-                # с непереведённым исходным текстом вернулась бы как полноценный
-                # перевод.
+                # The flag must survive the round through the cache: without it a cue
+                # with untranslated source text would come back as a full-fledged
+                # translation.
                 failed=c.get("failed", False),
             )
             for i, c in enumerate(cached["cues"])
@@ -1546,12 +1570,12 @@ class JobRunner:
         return True
 
     def _to_job_cues_from_track(self, segments: list[dict]) -> list[JobCue]:
-        """Реплики из авторской дорожки: тайминги берём как есть.
+        """Cues from the author track: the timings are taken as they are.
 
-        Пересегментация здесь была бы вредна. Она нужна выходу Whisper, где
-        реплика — это тридцатисекундное окно на триста знаков; у автора же
-        границы расставлены под чтение, и переставлять их значит портить
-        то, ради чего этот путь и существует.
+        Resegmentation here would be harmful. It is needed for the Whisper output, where
+        a cue is a thirty-second window of three hundred characters; with the author, the
+        boundaries are placed for reading, and moving them would spoil
+        what this path exists for.
         """
         return [
             JobCue(index=i, start=c["start"], end=c["end"], src=c["text"])
@@ -1566,7 +1590,7 @@ class JobRunner:
         ]
 
     async def _translate(self, job: Job, held) -> None:
-        """Перевести все реплики, начиная с тех, что рядом с плейхедом."""
+        """Translate all the cues, starting with those near the playhead."""
         while True:
             held.check()
 
@@ -1587,18 +1611,18 @@ class JobRunner:
             try:
                 pairs = await self._translate_once(batch, batch_cues)
             except RETRYABLE as exc:
-                # Ловим широко, а не только TranslateError: обрыв соединения с ollama,
-                # её перезапуск или битый JSON — такие же поводы для лестницы починки.
-                # Пропущенные мимо, они роняли всё задание вместе с готовым транскриптом,
-                # на который уже потрачены минуты работы карты.
+                # Caught broadly, not only TranslateError: a dropped connection to ollama,
+                # its restart or broken JSON are just as much a reason for the repair
+                # ladder. Missed past, they brought down the whole job together with the
+                # ready transcript, on which minutes of card work had already been spent.
                 #
-                # Дробление идёт тем же путём, что и батч: если учебный режим включён,
-                # половины и поштучные попытки тоже просят обе строки. Раньше здесь
-                # был одноязычный откат — «учебная строка в такой ситуации роскошь», —
-                # и он тихо оставлял её пустой. На русском ролике это выглядело так,
-                # будто вместо черногорского пошёл русский: оверлей подставлял вместо
-                # пустой строки текст распознавания, а он у такого ролика русский.
-                log.warning("батч не перевёлся (%s), пробую половинами", exc)
+                # The splitting goes the same way as the batch: if the study mode is on,
+                # the halves and the one-by-one attempts ask for both lines too. There used
+                # to be a monolingual fallback here — "a study line is a luxury in such a
+                # situation" — and it silently left it empty. On a Russian video this looked
+                # as if Russian had gone instead of Montenegrin: the overlay substituted the
+                # recognition text for the empty line, and that is Russian for such a video.
+                log.warning("batch did not translate (%s), trying halves", exc)
                 pairs = await self._translate_halves(batch_cues, job, held)
 
             for cue, (study_line, text) in zip(batch_cues, pairs):
@@ -1608,12 +1632,12 @@ class JobRunner:
                 if study_line.strip():
                     cue.study = study_line.strip()
 
-            # Гарантия сходимости цикла: всё, что не пережило ни батч, ни половины,
-            # ни поштучную попытку, помечается исходным текстом и флагом. Без этого
-            # неподдающаяся реплика держала бы pending непустым вечно.
+            # The loop convergence guarantee: everything that survived neither the batch nor
+            # the halves nor the one-by-one attempt is marked with the source text and the
+            # flag. Without this an unyielding cue would keep pending non-empty forever.
             #
-            # Показывать исходный текст вместо русского плохо, но молча пропустить
-            # кусок речи хуже, поэтому реплика уходит на экран помеченной.
+            # Showing the source text instead of Russian is bad, but silently skipping a
+            # piece of speech is worse, so the cue goes to the screen marked.
             for cue in batch_cues:
                 if not cue.translated:
                     cue.lines = [cue.src]
@@ -1624,16 +1648,16 @@ class JobRunner:
     async def _translate_once(
         self, batch: Batch, cues: list[JobCue] | None = None
     ) -> list[tuple[str, str]]:
-        """Один заход в модель. Пара строк, если учебный режим включён.
+        """One go at the model. A pair of lines if the study mode is on.
 
-        Единая форма ответа на обоих режимах избавляет лестницу починки от
-        необходимости знать, какой из них сейчас: она просто передаёт пары дальше.
+        The uniform answer form in both modes saves the repair ladder from
+        having to know which of them is on: it simply passes the pairs on.
         """
         if self._config.translator.study_language:
             pairs = await asyncio.to_thread(translate_dual, batch, self._mt_model)
 
             for reason in validate_dual(pairs, batch.cues):
-                log.info("батч: %s", reason)
+                log.info("batch: %s", reason)
 
             return pairs
 
@@ -1641,23 +1665,23 @@ class JobRunner:
 
         for index, reason in validate(batch.cues, lines):
             number = cues[index].index if cues else index
-            log.info("реплика %d: %s", number, reason)
+            log.info("cue %d: %s", number, reason)
 
-        # Учебный режим выключен: второй строкой идёт текст распознавания, как и
-        # раньше. Подставляет его демон, а не оверлей — только здесь известно,
-        # включён ли режим, и пустая учебная строка означает именно неудачу,
-        # а не «показать оригинал».
+        # The study mode is off: the second line is the recognition text, as
+        # before. The daemon substitutes it, not the overlay — only here is it known
+        # whether the mode is on, and an empty study line means exactly a failure,
+        # not "show the original".
         return [(src, ru) for src, ru in zip(batch.cues, lines)]
 
     async def _translate_halves(
         self, cues: list[JobCue], job: Job, held
     ) -> list[tuple[str, str]]:
-        """Батч не прошёл целиком — делим пополам. Обычно виноват один длинный кусок.
+        """The batch did not go through in full — we divide it in half. Usually one long piece is to blame.
 
-        Проверка вытеснения обязательна на каждом уровне рекурсии: на батче в сорок
-        реплик спуск до поштучных попыток — это до семидесяти запросов к модели,
-        то есть десятки минут удержания карты. Без проверки лестница чинила бы
-        перевод, игнорируя, что пользователь давно ждёт свою очередь.
+        The preemption check is mandatory at every level of recursion: on a batch of forty
+        cues, descending to one-by-one attempts is up to seventy model requests,
+        that is, tens of minutes of holding the card. Without the check the ladder would
+        repair the translation ignoring that the user has long been waiting for their turn.
         """
         held.check()
 
@@ -1678,18 +1702,18 @@ class JobRunner:
         return out
 
     def _next_batch(self, job: Job, pending: list[JobCue]) -> list[JobCue]:
-        """Ближайшие к плейхеду реплики, подряд идущие.
+        """The cues nearest to the playhead, running consecutively.
 
-        Подряд — обязательно: соседние реплики переводятся вместе, потому что
-        контекст нужен для согласования рода и терминологии.
+        Consecutively — mandatory: neighbouring cues are translated together, because
+        context is needed to agree on gender and terminology.
 
-        Плейхедов у задания несколько, по одному на зрителя, и каждый следующий батч
-        идёт вокруг очередного из них: см. Job.aim.
+        A job has several playheads, one per viewer, and each next batch
+        goes around the next of them: see Job.aim.
         """
-        # Позиция берётся ОДИН раз на батч: каждый aim() проворачивает круг между
-        # зрителями. Обратись мы к нему из ключа min, то есть на каждой ожидающей
-        # реплике, круг крутился бы по их числу за батч, и очередь перестала бы
-        # чередоваться: при чётном числе реплик все батчи доставались бы одному зрителю.
+        # The position is taken ONCE per batch: every aim() turns the circle between
+        # the viewers. Were we to call it from the min key, that is, on every pending
+        # cue, the circle would turn once per cue per batch, and the turn would stop
+        # alternating: with an even number of cues all batches would go to one viewer.
         aim = job.aim()
         nearest = min(pending, key=lambda c: abs(c.start - aim))
         start = max(0, nearest.index - BATCH_SIZE // 4)
@@ -1698,10 +1722,10 @@ class JobRunner:
         return window or pending[:BATCH_SIZE]
 
     def _context_for(self, job: Job, index: int) -> list[tuple[str, str]]:
-        """Несколько уже переведённых реплик перед батчем.
+        """A few already translated cues before the batch.
 
-        И сербский, и русский маркируют род в прошедшем времени. Без антецедента
-        модель угадает пол говорящего и перевернёт его посреди сцены.
+        Both Serbian and Russian mark gender in the past tense. Without an antecedent
+        the model would guess the speaker's gender and flip it in the middle of a scene.
         """
         context = []
 
@@ -1715,16 +1739,17 @@ class JobRunner:
 def asr_cues(
     segments: list[dict], language: str, prompt: str | None
 ) -> tuple[list[Cue], list[tuple[str, str]]]:
-    """Реплики из сегментов распознавания и то, что выброшено по дороге: (причина, текст).
+    """Cues from the recognition segments and what was dropped along the way: (reason, text).
 
-    «Тишина» выбрасывает сегмент целиком. В сегменте с «повтором» уходят только
-    зациклившиеся предложения: память своя у каждого сегмента, петля живёт внутри одного
-    куска, и речь перед ней остаётся. В сегментах без пометки повторы не выбрасываются
-    никогда: «Da. Ne. Da.» — обычная речь. Эхо проверяется после повтора и после
-    normalize_cues: кириллический вывод сравнивается с латинской затравкой уже латиницей.
+    "Silence" drops the segment entirely. In a segment with a "repeat" only the
+    looped sentences go: the memory is each segment's own, the loop lives inside one
+    piece, and the speech before it remains. In segments without the mark repeats are never
+    dropped: "Da. Ne. Da." is ordinary speech. Echo is checked after the repeat and after
+    normalize_cues: the Cyrillic output is compared with the Latin seed already in Latin.
 
-    Фильтры только для распознавания — ветка дорожки автора в _pipeline не меняется.
-    Выбросы возвращаются, а не пишутся здесь, потому что журнал ведёт задание.
+    The filters are only for recognition — the author track branch in _pipeline is not
+    changed. The drops are returned rather than written here because the log is kept by the
+    job.
     """
     dropped: list[tuple[str, str]] = []
     kept = []
@@ -1735,12 +1760,12 @@ def asr_cues(
         else:
             kept.append(segment)
 
-    # Уже сказанное в сегменте: своё у каждого, петля живёт внутри одного куска.
+    # What has already been said in the segment: each has its own, the loop lives inside one piece.
     heard: dict[int, set[tuple[str, ...]]] = {}
 
     def drop(sentence: str, segment: dict) -> bool:
         if segment_verdict(segment) == "повтор":
-            # Слова без регистра и знаков: «Idemo dalje» без точки — тот же повтор.
+            # Words without case and punctuation: "Idemo dalje" without a dot is the same repeat.
             words = tuple(re.findall(r"\w+", sentence.casefold()))
             seen = heard.setdefault(id(segment), set())
             looped = words in seen or compression_ratio(sentence) > COMPRESSION_RATIO_THRESHOLD
@@ -1751,8 +1776,8 @@ def asr_cues(
 
                 return True
 
-        # Эхо проверяется после normalize_cues: кириллический вывод сравнивается
-        # с латинской затравкой уже латиницей.
+        # Echo is checked after normalize_cues: the Cyrillic output is compared
+        # with the Latin seed already in Latin.
         if is_echo(sentence, prompt):
             dropped.append(("эхо затравки", sentence))
 
@@ -1764,44 +1789,45 @@ def asr_cues(
 
 
 class JobManager:
-    """Реестр заданий: одно на ролик и вариант дорожки, общий пропуск на GPU."""
+    """The job registry: one per video and track variant, a shared lease on the GPU."""
 
     def __init__(self, config: Config | None = None) -> None:
-        # Конфигурация читается один раз, при старте. Смена модели требует
-        # перезапуска демона: модель резидентна в ollama, и менять её посреди
-        # задания значит переоткрывать всю дисциплину свопа.
+        # The configuration is read once, at startup. A model change requires
+        # a daemon restart: the model is resident in ollama, and changing it in the middle
+        # of a job means reopening the whole swap discipline.
         self.config = config or load_config()
         self.lease = GpuLease()
         self.cache = TrackCache()
-        # Каталог и потолок — из конфига: кэш можно держать и в /tmp (tmpfs),
-        # но тогда потолок меряют уже не диском.
+        # The directory and the ceiling — from the config: the cache can also be kept in /tmp
+        # (tmpfs), but then the ceiling is no longer measured by the disk.
         self.videos = VideoStore(
             self.config.video.directory or VIDEO_DIR,
             max_bytes=self.config.video.max_bytes,
         )
         self.runner = JobRunner(self.lease, self.cache, self.config)
-        # Ключ — пара (ролик, дорожка автора), а не один ролик: см. get_or_create.
-        # К словарю по одному video_id не обратиться — для этого есть get и jobs_for.
+        # The key is the pair (video, author track), not one video: see get_or_create.
+        # The dictionary cannot be accessed by a single video_id — for that there are get and
+        # jobs_for.
         self._jobs: dict[tuple[str, bool], Job] = {}
 
-        # Реестр живёт в памяти, и после перезапуска отложенный звук не нужен
-        # никому. А без чистки копился бы: приостановленное задание, чью вкладку
-        # закрыли, не возобновится и само его не уберёт.
+        # The registry lives in memory, and after a restart the stashed audio is needed by
+        # nobody. And without cleanup it would pile up: a paused job whose tab was
+        # closed will not resume, and it will not remove it itself.
         shutil.rmtree(PAUSED_AUDIO_DIR, ignore_errors=True)
 
     def attach(self, video_id: str, use_author_track: bool | None = None) -> Job | None:
-        """Существующее задание. В отличие от get_or_create, НИЧЕГО не создаёт.
+        """An existing job. Unlike get_or_create, it creates NOTHING.
 
-        Нужно опросу после восстановления. Обычный опрос идёт через get_or_create,
-        потому что подписка на ролик и есть согласие на работу. Но вкладка, которую
-        всего лишь перезагрузили, согласия не давала: она подхватила уже сделанное.
-        Если задание к этому моменту исчезло — демон перезапустили, реестр вытеснил
-        его, — создавать новое нельзя, иначе перезагрузка страницы сама запускала бы
-        скачивание и карту.
+        Needed by the poll after restore. An ordinary poll goes through get_or_create,
+        because subscribing to a video is itself consent to the work. But a tab that was
+        merely reloaded gave no consent: it picked up what was already done. If the job has
+        disappeared by this moment — the daemon was restarted, the registry evicted
+        it, — a new one must not be created, otherwise reloading the page would itself start
+        the download and the card.
 
-        Ищет так же, как get: с признаком дорожки — именно этот вариант ролика,
-        без него — самый недавно тронутый. Вкладка подхватывает своё задание, а не
-        соседнее: у ролика бывает по заданию на каждый вариант.
+        Searches the same way as get: with the track flag — exactly this video variant,
+        without it — the most recently touched. The tab picks up its own job rather than a
+        neighbouring one: a video has a job per variant.
         """
         job = self.get(video_id, use_author_track)
 
@@ -1811,16 +1837,16 @@ class JobManager:
         return job
 
     def _unfinished(self) -> int:
-        """Сколько заданий занимают место под MAX_ACTIVE_JOBS: незавершённые, кроме брошенных пауз.
+        """How many jobs take a place under MAX_ACTIVE_JOBS: unfinished, except abandoned pauses.
 
-        Идущее, ждущее карту и свежая пауза занимают: в паузе работа карты, и зритель мог
-        лишь отойти. Но пауза возобновляется только запросом клиента, сама она не
-        продолжится, и брошенная висела бы в реестре до перезапуска демона, а такие
-        же, набравшись, закрыли бы его для новых роликов насовсем. Поэтому простоявшая
-        дольше PAUSED_AUDIO_TTL (Job.is_stale_pause, тот же срок, по которому _evict
-        убирает её звук) в счёт не идёт. Из реестра она не уходит: вернувшийся зритель
-        возобновит её как существующее задание, а предел стережёт только создание.
-        Готовое и упавшее места не занимают.
+        A running one, one waiting for the card and a fresh pause take one: there is card work
+        in a pause, and the viewer may have only stepped away. But a pause is resumed only by a
+        client request, it will not continue by itself, and an abandoned one would hang in the
+        registry until the daemon restarts, and such ones, having accumulated, would close it
+        for new videos for good. That is why one that has stood longer than PAUSED_AUDIO_TTL
+        (Job.is_stale_pause, the same term by which _evict removes its audio) does not count.
+        It does not leave the registry: a returning viewer will resume it as an existing job,
+        while the limit guards only creation. A finished and a failed job take no place.
         """
         now = time.monotonic()
 
@@ -1831,107 +1857,107 @@ class JobManager:
     def get_or_create(
         self, video_id: str, target_lang: str = "ru", use_author_track: bool = True
     ) -> Job:
-        """Задание по ролику и варианту дорожки; нет такого — завести и запустить.
+        """The job for the video and track variant; if there is none — create and start it.
 
-        CapacityError поднимается, только когда заводить пришлось бы новое задание, а
-        мест под него нет: занято уже MAX_ACTIVE_JOBS (см. _unfinished). Задание, что уже
-        есть, отдаётся и при пределе: опрос зрителя отказом не встречают.
+        CapacityError is raised only when a new job would have to be created and there is no
+        place for it: MAX_ACTIVE_JOBS are already taken (see _unfinished). A job that already
+        exists is given out even at the limit: a viewer's poll is not met with a refusal.
         """
         key = (video_id, use_author_track)
         job = self._jobs.get(key)
         replaced: Job | None = None
 
-        # Тождество задания — пара «ролик и дорожка автора». Дорожка автора и
-        # распознавание дают разные тексты с разной нумерацией реплик, и два клиента
-        # с разным переключателем ждут разного: каждому достаётся своё задание, и
-        # никто не пересоздаёт чужое. Раньше задание было одно на ролик и
-        # сбрасывалось при расхождении, в расчёте на то, что значение приходит из
-        # настроек и между опросами не меняется, — для одного клиента верно, для
-        # двух нет: опросы сбрасывали задание друг друга на каждом витке (113 раз за
-        # 90 секунд), и каждый сброс запускал скачивание заново, а отмена его не
-        # останавливает: качалка живёт в to_thread, процессы yt-dlp оставались
-        # сиротами. Переключатель в расширении теперь просто ведёт к другому ключу:
-        # прежнее задание остаётся, и возврат к нему не начинает работу заново.
+        # The identity of a job is the pair "video and author track". The author track and
+        # recognition give different texts with different cue numbering, and two clients
+        # with a different switch wait for different things: each gets its own job, and
+        # nobody recreates someone else's. Before, the job was one per video and was
+        # dropped on a mismatch, in the expectation that the value comes from the settings
+        # and does not change between polls — true for one client, not for two: the polls
+        # dropped each other's job on every round (113 times in 90 seconds), and every drop
+        # started the download anew, and cancellation does not stop it: the downloader lives
+        # in to_thread, and the yt-dlp processes remained orphans. The switch in the
+        # extension now simply leads to another key: the previous job stays, and returning to
+        # it does not start the work anew.
         #
-        # Язык перевода в ключ не входит: он один на всех, и задание делается на том,
-        # с каким его создал первый обратившийся. Расхождение клиент видит сам —
-        # снимок несёт targetLang.
+        # The translation language is not part of the key: it is one for all, and the job is
+        # made with the one the first caller created it with. The client sees the discrepancy
+        # itself — the snapshot carries targetLang.
         #
-        # Единственное, что пересоздаёт задание без просьбы клиента, — повторяемый
-        # отказ, когда он остыл, и только то задание, что упало.
+        # The only thing that recreates a job without a client request is a retryable
+        # failure, once it has cooled down, and only the job that failed.
         if (
             job is not None
             and job.stage is Stage.ERROR
             and job.retryable
             and job.failed_at is not None
             and time.monotonic() - job.failed_at >= RETRY_COOLDOWN
-            # Повтор — это новое задание, и при переполнении его не заводят. Упавшее тогда
-            # остаётся как есть и отдаётся ниже, как до остывания: опрос по существующему
-            # заданию отказом не встречают, а снять его и после этого отказать значило бы
-            # потерять номер поколения и оставить подписчиков на отменённом.
+            # A retry is a new job, and it is not created on overflow. The failed one then
+            # stays as it is and is given out below, as before cooling: a poll on an existing
+            # job is not met with a refusal, and removing it and then refusing would mean
+            # losing the generation number and leaving the subscribers on a cancelled one.
             and self._unfinished() < MAX_ACTIVE_JOBS
         ):
-            # Отказ прилипает, но повторяемый отказ — не навсегда. Пересоздавать
-            # задание на каждом запросе нельзя: опрос зовёт get_or_create
-            # постоянно, и это давало шторм — отказ → пересоздание → отказ,
-            # восемь раз за тридцать секунд, с обращением к YouTube на каждом
-            # витке. Но и держать отказ вечно нельзя: сбой сети или 403 от
-            # googlevideo проходит сам, а зритель, нажавший запуск после F5,
-            # получал бы всё тот же старый отказ без единой новой попытки.
+            # A failure sticks, but a retryable one — not forever. Recreating
+            # the job on every request is impossible: the poll calls get_or_create
+            # constantly, and that gave a storm — failure → recreation → failure,
+            # eight times in thirty seconds, with a request to YouTube on every
+            # round. But keeping the failure forever is impossible either: a network
+            # problem or a 403 from googlevideo passes by itself, while a viewer who pressed
+            # start after F5 would get the same old failure without a single new attempt.
             #
-            # Остывание разводит эти два случая: от опроса — не чаще попытки
-            # в минуту на ролик, и это уже не шторм, а зрителю — настоящая
-            # новая попытка. Окончательные отказы (эфир, длина, удалённый или
-            # закрытый ролик) не пересоздаются вовсе: их повтор ничего не даст.
-            # Немедленный повтор по кнопке идёт через drop, он в API есть.
-            log.info("повторяю %s: отказ повторяемый и остыл (%s)", video_id, job.error)
-            # Не drop: тот снимает все варианты ролика, а второй, возможно, идёт
-            # у другого клиента.
+            # The cooling separates these two cases: from the poll — no more often than an
+            # attempt a minute per video, and that is no longer a storm, while for the viewer
+            # — a real new attempt. Final failures (a live stream, length, a removed or
+            # private video) are not recreated at all: repeating them will give nothing.
+            # An immediate retry by the button goes through drop, it is in the API.
+            log.info("retrying %s: the failure is retryable and has cooled down (%s)", video_id, job.error)
+            # Not drop: that one removes all variants of the video, while the second one may
+            # be running for another client.
             self._remove(job)
             replaced, job = job, None
 
         if job is None:
-            # Предел стережёт только создание, поэтому проверка здесь, а не в начале:
-            # опрос по существующему заданию до неё не доходит. Сюда же приходит и повтор
-            # упавшего: снятое задание завершено и в счёт не шло, а место для повтора
-            # проверено выше.
+            # The limit guards only creation, so the check is here rather than at the start:
+            # a poll on an existing job does not reach it. The retry of a failed job comes
+            # here too: the removed job was finished and did not count, and the place for the
+            # retry was checked above.
             unfinished = self._unfinished()
 
             if unfinished >= MAX_ACTIVE_JOBS:
                 raise CapacityError(
-                    f"слишком много роликов в работе ({unfinished}): место освободится, "
-                    "когда один из них закончится"
+                    f"too many videos in progress ({unfinished}): a place will free up "
+                    "when one of them finishes"
                 )
 
             job = Job(video_id, target_lang, use_author_track)
             self._jobs[key] = job
 
             if replaced is not None:
-                # Следующее поколение того же ролика. Номер ставится ДО переноса
-                # подписчиков: перенос шлёт каждому догоняющий снимок, и в нём он
-                # уже должен быть новым, иначе клиент принял бы пересозданное
-                # задание за прежнее.
+                # The next generation of the same video. The number is set BEFORE the
+                # subscribers are moved: the move sends each a catch-up snapshot, and in it
+                # it must already be the new one, otherwise the client would take the
+                # recreated job for the previous one.
                 job.generation = replaced.generation + 1
 
-                # Подписчики заменённого задания переходят к новому. Сокет
-                # переподписывается только своим watch — при переезде на другой
-                # вариант или когда его очередь на задании не стоит, как после
-                # сброса, — а пересоздаёт задание первое обращение после остывания
-                # отказа, чаще всего чужой опрос. До следующего watch, которого может
-                # и не быть, очередь сокета стоит на прежнем задании. Без переноса
-                # пересоздание оставило бы его слушать отменённое задание, а
-                # unwatch снимал бы очередь с нового, где её никогда не было.
+                # The subscribers of the replaced job move to the new one. The socket
+                # resubscribes only through its own watch — when moving to another
+                # variant or when its queue is not on the job, as after a
+                # drop, — while the job is recreated by the first request after the failure
+                # has cooled, most often someone else's poll. Until the next watch, which may
+                # never come, the socket queue stays on the previous job. Without the move,
+                # the recreation would leave it listening to the cancelled job, while
+                # unwatch would remove the queue from the new one, where it never was.
                 for queue in list(replaced._subscribers):
                     replaced.unsubscribe(queue)
                     job.subscribe(queue)
 
             job.start(self.runner)
         elif job.stage is Stage.ERROR:
-            # Отказ окончательный или ещё не остыл — отдаём его как есть, см. выше.
+            # The failure is final or has not cooled yet — we give it out as it is, see above.
             pass
         elif job.stage is Stage.PAUSED:
-            # Карту забирал пользователь. Реплики никуда не делись — продолжаем
-            # то же задание, а не начинаем заново с распознавания.
+            # The user was taking the card. The cues have not gone anywhere — we continue
+            # the same job rather than starting over from recognition.
             job.resume(self.runner)
 
         job.touched_at = time.monotonic()
@@ -1941,12 +1967,11 @@ class JobManager:
         return job
 
     def _key_for(self, video_id: str, fingerprint: str) -> CacheKey:
-        # Тот же рецепт, что у конвейера (track_key), иначе восстановление молча не
-        # находило бы сделанного. Закрепление — через hint, а не _pin: восстановление
-        # только читает и не отказывает. Негодное закрепление отказывает задание
-        # в конвейере, а ролики, закэшированные без закрепа, по-прежнему открываются:
-        # восстановление читает негодный код как «не закреплено»; сделанные при прежнем
-        # годном закрепе не находятся, пока код не исправлен.
+        # The same recipe as the pipeline (track_key), otherwise restore would silently fail
+        # to find what was done. The pin — through hint, not _pin: restore only reads and does
+        # not refuse. An unfit pin makes the job fail in the pipeline, while videos cached
+        # without a pin still open: restore reads an unfit code as "not pinned"; those made
+        # under the previous fit pin are not found until the code is fixed.
         return track_key(
             self.config, video_id, fingerprint, language.hint(self.config.asr.language)
         )
@@ -1958,27 +1983,27 @@ class JobManager:
         use_author_track: bool = True,
         duration: float | None = None,
     ) -> Job | None:
-        """Что уже есть по этому ролику. Работы НЕ начинает — ни сети, ни карты.
+        """What is already there for this video. Does NOT start work — neither network nor card.
 
-        Нужно для перезагрузки страницы. Согласие зрителя спрашивают один раз
-        за ролик, и переспрашивать его на F5 незачем: показать уже сделанное —
-        не то же самое, что начать качать аудио и занимать карту. Поэтому здесь
-        строго чтение: идущее задание отдаётся как есть, готовое поднимается
-        из кэша, а если нет ни того ни другого — возвращается None, и оверлей
-        честно показывает кнопку запуска.
+        Needed for a page reload. The viewer's consent is asked once
+        per video, and there is no point in asking again on F5: showing what is already done is
+        not the same as starting to download audio and occupy the card. That is why this is
+        strictly a read: a running job is given out as it is, a ready one is raised
+        from the cache, and if there is neither — None is returned, and the overlay
+        honestly shows the start button.
         """
-        # Ищем ровно тот вариант ролика, что просил зритель: задание с ДРУГИМ
-        # переключателем лежит под другим ключом и здесь не находится, отдельной
-        # сверки не нужно. Дорожка, сделанная с другой настройкой, — не то, что он
-        # просил, и для него ничего не готово, пока нет своей.
+        # We look for exactly the video variant the viewer asked for: a job with a DIFFERENT
+        # switch lies under another key and is not found here, no separate
+        # check is needed. A track made with another setting is not what they
+        # asked for, and nothing is ready for them until there is their own.
         key = (video_id, use_author_track)
         job = self._jobs.get(key)
 
         if job is not None:
-            # Приостановленное и провалившееся не восстанавливаем. Возобновление
-            # паузы — это захват карты, а прилипший отказ, поднятый в оверлей,
-            # закрывает зрителю кнопку: она прячется под сообщением об ошибке,
-            # и повторить попытку становится нечем.
+            # We do not restore a paused or failed one. Resuming a
+            # pause is capturing the card, while a stuck failure raised into the overlay
+            # hides the button from the viewer: it hides under the error message,
+            # and there is nothing left to retry with.
             if job.stage in (Stage.PAUSED, Stage.ERROR):
                 return None
 
@@ -1986,16 +2011,16 @@ class JobManager:
 
         payload = self._cached_variant(video_id, use_author_track, duration)
 
-        # Пустая дорожка — это не «всё готово», а испорченная запись. Отдай мы её,
-        # оверлей включился бы, спрятал кнопку по стадии done и не показал ничего,
-        # причём нажать было бы уже нечего.
+        # An empty track is not "everything is ready" but a corrupted record. Were we to give
+        # it out, the overlay would turn on, hide the button by the done stage and show
+        # nothing, and there would be nothing left to press.
         if payload is None or not payload.get("cues"):
             return None
 
         job = Job(video_id, target_lang, use_author_track)
         job.source = payload.get("track_fingerprint", "asr")
-        # Решение раньше реплик, как у _serve_cached; запись без него или с негодным —
-        # язык null и события language нет.
+        # The decision before the cues, as in _serve_cached; a record without it or with an
+        # unfit one — language null and no language event.
         verdict = LanguageVerdict.from_wire(payload.get("language"))
 
         if verdict is not None:
@@ -2019,18 +2044,18 @@ class JobManager:
         self._jobs[key] = job
         self._evict()
 
-        log.info("восстановил %s из кэша (%s, %d реплик)", video_id, job.source, len(job.cues))
+        log.info("restored %s from the cache (%s, %d cues)", video_id, job.source, len(job.cues))
 
         return job
 
     def translated(self, video_id: str, use_author_track: bool = True) -> bool:
-        """Сделан ли уже перевод этого ролика — только чтение, без работы.
+        """Whether the translation of this video is already done — read only, no work.
 
-        Списку ссылок нужно то же, что у готовности картинки: ответить сразу, без
-        сети и без карты. Ключ считается по нынешним настройкам, поэтому дорожка
-        от прежней модели готовым переводом не считается. Пустая дорожка —
-        испорченная запись, а не готовый перевод: с галкой зритель ждал бы
-        субтитров, которых нет.
+        The link list needs the same as the picture readiness: to answer at once, without
+        network and without the card. The key is counted by the current settings, so a track
+        from a previous model does not count as a ready translation. An empty track is
+        a corrupted record, not a ready translation: with a checkmark the viewer would wait
+        for subtitles that do not exist.
         """
         payload = self._cached_variant(video_id, use_author_track)
 
@@ -2039,19 +2064,19 @@ class JobManager:
     def _cached_variant(
         self, video_id: str, use_author_track: bool, duration: float | None = None
     ) -> dict | None:
-        """Сохранённая дорожка, отвечающая текущим настройкам.
+        """The saved track matching the current settings.
 
-        Отпечаток источника берём из самого файла, а ключ по нему пересчитываем:
-        совпадение ключа и означает, что дорожка сделана теми же моделями и тем же
-        промптом, что стоят сейчас. Иначе восстановление подсовывало бы результат
-        от другой модели, обходя ровно ту проверку, ради которой ключ и заведён.
+        The source fingerprint is taken from the file itself, and the key is recomputed from
+        it: a key match means the track was made by the same models and the same
+        prompt as the current ones. Otherwise restore would slip in a result
+        from another model, bypassing exactly the check the key was introduced for.
 
-        Закрепление в пересчитанном ключе — нынешнее, из настройки, а не записанное
-        в файле. Поэтому запись, сделанная при другом закреплении, при другой модели
-        или версии, не находится, но и не удаляется.
+        The pin in the recomputed key is the current one, from the setting, not the one
+        recorded in the file. That is why a record made under another pin, another model
+        or version is not found, but is not deleted either.
         """
-        # Из записи берётся только отпечаток. Ключ у отпечатка один, а get пишет used_at,
-        # поэтому на каждый отпечаток — один get, сколько бы записей его ни несли.
+        # Only the fingerprint is taken from the record. A fingerprint has one key, while get
+        # writes used_at, so there is one get per fingerprint, however many records carry it.
         fingerprints = dict.fromkeys(
             stored.get("track_fingerprint", "asr")
             for stored in self.cache.variants(video_id)
@@ -2059,22 +2084,22 @@ class JobManager:
         found: dict[str, dict] = {}
 
         for fingerprint in fingerprints:
-            # Длительность приходит от самого плеера: страница её знает точно,
-            # и запрашивать метаданные у YouTube на каждой загрузке не нужно.
-            # Без этой сверки перезалитый под тем же идентификатором ролик
-            # молча получал бы съехавшие тайминги.
+            # The duration comes from the player itself: the page knows it exactly,
+            # and there is no need to request metadata from YouTube on every load.
+            # Without this check a video re-uploaded under the same identifier
+            # would silently get shifted timings.
             hit = self.cache.get(self._key_for(video_id, fingerprint), duration)
 
             if hit is not None:
                 found[fingerprint] = hit
 
         if use_author_track:
-            # Дорожка автора приоритетнее — при включённом переключателе конвейер
-            # выбрал бы её же. Её отсутствие означает, что у ролика её просто нет,
-            # и распознавание для этой настройки такой же законный результат.
+            # The author track takes priority — with the switch on, the pipeline
+            # would have chosen it too. Its absence means the video simply does not have it,
+            # and recognition for this setting is an equally legitimate result.
             #
-            # Из нескольких дорожек автора (manual:sr и manual:sr-Latn) — самая свежая
-            # по created_at, последняя сделанная, а не первая по порядку строк индекса.
+            # Of several author tracks (manual:sr and manual:sr-Latn) — the freshest
+            # by created_at, the last one made, not the first by the index row order.
             manual = max(
                 (v for k, v in found.items() if k.startswith("manual:")),
                 key=lambda v: v["created_at"]
@@ -2088,26 +2113,27 @@ class JobManager:
         return found.get("asr")
 
     def _evict(self) -> None:
-        """Выбросить самые старые завершённые задания и удержать отложенный звук в бюджете.
+        """Throw out the oldest finished jobs and keep the stashed audio within the budget.
 
-        Реплики двадцатиминутного ролика — это сотни объектов, и реестр без
-        вытеснения рос бы всё время жизни процесса. Выбрасываем только то, что
-        уже никуда не движется: незавершённое задание держит транскрипт, ради
-        которого потрачена работа карты.
+        The cues of a twenty-minute video are hundreds of objects, and the registry without
+        eviction would grow for the whole life of the process. We throw out only what
+        is no longer moving anywhere: an unfinished job holds the transcript for
+        which card work was spent.
         """
-        # Сами приостановленные задания не вытесняются — в них работа карты.
-        # Но их отложенный звук, если к заданию полчаса никто не обращался,
-        # убираем: иначе брошенная пауза держала бы на диске десятки и сотни
-        # мегабайт до перезапуска демона, а он живёт неделями. Тот же признак
-        # снимает такую паузу со счёта под MAX_ACTIVE_JOBS: см. Job.is_stale_pause.
+        # The paused jobs themselves are not evicted — there is card work in them.
+        # But their stashed audio, if nobody has touched the job for half an hour,
+        # we remove: otherwise an abandoned pause would hold tens and hundreds of
+        # megabytes on disk until the daemon restarts, and it lives for weeks. The same sign
+        # takes such a pause off the count under MAX_ACTIVE_JOBS: see Job.is_stale_pause.
         #
-        # Отказ диска здесь запрос не роняет. _evict идёт в конце get_or_create (опрос
-        # с create=true, watch, POST /v1/jobs) и restore, когда задание уже заведено, а
-        # новое и запущено, — исключение отсюда превращало бы в 500 ответ о работающем
-        # задании. Звук, что не убрался, остаётся на диске без хозяина: discard_audio
-        # снимает ручку до удаления, и следующий обход к нему не вернётся. Такой файл
-        # уберёт бюджет (_trim_paused_audio), когда звука станет больше
-        # PAUSED_AUDIO_MAX_BYTES, или перезапуск демона.
+        # A disk failure here does not bring down the request. _evict goes at the end of
+        # get_or_create (a poll with create=true, watch, POST /v1/jobs) and restore, when the
+        # job is already created and the new one started, — an exception from here would turn
+        # the answer about a working job into a 500. Audio that failed to be removed stays on
+        # disk without an owner: discard_audio resets the handle before deleting, and the next
+        # walk will not come back to it. Such a file will be removed by the budget
+        # (_trim_paused_audio) when the audio grows past PAUSED_AUDIO_MAX_BYTES, or by a
+        # daemon restart.
         now = time.monotonic()
 
         for job in self._jobs.values():
@@ -2115,10 +2141,11 @@ class JobManager:
                 try:
                     job.discard_audio()
                 except OSError as exc:
-                    log.warning("звук брошенной паузы %s не убран: %s", job.video_id, exc)
+                    log.warning("audio of the abandoned pause %s not removed: %s", job.video_id, exc)
 
-        # Бюджет после срока, а не вместо него: срок уже убрал брошенное, и бюджет
-        # не должен из-за него трогать звук пауз, к которым обращаются.
+        # The budget after the term, not instead of it: the term has already removed what was
+        # abandoned, and the budget must not touch the audio of pauses that are being accessed
+        # because of it.
         self._trim_paused_audio()
 
         finished = [j for j in self._jobs.values() if j.finished]
@@ -2129,28 +2156,29 @@ class JobManager:
             self._jobs.pop((job.video_id, job.use_author_track), None)
 
     def _trim_paused_audio(self) -> None:
-        """Убрать самый старый отложенный звук, пока его всего больше PAUSED_AUDIO_MAX_BYTES.
+        """Remove the oldest stashed audio while its total is above PAUSED_AUDIO_MAX_BYTES.
 
-        Старшинство — по времени записи файла, одно на все файлы каталога. Файл, что
-        числится за заданием реестра, убирается через само задание: его ручка
-        (_audio_path) остаётся верной. Файл без хозяина — остаток погибшего задания —
-        просто стирается. Задание, оставшееся без звука, не ломается: take_audio вернёт
-        None, и возобновление скачает звук заново.
+        Seniority is by file write time, one for all files in the directory. A file that is
+        listed under a registry job is removed through the job itself: its handle
+        (_audio_path) stays correct. A file without an owner — the remnant of a dead job —
+        is simply erased. A job left without audio does not break: take_audio will return
+        None, and the resume will download the audio anew.
 
-        Ошибка диска наружу не выходит, по той же причине, что в _evict: уборка идёт с
-        каждым get_or_create. Каталог не прочитался — бюджет в этот раз не проверяется;
-        файл не измерился — в бюджет не входит; не стёрся — остаётся и в каталоге, и в
-        сумме, и бюджет добирается следующим по старшинству. Каждый такой отказ — строка
-        в журнале с путём и причиной.
+        A disk error does not come out, for the same reason as in _evict: the cleanup goes with
+        every get_or_create. The directory was not read — the budget is not checked this time;
+        a file was not measured — it does not count towards the budget; it failed to erase —
+        it stays both in the directory and in the sum, and the budget is made up by the next
+        one in seniority. Each such refusal is a line in the log with the path and the reason.
         """
         try:
             entries = list(PAUSED_AUDIO_DIR.iterdir())
         except FileNotFoundError:
-            # Каталог заводится при первой отсрочке звука, а после запуска его нет.
+            # The directory is created at the first audio stashing, and after startup it is
+            # absent.
             return
         except OSError as exc:
             log.warning(
-                "каталог отложенного звука %s не прочитан, бюджет не проверен: %s",
+                "stashed audio directory %s not read, budget not checked: %s",
                 PAUSED_AUDIO_DIR,
                 exc,
             )
@@ -2163,12 +2191,12 @@ class JobManager:
             try:
                 info = entry.stat()
             except FileNotFoundError:
-                # Файл могли убрать между перечислением и замером: звук откладывает и
-                # убирает рабочий поток. Такого файла в бюджете уже нет.
+                # The file may have been removed between listing and measuring: a worker thread
+                # both stashes and removes audio. Such a file is no longer in the budget.
                 continue
             except OSError as exc:
                 log.warning(
-                    "отложенный звук %s не измерен, в бюджет не вошёл: %s", entry.name, exc
+                    "stashed audio %s not measured, not counted towards the budget: %s", entry.name, exc
                 )
 
                 continue
@@ -2176,13 +2204,13 @@ class JobManager:
             files.append((info.st_mtime, info.st_size, entry))
 
         total = sum(size for _, size, _ in files)
-        # Опознаём по имени, а не по пути: mkstemp отдаёт абсолютный путь, а каталог
-        # мог быть задан и относительным. Имя в каталоге одно на файл.
+        # We identify by name, not by path: mkstemp returns an absolute path, while the
+        # directory could also be given as relative. The name in the directory is one per file.
         #
-        # Ручку каждого задания читаем один раз. Её сбрасывает и рабочий поток
-        # (discard_audio из take_audio и stash_audio, они идут через to_thread), и между
-        # проверкой на None и чтением имени она могла пропасть: второе чтение упало бы
-        # AttributeError.
+        # The handle of each job is read once. It is reset both by a worker thread
+        # (discard_audio from take_audio and stash_audio, which go through to_thread) and
+        # between the None check and reading the name it could disappear: a second read would
+        # fail with AttributeError.
         owners = {}
 
         for job in self._jobs.values():
@@ -2203,23 +2231,23 @@ class JobManager:
                 else:
                     entry.unlink(missing_ok=True)
             except OSError as exc:
-                log.warning("отложенный звук %s не убран: %s", entry.name, exc)
+                log.warning("stashed audio %s not removed: %s", entry.name, exc)
 
                 continue
 
             total -= size
             log.info(
-                "отложенный звук %s убран: звук пауз не должен занимать больше %d МиБ",
+                "stashed audio %s removed: pause audio must not take more than %d MiB",
                 entry.name,
                 PAUSED_AUDIO_MAX_BYTES // 2**20,
             )
 
     def jobs_for(self, video_id: str) -> list[Job]:
-        """Все задания по ролику, самое недавно тронутое первым.
+        """All jobs for the video, the most recently touched first.
 
-        Нужно тем, кто называет ролик без признака дорожки: позиция просмотра,
-        отписка, сброс. Какой из вариантов им нужен, они не говорят, а у ролика
-        их бывает два.
+        Needed by those who name the video without a track flag: the view position,
+        unwatching, dropping. Which of the variants they need they do not say, and a video
+        has two of them.
         """
         return sorted(
             (job for (video, _), job in self._jobs.items() if video == video_id),
@@ -2228,10 +2256,10 @@ class JobManager:
         )
 
     def get(self, video_id: str, use_author_track: bool | None = None) -> Job | None:
-        """Задание по ролику. С признаком дорожки — точно этот вариант.
+        """The job for the video. With the track flag — exactly this variant.
 
-        Без признака — самое недавно тронутое: к нему обращались последним, оно
-        и есть текущее для ролика.
+        Without the flag — the most recently touched: it was accessed last, and it
+        is the current one for the video.
         """
         if use_author_track is not None:
             return self._jobs.get((video_id, use_author_track))
@@ -2241,46 +2269,48 @@ class JobManager:
         return found[0] if found else None
 
     def drop(self, video_id: str, client_id: str | None = None) -> bool:
-        """Снять клиента с ролика и отменить те задания, на которые больше некому смотреть.
+        """Take the client off the video and cancel the jobs nobody is watching any more.
 
-        Действует на ВСЕ варианты ролика: сброс приходит без признака дорожки, и какой из
-        них смотрел клиент, демон не знает. С ключом клиент снимается с каждого варианта
-        (Job.forget_client), а отменяется и выносится из реестра только тот, где живых
-        записей не осталось (Job.live_slots): работа, которую ещё смотрит другой клиент,
-        не должна пропадать оттого, что один из двоих передумал. Замолчавший дольше
-        PLAYHEAD_TTL зрителем не считается: закрытую вкладку снять некому, и её запись
-        держала бы задание вечно.
+        Acts on ALL variants of the video: the drop comes without a track flag, and the daemon
+        does not know which of them the client was watching. With a key the client is taken
+        off each variant (Job.forget_client), while only the one with no live records left is
+        cancelled and removed from the registry (Job.live_slots): work still watched by another
+        client must not disappear because one of the two changed their mind. One who has fallen
+        silent for longer than PLAYHEAD_TTL does not count as a viewer: there is nobody to
+        remove a closed tab, and its record would hold the job forever.
 
-        Присланный, но негодный ключ (пустой, не строка, слишком длинный) — всё равно
-        ключ: forget_client сводит его к LEGACY_CLIENT, как и позицию просмотра. «Ключа нет»
-        — только None. Без ключа отменяется всё, как было, пока клиент был один: почему,
-        сказано в цикле.
+        A sent but unfit key (empty, not a string, too long) is still a key: forget_client
+        reduces it to LEGACY_CLIENT, as it does the view position. "No key" is only None.
+        Without a key everything is cancelled, as it was while there was one client: why,
+        it is said in the loop.
 
-        Известные ограничения, принятые сознательно:
+        Known limitations accepted deliberately:
 
-        1. Зритель — это живая запись позиции: подписка и длинный опрос ею не считаются, и
-           клиент, что ещё не сообщил, где смотрит, от чужого сброса не защищён. Так и
-           вкладка расширения с замороженной страницей (позиций нет дольше PLAYHEAD_TTL),
-           чей service worker ещё опрашивает с create=true, теряет задание от сброса
-           планшета с ключом, а следующий опрос воркера заводит его заново.
-        2. Записи на деле общие для ролика, а не для варианта: позиция приходит без
-           признака дорожки и ложится на все варианты. Сказывается, только когда клиенты
-           расходятся в authorTrack: вариант, который никто не смотрит, не отменится, пока
-           смотрят соседний, — работа лишняя, но не потерянная.
-        3. Сброс без ключа отменяет все варианты, в том числе здоровый, который смотрит
-           другой клиент. Расширение шлёт именно такой: кнопка повтора читает самый
-           недавно тронутый вариант и, если тот упал, сбрасывает ролик без тела.
+        1. A viewer is a live position record: a subscription and a long poll do not count as
+           one, and a client that has not yet reported where it is watching is not protected
+           from someone else's drop. So an extension tab with a frozen page (no positions for
+           longer than PLAYHEAD_TTL) whose service worker is still polling with create=true
+           loses the job from a tablet drop with a key, and the worker's next poll creates it
+           again.
+        2. The records are in fact shared for the video, not for the variant: the position comes
+           without a track flag and lands on all variants. It matters only when clients
+           differ in authorTrack: a variant nobody watches will not be cancelled while the
+           neighbouring one is watched — extra work, but not lost work.
+        3. A drop without a key cancels all variants, including a healthy one watched by
+           another client. The extension sends exactly that: the retry button reads the most
+           recently touched variant and, if it failed, drops the video without a body.
 
-        Возвращает, отменено ли хоть одно задание. Неизвестный ролик — тихое False.
+        Returns whether at least one job was cancelled. An unknown video — a silent False.
         """
         cancelled = False
 
         for job in self.jobs_for(video_id):
-            # Без ключа проверки нет, и задание отменяется, даже если его смотрит чей-то
-            # планшет. Это намеренно, а не недоделка: ключа не знает расширение, а оно уже
-            # умело сбросить задание целиком — так работает его кнопка повтора после отказа.
-            # Добавляющее изменение не должно отнимать у старого клиента то, что он умел.
-            # Планшет ключ присылает, и этой силы у него нет.
+            # Without a key there is no check, and the job is cancelled even if someone's
+            # tablet is watching it. This is deliberate, not unfinished work: the extension
+            # does not know the key, and it has already been able to drop a job entirely —
+            # that is how its retry button works after a failure. An additive change must not
+            # take from the old client what it could do. The tablet sends the key, and it has
+            # no such power.
             if client_id is not None:
                 job.forget_client(client_id)
 
@@ -2293,7 +2323,7 @@ class JobManager:
         return cancelled
 
     def _remove(self, job: Job) -> None:
-        """Снять и отменить одно задание. Соседний вариант ролика остаётся."""
+        """Remove and cancel one job. The neighbouring variant of the video stays."""
         self._jobs.pop((job.video_id, job.use_author_track), None)
         job.cancel()
 

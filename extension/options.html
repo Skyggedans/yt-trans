@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>yt-trans</title>
@@ -38,74 +38,74 @@
   </style>
 </head>
 <body>
-  <h1>yt-trans — субтитры к роликам YouTube локальными моделями</h1>
+  <h1>yt-trans — subtitles for YouTube videos with local models</h1>
 
   <div class="row">
     <div class="narrow">
-      <label for="scheme">Протокол</label>
+      <label for="scheme">Protocol</label>
       <select id="scheme">
         <option value="http">http</option>
         <option value="https">https</option>
       </select>
     </div>
     <div>
-      <label for="host">Адрес демона</label>
+      <label for="host">Daemon address</label>
       <input id="host" type="text" spellcheck="false">
     </div>
     <div>
-      <label for="port">Порт</label>
+      <label for="port">Port</label>
       <input id="port" type="number">
     </div>
   </div>
   <div class="hint">
-    Демон с сертификатом (<code>[server] tls_cert</code> в config.toml) слушает
-    только https, без сертификата — только http. Выбирать вручную не обязательно:
-    если выбранный протокол молчит, расширение само пробует второй. Кнопка
-    проверки делает то же и запоминает рабочий.
+    A daemon with a certificate (<code>[server] tls_cert</code> in config.toml) listens
+    only over https; without a certificate, only over http. Choosing manually is optional:
+    if the selected protocol stays silent, the extension tries the other one itself. The
+    check button does the same and remembers the one that works.
   </div>
 
   <fieldset>
-    <legend>Источник реплик</legend>
+    <legend>Cue source</legend>
 
     <label class="inline">
       <input id="useAuthorTrack" type="checkbox">
-      Брать субтитры автора, если они есть
+      Use the author's subtitles when available
     </label>
 
     <div class="hint">
-      У сербских роликов авторская дорожка встречается редко, но когда она есть,
-      она снимает распознавание целиком: и минуты работы карты, и её ошибки.
-      Выключай, если дорожка оказалась не транскриптом, а вольным пересказом,
-      переводом на другой язык или разъезжается с речью — тогда своё
-      распознавание точнее. Переключение начинает разбор открытого ролика заново.
+      For Serbian videos the author track is rare, but when it is there,
+      it removes speech recognition entirely: both the minutes of GPU work and its errors.
+      Turn it off if the track turned out to be not a transcript but a loose retelling,
+      a translation into another language, or drifting from the speech — then our own
+      recognition is more accurate. Switching restarts processing of the open video from scratch.
     </div>
   </fieldset>
 
   <fieldset>
-    <legend>Вторая строка</legend>
+    <legend>Second line</legend>
 
     <label class="inline">
       <input id="showOriginal" type="checkbox">
-      Показывать вторую строку
+      Show the second line
     </label>
 
     <div id="positionRow">
-      <label for="originalPosition">Где показывать</label>
+      <label for="originalPosition">Where to show it</label>
       <select id="originalPosition">
-        <option value="below">Под переводом</option>
-        <option value="above">Над переводом</option>
+        <option value="below">Below the translation</option>
+        <option value="above">Above the translation</option>
       </select>
     </div>
 
     <div class="hint">
-      Вторая строка — черногорский перевод той же реплики, для изучения языка.
-      Если режим выключен в конфиге демона, показывается текст распознавания.
-      Реплики, которые не удалось перевести, показываются исходным текстом всегда —
-      он выделен цветом и курсивом, и дублировать его эта настройка не будет.
+      The second line is the Montenegrin translation of the same cue, for language learning.
+      If the mode is disabled in the daemon config, the recognition text is shown.
+      Cues that could not be translated always show the source text —
+      it is highlighted in color and italics, and this setting will not duplicate it.
     </div>
   </fieldset>
 
-  <button id="check">Сохранить и проверить связь</button>
+  <button id="check">Save and check the connection</button>
 
   <div id="status" hidden></div>
 

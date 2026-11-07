@@ -1,10 +1,10 @@
-"""Иконки приложения для планшета: тёмный квадрат, кнопка-треугольник и две строки.
+"""App icons for the tablet: a dark square, a triangle button and two lines.
 
-Рисуются кодом, а не лежат готовыми, чтобы их можно было перерисовать одной
-командой и не хранить в репозитории ничего, что нельзя объяснить. Требования
-Android к иконкам — 192x192 и 512x512 в PNG; в манифесте объявлены обе.
+Drawn in code rather than kept ready-made, so they can be redrawn with one
+command and nothing unexplainable is stored in the repository. Android's
+icon requirements — 192x192 and 512x512 in PNG; both are declared in the manifest.
 
-Запуск: .venv/bin/python packaging/make-icons.py
+Run: .venv/bin/python packaging/make-icons.py
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 PAGE = Path(__file__).resolve().parent.parent / "page"
 
-# Цвета страницы: см. --bg и --accent в page/style.css.
+# Page colors: see --bg and --accent in page/style.css.
 BACK = (23, 23, 27)
 INK = (242, 242, 242)
 ACCENT = (76, 141, 255)
@@ -24,7 +24,7 @@ SUPERSAMPLE = 4
 
 
 def rounded(x: float, y: float, x0: float, y0: float, x1: float, y1: float, r: float) -> bool:
-    """Точка внутри прямоугольника со скруглёнными углами, координаты 0..1."""
+    """A point inside a rectangle with rounded corners, coordinates 0..1."""
     if not (x0 <= x <= x1 and y0 <= y <= y1):
         return False
 

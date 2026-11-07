@@ -1,24 +1,24 @@
-// Хранилище копий на устройстве и скачивание ролика целиком. Модуль не трогает
-// DOM и не импортирует logic.js: он знает только свою базу и поток байт,
-// поэтому его целиком гоняет node --test.
+// Storage of copies on the device and downloading a video whole. The module
+// does not touch the DOM and does not import logic.js: it knows only its own
+// database and the byte stream, so node --test runs it whole.
 
 export const DB_NAME = "yt-trans";
 export const DB_VERSION = 1;
 export const VIDEOS = "videos";
 export const META = "meta";
 
-const abortError = () => new DOMException("копирование отменено", "AbortError");
+const abortError = () => new DOMException("copy cancelled", "AbortError");
 
-// --- Скачивание --------------------------------------------------------
+// --- Downloading -------------------------------------------------------
 
-/** Тело ответа целиком. Оборванное тело — ошибка, а не пустой ответ. */
+/** The whole response body. An interrupted body is an error, not an empty answer. */
 export async function readJson(response) {
   const text = await response.text();
 
   return text ? JSON.parse(text) : {};
 }
 
-/** Чтение куска, которое не зависает после отмены: гонка чтения и сигнала. */
+/** Reading a chunk that does not hang after cancellation: a race of read and signal. */
 function readOrAbort(reader, signal) {
   if (!signal) {
     return reader.read();
@@ -35,8 +35,8 @@ function readOrAbort(reader, signal) {
 }
 
 /**
- * Тело как поток: куски уходят дальше по мере чтения, а не копятся в массиве.
- * Свой mp4 страница в памяти не держит — его забирает Blob.
+ * The body as a stream: chunks go on as they are read instead of piling up in
+ * an array. The page does not keep its own mp4 in memory — a Blob takes it.
  */
 export function collectBody(reader, { onProgress = () => {}, signal = null, total = 0 } = {}) {
   let seen = 0;
@@ -66,14 +66,14 @@ export function collectBody(reader, { onProgress = () => {}, signal = null, tota
 }
 
 /**
- * Скачать ролик. Копия попадает в базу только по возврату отсюда: прерванное
- * скачивание не оставляет на устройстве ничего.
+ * Download a video. The copy reaches the database only when it returns from
+ * here: an interrupted download leaves nothing on the device.
  */
 export async function downloadVideo(url, { onProgress = () => {}, signal = null } = {}) {
   const response = await fetch(url, { signal });
 
   if (!response.ok) {
-    throw new Error(`демон ответил ${response.status}`);
+    throw new Error(`daemon answered ${response.status}`);
   }
 
   const total = Number(response.headers.get("Content-Length") || 0);
@@ -85,7 +85,7 @@ export async function downloadVideo(url, { onProgress = () => {}, signal = null 
   return { blob, size: blob.size };
 }
 
-// --- База --------------------------------------------------------------
+// --- Database ----------------------------------------------------------
 
 function ask(request) {
   return new Promise((resolve, reject) => {
@@ -94,7 +94,7 @@ function ask(request) {
   });
 }
 
-/** Сделанность записи — по `tx.oncomplete`: `onsuccess` значит «принято», а не «легло». */
+/** Write completion is `tx.oncomplete`: `onsuccess` means "accepted", not "stored". */
 function done(tx) {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
@@ -110,12 +110,12 @@ export function openDb() {
     request.onupgradeneeded = () => {
       const db = request.result;
 
-      // videos — по ролику на запись, вместе с самим mp4 и его титрами.
+      // videos — one record per video, together with the mp4 itself and its cues.
       if (!db.objectStoreNames.contains(VIDEOS)) {
         db.createObjectStore(VIDEOS, { keyPath: "videoId" });
       }
 
-      // meta — мелкие вещи по ключу: последний список ссылок.
+      // meta — small things by key: the last list of links.
       if (!db.objectStoreNames.contains(META)) {
         db.createObjectStore(META, { keyPath: "key" });
       }
@@ -140,7 +140,7 @@ export function getVideo(db, videoId) {
   return ask(tx.objectStore(VIDEOS).get(videoId));
 }
 
-/** Список для главной: сам mp4 не нужен, а тянуть 400 МБ в память ради строки — нет. */
+/** A list for the home screen: the mp4 itself is not needed, and pulling 400 MB into memory for a row is not either. */
 export async function listVideos(db) {
   const tx = db.transaction(VIDEOS, "readonly");
   const records = await ask(tx.objectStore(VIDEOS).getAll());
@@ -171,9 +171,9 @@ export async function putMeta(db, key, value) {
   await done(tx);
 }
 
-// --- Место на устройстве -----------------------------------------------
+// --- Space on the device -----------------------------------------------
 
-/** Сколько ещё влезет; 0 — браузер не сказал, и приговор будет «unknown». */
+/** How much still fits; 0 — the browser did not say, and the verdict will be "unknown". */
 export async function freeBytes() {
   try {
     const { quota = 0, usage = 0 } = await navigator.storage.estimate();
@@ -184,7 +184,7 @@ export async function freeBytes() {
   }
 }
 
-/** Постоянное хранилище: иначе браузер вправе вытеснить копию при нехватке места. */
+/** Persistent storage: otherwise the browser may evict the copy when space runs short. */
 export async function askPersist() {
   try {
     return await navigator.storage.persist();

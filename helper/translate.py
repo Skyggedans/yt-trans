@@ -1,13 +1,13 @@
-"""Перевод реплик sr→ru через локальную ollama.
+"""Translating sr→ru utterances via local ollama.
 
-Выравнивание реплик гарантируется структурно, а не просьбами в промпте: схема с
-фиксированными ключами c1..cN компилируется ollama в GBNF-грамматику, и модель
-физически не может слить, разбить, потерять или переставить реплику. Схема идёт
-вне промпта и не стоит ни одного токена контекста.
+Alignment of utterances is guaranteed structurally, not by requests in the prompt: a
+schema with fixed keys c1..cN is compiled by ollama into a GBNF grammar, and the model
+physically cannot merge, split, lose or reorder an utterance. The schema goes outside
+the prompt and costs not a single token of context.
 
-Грамматика гарантирует СТРУКТУРУ и ничего не говорит о СОДЕРЖАНИИ: пустая строка,
-непереведённый сербский и продублированный текст — всё это схеме соответствует.
-Поэтому валидаторы ниже проверяют язык вывода, а не только форму.
+The grammar guarantees STRUCTURE and says nothing about CONTENT: an empty string,
+untranslated Serbian and duplicated text — all this conforms to the schema.
+Therefore the validators below check the output language, not just the form.
 """
 
 from __future__ import annotations
@@ -20,23 +20,23 @@ import httpx
 OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "qwen3.8:27b"
 
-# Буквы, которых нет в русском алфавите — надёжный признак, что сербское слово
-# просто проехало насквозь. В сербской кириллице есть ђ ј љ њ ћ џ, в русской нет.
+# Letters absent from the Russian alphabet — a reliable sign that a Serbian word
+# simply slipped through. Serbian Cyrillic has ђ ј љ њ ћ џ, Russian doesn't.
 SERBIAN_ONLY = re.compile(r"[ђЂјЈљЉњЊћЋџЏ]")
 
-# Сербская диакритика: в русском тексте взяться ей неоткуда, включая названия.
+# Serbian diacritics: they have nowhere to come from in Russian text, including names.
 SERBIAN_DIACRITICS = re.compile(r"[čćžšđČĆŽŠĐ]")
 
-# Латинское слово со строчной буквы. Имена собственные и марки пишутся с прописной,
-# поэтому под этот шаблон попадает именно непереведённая сербская лексика.
+# A Latin word starting with a lowercase letter. Proper names and brands are written with
+# a capital, so it's exactly untranslated Serbian lexis that falls under this pattern.
 LOWERCASE_LATIN_WORD = re.compile(r"\b[a-z]{4,}\b")
 
-# Ложные друзья sr→ru — главный класс ошибок для этой пары. Модель копирует сербское
-# слово именно потому, что оно похоже на русское, и результат получается грамматичным,
-# правильно выровненным, нужной длины и неправильным по смыслу.
+# False friends sr→ru — the main class of errors for this pair. The model copies a Serbian
+# word precisely because it looks like a Russian one, and the result is grammatical,
+# correctly aligned, of the right length and wrong in meaning.
 #
-# Стартовый набор. Расширять из документированных источников: Wikibooks «False Friends
-# of the Slavist», приложение «Ложные друзья переводчика (сербский)» в ru.wiktionary.
+# Starting set. Expand from documented sources: Wikibooks "False Friends
+# of the Slavist", the appendix "Ложные друзья переводчика (сербский)" in ru.wiktionary.
 FALSE_FRIENDS: dict[str, str] = {
     "pozorište": "театр",
     "slovo": "буква",
@@ -100,12 +100,12 @@ SYSTEM_PROMPT = """Ты переводишь субтитры с сербско�
 
 
 class TranslateError(RuntimeError):
-    """ollama не вернула пригодный ответ."""
+    """ollama didn't return a usable response."""
 
 
 @dataclass
 class Batch:
-    """Реплики на перевод плюс контекст, который к ним прилагается."""
+    """Utterances to translate plus the context attached to them."""
 
     cues: list[str]
     previous: list[tuple[str, str]] = field(default_factory=list)
@@ -115,12 +115,12 @@ class Batch:
 
 
 def cue_schema(count: int) -> dict:
-    """Схема, из которой ollama строит грамматику.
+    """The schema from which ollama builds the grammar.
 
-    Фиксированные ключи вместо массива с minItems/maxItems: массив ограничивает
-    только количество, а ключи — ещё и тождество, поэтому рассинхрон становится
-    самоочевидным. `prefixItems` использовать нельзя, он сломан в конвертере
-    json-schema→GBNF у llama.cpp.
+    Fixed keys instead of an array with minItems/maxItems: an array limits
+    only the count, while keys — also identity, so desynchronization becomes
+    self-evident. `prefixItems` can't be used, it's broken in llama.cpp's
+    json-schema→GBNF converter.
     """
     keys = [f"c{i}" for i in range(1, count + 1)]
 
@@ -133,24 +133,24 @@ def cue_schema(count: int) -> dict:
 
 
 def dual_cue_schema(count: int) -> dict:
-    """Схема на два языка сразу: {c1: {crnogorski, ruski}, …}.
+    """A schema for two languages at once: {c1: {crnogorski, ruski}, …}.
 
-    Вложенные объекты собираются руками, а не через Pydantic. Это не вкусовщина,
-    а свойство безопасности: model_json_schema() всегда выносит вложенные модели
-    в $ref/$defs, а на них конвертер схемы в грамматику у llama.cpp разворачивает
-    всё inline, упирается в бюджет правил и **отказывает молча** — возвращает 200
-    и генерирует без ограничений вообще. Гарантия числа реплик при этом исчезает
-    без единой ошибки в логе.
+    Nested objects are assembled by hand, not via Pydantic. This isn't a matter of taste,
+    but a safety property: model_json_schema() always moves nested models
+    into $ref/$defs, and on them the schema-to-grammar converter in llama.cpp expands
+    everything inline, hits the rule budget and **refuses silently** — returns 200
+    and generates without any constraints at all. The guarantee of the utterance count then
+    disappears without a single error in the log.
 
-    Имена внутренних ключей выбраны не для красоты. Под ограниченным декодированием
-    грамматика выписывает их сама, модель не может ни пропустить их, ни перефразировать,
-    и каждый оказывается в контексте прямо перед своим полем — то есть работает
-    как неснимаемая пометка языка на каждой реплике.
+    The names of the inner keys were chosen not for beauty. Under constrained decoding
+    the grammar writes them itself, the model can neither skip them nor paraphrase them,
+    and each one ends up in the context right before its field — i.e. it works
+    as an irremovable language label on every utterance.
 
-    Порядок ключей сохраняется до самой грамматики, поэтому черногорский идёт
-    первым намеренно: так он переводится с оригинала. Стой он вторым, между
-    источником и ним оказался бы русский текст, и получилась бы калька с русского —
-    ровно то, чего мы избегаем.
+    The order of the keys is preserved all the way to the grammar, so Montenegrin goes
+    first deliberately: that way it's translated from the original. If it stood second,
+    Russian text would end up between the source and it, and you'd get a calque from
+    Russian — exactly what we avoid.
     """
     cue = {
         "type": "object",
@@ -187,8 +187,9 @@ def build_user_message(batch: Batch) -> str:
         parts.append(f"СЛОВАРЬ (соблюдать неукоснительно):\n{pairs}")
 
     if batch.previous:
-        # Род в прошедшем времени маркируется и в сербском, и в русском. Без антецедента
-        # модель угадает пол говорящего и перевернёт его посреди сцены.
+        # Gender in the past tense is marked in both Serbian and Russian. Without an
+        # antecedent the model will guess the speaker's gender and flip it in the middle
+        # of the scene.
         lines = "\n".join(f"{src} → {dst}" for src, dst in batch.previous)
         parts.append(f"ПРЕДЫДУЩИЕ РЕПЛИКИ (контекст, НЕ переводить):\n{lines}")
 
@@ -207,23 +208,23 @@ def chat(
     num_ctx: int = 8192,
     num_predict: int = 4000,
     keep_alive: str = "60s",
-    # Десять минут были не запасом, а ловушкой. Замерено: батч из сорока реплик
-    # с обеими строками занимает 24-43 секунды, так что до таймаута дело доходит
-    # только когда что-то пошло не так, — и тогда конвейер стоял ДЕСЯТЬ МИНУТ,
-    # молча, не прислав ни одного события. Зритель видел замерший счётчик и решал,
-    # что связь оборвалась. Четыре минуты — всё ещё шестикратный запас к худшему
-    # замеру, но срыв теперь уходит в дробление батча за разумное время.
+    # Ten minutes weren't headroom but a trap. Measured: a batch of forty utterances
+    # with both lines takes 24-43 seconds, so the timeout is reached
+    # only when something has gone wrong — and then the pipeline stood TEN MINUTES,
+    # silently, without sending a single event. The viewer saw a frozen counter and
+    # decided that the connection had dropped. Four minutes is still a sixfold headroom
+    # to the worst measurement, but a failure now goes into batch splitting in reasonable time.
     timeout: float = 240.0,
 ) -> dict:
-    """Один вызов /api/chat.
+    """One /api/chat call.
 
-    `think: false` обязателен: с включёнными рассуждениями модель сжигает весь
-    num_predict на размышления и возвращает пустой content.
+    `think: false` is mandatory: with reasoning enabled the model burns all
+    num_predict on thinking and returns empty content.
 
-    `keep_alive` намеренно короткий и никогда не -1: планировщик ollama сортирует
-    кандидатов на выгрузку по sessionDuration, приведённой к uint64, поэтому
-    отрицательная длительность сортируется последней и делает модель невыгружаемой —
-    ровно то поведение враждебного соседа, которого мы избегаем.
+    `keep_alive` is deliberately short and never -1: ollama's scheduler sorts
+    unloading candidates by sessionDuration reduced to uint64, so
+    a negative duration sorts last and makes the model unloadable —
+    exactly the hostile-neighbour behavior we avoid.
     """
     body = {
         "model": model,
@@ -231,7 +232,7 @@ def chat(
         "stream": False,
         "think": False,
         "keep_alive": keep_alive,
-        # Дефолтный num_ctx у ollama 4096, и он обрезает молча, без ошибки.
+        # ollama's default num_ctx is 4096, and it truncates silently, without an error.
         "options": {
             "temperature": temperature,
             "num_ctx": num_ctx,
@@ -247,24 +248,25 @@ def chat(
     payload = response.json()
 
     if payload.get("done_reason") == "length":
-        raise TranslateError("ответ обрезан по num_predict — уменьшить батч или поднять лимит")
+        raise TranslateError("the response was truncated by num_predict — reduce the batch or raise the limit")
 
     if not payload.get("message", {}).get("content"):
-        raise TranslateError("ollama вернула пустой content")
+        raise TranslateError("ollama returned empty content")
 
     return payload
 
 
 def translate_dual(batch: Batch, model: str = DEFAULT_MODEL, **kwargs) -> list[tuple[str, str]]:
-    """Перевести батч сразу на черногорский и русский за один проход.
+    """Translate a batch into Montenegrin and Russian at once in one pass.
 
-    Один проход, а не два: вдвое дешевле по времени, и русская строка получается
-    глоссой именно к этой черногорской, а не независимым переводом. Для учебного
-    режима это и нужно — зритель сопоставляет строки слово к слову.
+    One pass, not two: twice as cheap in time, and the Russian line comes out
+    as a gloss to this very Montenegrin one, rather than an independent translation.
+    For the study mode that's exactly what's needed — the viewer matches the lines
+    word to word.
 
-    Глоссарий ложных друзей sr→ru сюда не попадает намеренно: его ключи екавские
-    (svet, nedelja, devojka), и в промпте с черногорской целью они тянут модель
-    обратно к екавице. Вместо него идут иекавские подсказки.
+    The false-friends glossary sr→ru deliberately doesn't go here: its keys are ekavian
+    (svet, nedelja, devojka), and in a prompt with a Montenegrin goal they pull the model
+    back to ekavica. Instead, ijekavian hints go in.
     """
     if not batch.cues:
         return []
@@ -282,9 +284,9 @@ def translate_dual(batch: Batch, model: str = DEFAULT_MODEL, **kwargs) -> list[t
         parts.append(f"NASLOV VIDEA: {batch.title}")
 
     if batch.previous:
-        # В контекст уходит только черногорская сторона. Екавские примеры
-        # в контексте разворачивают модель обратно к екавице — замерено:
-        # у qwen срываются все десять реплик из десяти.
+        # Only the Montenegrin side goes into the context. Ekavian examples
+        # in the context turn the model back to ekavica — measured:
+        # qwen fails all ten utterances out of ten.
         lines = "\n".join(f"{src} -> {dst}" for src, dst in batch.previous)
         parts.append(f"PRETHODNI TITLOVI (samo kontekst, ne prevoditi):\n{lines}")
 
@@ -310,64 +312,64 @@ def translate_dual(batch: Batch, model: str = DEFAULT_MODEL, **kwargs) -> list[t
     ]
 
 
-# Окно поиска: на сколько реплик вперёд и назад мог уехать текст. Замерено —
-# на живом материале дрейф доходил до пяти позиций, но за четыре берём с запасом:
-# шире окно, больше шансов на случайное совпадение у коротких реплик.
+# Search window: how many utterances forward and back the text could have moved. Measured —
+# on live material the drift reached five positions, but we take four with headroom:
+# the wider the window, the more chances of a random match for short utterances.
 DRIFT_WINDOW = 4
 
-# Реплики короче трёх знаменательных слов не оцениваем: «Da.», «Evo sad.»,
-# «Izazovan za istraživanje.» совпадают с чем угодно, и голосовать им нельзя.
+# Utterances shorter than three content words aren't scored: "Da.", "Evo sad.",
+# "Izazovan za istraživanje." match anything, and they can't vote.
 MIN_STEMS = 3
 
-# Насколько увереннее чужая позиция должна быть своей, чтобы считать это дрейфом.
+# How much more confident someone else's position must be than its own to count as drift.
 DRIFT_MARGIN = 0.34
 
-# Доля съехавших реплик, после которой батч бракуется. Замерено на 160 настоящих
-# репликах: у qwen3.8:27b — 0 из 122 оценённых на четырёх батчах, у translategemma:12b
-# на тех же батчах 11%, 32%, 50% и 81%. Между нулём и одиннадцатью процентами
-# места хватает, и порог тут — не подгонка под один прогон, а разделение двух
-# качественно разных поведений: модель либо держит соответствие один к одному,
-# либо не держит вовсе.
+# The share of drifted utterances after which the batch is rejected. Measured on 160 real
+# utterances: for qwen3.8:27b — 0 out of 122 evaluated across four batches, for
+# translategemma:12b on the same batches 11%, 32%, 50% and 81%. Between zero and eleven
+# percent there's enough room, and the threshold here isn't tuning to one run, but a
+# separation of two qualitatively different behaviors: the model either keeps one-to-one
+# correspondence, or doesn't keep it at all.
 DRIFT_RATIO = 0.10
 
 
 def _stems(text: str) -> set[str]:
-    """Знаменательные слова, огрублённые до основы.
+    """Content words, coarsened to a stem.
 
-    Четыре знака, потому что сербский флективен: pogledom и pogleda это одно
-    слово, и различать их здесь значит не находить очевидных соответствий.
+    Four characters, because Serbian is inflective: pogledom and pogleda are one
+    word, and distinguishing them here means not finding obvious correspondences.
     """
     return {w[:4] for w in re.findall(r"\w+", text.lower()) if len(w) >= 4}
 
 
 def _coverage(source: str, output: str) -> float:
-    """Какая доля слов исходной реплики нашлась в этом выводе."""
+    """What share of the source utterance's words was found in this output."""
     stems = _stems(source)
 
     return len(stems & _stems(output)) / len(stems) if stems else 0.0
 
 
 def alignment_shifted(sources: list[str], outputs: list[str]) -> bool:
-    """Разъехался ли вывод с источником: реплики слиты, сдвинуты или потеряны.
+    """Whether the output has drifted from the source: utterances merged, shifted or lost.
 
-    Грамматика гарантирует, что ключей вернётся ровно N. Она НЕ гарантирует,
-    что ключ cN относится к исходной реплике N: модель может слить две соседние
-    в одну и сдвинуть весь хвост, оставив последние огрызками. Субтитр при этом
-    показывает текст соседней реплики и выглядит совершенно правдоподобно.
+    The grammar guarantees that exactly N keys come back. It does NOT guarantee
+    that key cN relates to source utterance N: the model may merge two neighbouring ones
+    into one and shift the whole tail, leaving the last ones as stubs. The subtitle
+    meanwhile shows the text of the neighbouring utterance and looks completely plausible.
 
-    Ищем по содержанию, а не по длинам. Прежняя версия сравнивала корреляцию
-    длин при прямом сопоставлении и при сдвиге ровно на одну позицию — и на
-    настоящем материале не срабатывала НИ РАЗУ, включая батчи, где съехало
-    четыре пятых реплик. Две причины. Сдвиг там не на одну позицию, а
-    накопительный: слияния идут одно за другим, и хвост уезжает всё дальше.
-    И длина — слишком слабый признак: у соседних реплик она похожа, так что
-    корреляция почти не различает верное сопоставление и смещённое.
+    We search by content, not by lengths. The previous version compared the correlation
+    of lengths under direct matching and under a shift of exactly one position — and on
+    real material it didn't trigger ONCE, including batches where four fifths of the
+    utterances had drifted. Two reasons. The shift there isn't by one position but
+    cumulative: merges go one after another, and the tail moves further and further.
+    And length is too weak a feature: neighbouring utterances have a similar one, so
+    correlation hardly distinguishes a correct match from a shifted one.
 
-    Содержание таким недостатком не страдает: сербский источник и черногорский
-    вывод — это почти один и тот же текст, поэтому слова исходной реплики видно
-    в её переводе прямо. Спрашиваем не «похожи ли длины», а «где оказались
-    слова этой реплики»; если у большинства они лежат не на своём месте,
-    соответствие один к одному сломано.
+    Content doesn't suffer from this drawback: the Serbian source and the Montenegrin
+    output are almost the same text, so the words of the source utterance are visible
+    in its translation directly. We ask not "are the lengths similar", but "where did
+    this utterance's words end up"; if for most of them they lie in the wrong place,
+    the one-to-one correspondence is broken.
     """
     if len(sources) != len(outputs) or len(sources) < 6:
         return False
@@ -398,66 +400,65 @@ def alignment_shifted(sources: list[str], outputs: list[str]) -> bool:
 
 
 def validate_dual(pairs: list[tuple[str, str]], sources: list[str] | None = None) -> list[str]:
-    """Проверить оба поля разными мерками. Возвращает список замечаний к батчу.
+    """Check both fields by different measures. Returns a list of remarks on the batch.
 
-    Мерки обязаны быть разными. Детектор протечки сербского в русский для поля
-    `ruski` подходит идеально — он ровно для этого и написан. На черногорское
-    поле его наводить нельзя: он ругается на диакритику č ć ž š đ, которая там
-    обязательна, и на латинские слова со строчной буквы, то есть на каждое
-    черногорское слово. Направленный не туда, он пометил бы как брак сто
-    процентов правильного вывода и загнал бы лестницу починки в пустой цикл.
+    The measures must be different. The Serbian-leak detector into Russian is perfectly
+    suited to the `ruski` field — it was written exactly for that. It mustn't be pointed
+    at the Montenegrin field: it complains about the diacritics č ć ž š đ, which are
+    mandatory there, and about lowercase Latin words, i.e. about every Montenegrin word.
+    Pointed in the wrong direction, it would mark a hundred percent of correct output as
+    defective and drive the repair ladder into an empty loop.
     """
     from helper.montenegrin import check as check_montenegrin
 
     problems: list[str] = []
 
-    # Черногорский проверяется по батчу целиком: в короткой реплике может
-    # не оказаться ни одного слова с ятем, и судить по ней бессмысленно.
+    # Montenegrin is checked over the whole batch: a short utterance may
+    # contain no word with yat, and judging by it is meaningless.
     montenegrin = check_montenegrin(" ".join(me for me, _ in pairs))
 
     if montenegrin:
-        problems.append(f"черногорский: {montenegrin}")
+        problems.append(f"Montenegrin: {montenegrin}")
 
     leaked = sum(1 for _, ru in pairs if ru.strip() and looks_untranslated(ru))
 
     if leaked:
-        problems.append(f"в поле ruski не русский текст: {leaked} из {len(pairs)}")
+        problems.append(f"the ruski field is not Russian text: {leaked} of {len(pairs)}")
 
     empty = sum(1 for me, ru in pairs if not me.strip() or not ru.strip())
 
     if empty:
-        problems.append(f"пустых полей: {empty}")
+        problems.append(f"empty fields: {empty}")
 
     if sources and alignment_shifted(sources, [me for me, _ in pairs]):
         problems.append(
-            "вывод съехал относительно источника: реплики слиты, "
-            "и субтитр покажет текст соседней"
+            "the output drifted relative to the source: utterances merged, "
+            "and the subtitle will show the neighbouring one"
         )
 
     return problems
 
 
 def looks_untranslated(text: str) -> bool:
-    """Осталось ли в русском выводе что-то сербское.
+    """Whether something Serbian remains in the Russian output.
 
-    Наивная проверка «есть латиница — значит протечка» даёт слишком много ложных
-    срабатываний: русские субтитры законно содержат названия и номера — `The Beatles`,
-    `Douglas DC-9-32`, рейс `JU-367`, `YU-AHT`. На реальном материале так помечались
-    исключительно правильные переводы.
+    The naive check "there's Latin — so it's a leak" gives too many false
+    positives: Russian subtitles legitimately contain names and numbers — `The Beatles`,
+    `Douglas DC-9-32`, flight `JU-367`, `YU-AHT`. On real material, only correct
+    translations were marked this way.
 
-    Признаки, которые действительно означают непереведённое:
-      * сербские кириллические буквы (ђ ј љ њ ћ џ) — в русском алфавите их нет;
-      * сербская диакритика (č ć ž š đ) — в русском тексте ей взяться неоткуда;
-      * латинское слово целиком со строчной буквы — марки и имена собственные
-        пишутся с прописной или содержат цифры, а проехавшая насквозь лексика нет.
+    The signs that really mean untranslated:
+      * Serbian Cyrillic letters (ђ ј љ њ ћ џ) — they're absent from the Russian alphabet;
+      * Serbian diacritics (č ć ž š đ) — they have nowhere to come from in Russian text;
+      * a Latin word entirely in lowercase — brands and proper names are written with
+        a capital or contain digits, but lexis that slipped through isn't.
 
-    Сверять слово с источником бессмысленно: протёкшее слово часто слегка искажено
-    и дословно не совпадает. Проверено на 360 реальных переводах — ложных
-    срабатываний это правило не даёт.
+    Comparing a word with the source is pointless: a leaked word is often slightly distorted
+    and doesn't match literally. Verified on 360 real translations — this rule gives no
+    false positives.
 
-    Смещение в сторону чувствительности выбрано осознанно: валидатор запускает
-    повтор батча, поэтому ложное срабатывание стоит одной лишней попытки, а
-    пропуск отправляет ломаный текст на экран.
+    The tilt toward sensitivity is deliberate: the validator triggers a repeat of the batch,
+    so a false positive costs one extra attempt, while a miss sends broken text to the screen.
     """
     return bool(
         SERBIAN_ONLY.search(text)
@@ -467,34 +468,35 @@ def looks_untranslated(text: str) -> bool:
 
 
 def validate(cues: list[str], translated: list[str]) -> list[tuple[int, str]]:
-    """Список проблем как (индекс, причина). Пустой список — всё в порядке."""
+    """List of problems as (index, reason). An empty list — everything is fine."""
     problems: list[tuple[int, str]] = []
 
     for i, (source, target) in enumerate(zip(cues, translated)):
         stripped = target.strip()
 
         if not stripped:
-            problems.append((i, "пусто"))
+            problems.append((i, "empty"))
         elif stripped == source.strip():
-            problems.append((i, "не переведено"))
+            problems.append((i, "not translated"))
         elif looks_untranslated(stripped):
-            problems.append((i, "остался сербский"))
+            problems.append((i, "Serbian remained"))
         elif stripped.count("\n") >= 2:
-            problems.append((i, "больше двух строк"))
+            problems.append((i, "more than two lines"))
 
     return problems
 
 
 def estimate_num_predict(cues: list[str]) -> int:
-    """Сколько токенов надо разрешить на ответ для этого батча.
+    """How many tokens must be allowed for the response for this batch.
 
-    Константа здесь не работает. Реплики после сегментации короткие, но если на вход
-    попадут сырые тридцатисекундные окна Whisper (по ~300 знаков), фиксированный лимит
-    обрежет ответ, и батч вернётся пустым — грамматика не даст модели закончить JSON.
+    A constant doesn't work here. Utterances after segmentation are short, but if raw
+    thirty-second Whisper windows get into the input (~300 characters each), a fixed limit
+    will truncate the response, and the batch will come back empty — the grammar won't
+    let the model finish the JSON.
 
-    Оценка снизу вверх: русский длиннее сербского примерно на 15%, кириллица идёт
-    плотнее двух знаков на токен, плюс на каждую реплику уходит обвязка JSON
-    (ключ, кавычки, запятая), плюс запас в треть.
+    Estimate from the bottom up: Russian is about 15% longer than Serbian, Cyrillic goes
+    denser than two characters per token, plus each utterance takes JSON wrapping
+    (key, quotes, comma), plus a third of headroom.
     """
     source_chars = sum(len(c) for c in cues)
     text_tokens = source_chars * 1.15 / 2.0
@@ -504,7 +506,7 @@ def estimate_num_predict(cues: list[str]) -> int:
 
 
 def translate_batch(batch: Batch, model: str = DEFAULT_MODEL, **kwargs) -> list[str]:
-    """Перевести батч реплик, сохранив их количество и порядок."""
+    """Translate a batch of utterances, preserving their count and order."""
     if not batch.cues:
         return []
 
@@ -529,25 +531,25 @@ def translate_batch(batch: Batch, model: str = DEFAULT_MODEL, **kwargs) -> list[
 
 
 def _check_keys(data: dict, count: int) -> None:
-    """Убедиться, что модель вернула ровно ожидаемые ключи.
+    """Make sure the model returned exactly the expected keys.
 
-    Проверять надо разобранный ответ, а не собранный из него список: список
-    строится по диапазону 1..N и всегда получается нужной длины, поэтому такая
-    проверка не сработала бы никогда.
+    One must check the parsed response, not a list assembled from it: the list
+    is built from the range 1..N and always comes out the right length, so such a
+    check would never fire.
 
-    А проверять необходимо, потому что грамматика может и не примениться:
-    при сбое разбора схемы llama.cpp пишет ошибку в свой лог, возвращает 200
-    и генерирует без ограничений. Отказ помечен как «не планируется к исправлению»,
-    так что единственная защита — сверить ключи на нашей стороне.
+    And checking is necessary because the grammar may not apply:
+    on a schema parse failure llama.cpp writes an error to its log, returns 200
+    and generates without constraints. The refusal is marked "won't fix",
+    so the only defense is to verify the keys on our side.
     """
     if not isinstance(data, dict):
-        raise TranslateError(f"ожидался объект, пришло {type(data).__name__}")
+        raise TranslateError(f"expected an object, got {type(data).__name__}")
 
     expected = {f"c{i}" for i in range(1, count + 1)}
     missing = expected - data.keys()
 
     if missing:
         raise TranslateError(
-            f"грамматика не применилась: нет ключей {sorted(missing)[:5]} "
-            f"из {count} ожидаемых"
+            f"the grammar didn't apply: missing keys {sorted(missing)[:5]} "
+            f"of {count} expected"
         )

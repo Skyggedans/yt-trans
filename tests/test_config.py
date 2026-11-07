@@ -1,4 +1,4 @@
-"""[asr] language в config.toml: что написал хозяин и что получает демон."""
+"""[asr] language in config.toml: what the owner wrote and what the daemon gets."""
 
 import logging
 import tomllib
@@ -62,8 +62,8 @@ def test_example_config_ships_auto():
 
 
 def test_the_video_cache_can_live_where_the_owner_says(tmp_path):
-    # /tmp — это tmpfs: там потолок меряют уже не диском, а оперативной памятью,
-    # поэтому и потолок задаётся рядом с каталогом, а не зашит в код.
+    # /tmp is tmpfs: there the ceiling is measured not by disk but by RAM,
+    # so the ceiling is set next to the directory rather than hard-coded.
     config = load(written(tmp_path, '[video]\ndir = "/tmp/yt-trans-video"\nmax_gib = 4\n'))
 
     assert config.video.directory == Path("/tmp/yt-trans-video")
@@ -105,8 +105,8 @@ def test_plain_http_stays_the_default(tmp_path):
 
 
 def test_half_a_certificate_stops_the_daemon(tmp_path):
-    # Один файл без другого — не «почти https»: uvicorn поднял бы обычный http,
-    # и зритель искал бы причину в планшете.
+    # One file without the other is not "almost https": uvicorn would bring up plain http,
+    # and the viewer would look for the cause in the tablet.
     cert = tmp_path / "cert.pem"
     cert.write_text("cert", encoding="utf-8")
 

@@ -1,7 +1,7 @@
-"""Сохранённые ссылки страницы планшета: только YouTube, без дублей, с потолком.
+"""Saved links of the tablet page: YouTube only, no duplicates, with a cap.
 
-Файл лежит рядом с настройками и переживает перезапуск демона. Это единственное
-состояние страницы на сервере: сами настройки просмотра живут в браузере.
+The file sits next to the settings and survives a daemon restart. This is the only
+page state on the server: the viewing settings themselves live in the browser.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from urllib.parse import urlsplit
 from helper.env import CONFIG_DIR
 
 LINKS_PATH = CONFIG_DIR / "links.json"
-# Потолок маленький намеренно: это домашний список того, что смотрят, а не
-# библиотека. Двести ссылок — это уже больше, чем человек листает с планшета.
+# The cap is deliberately small: this is a home list of what's being watched, not a
+# library. Two hundred links is already more than a person scrolls through from a tablet.
 MAX_LINKS = 200
 
 
@@ -31,8 +31,8 @@ class Link:
     url: str
     title: str
     kind: str  # video | playlist
-    # Метраж, который демон увидел при разборе ссылки. У плейлиста одного метража
-    # нет, у старых записей его тоже нет — тогда None.
+    # The duration the daemon saw when parsing the link. A playlist has no single
+    # duration, old records don't either — then None.
     duration: int | None = None
 
     def wire(self) -> dict:
@@ -46,10 +46,10 @@ class Link:
 
 
 def is_youtube_url(url: str) -> bool:
-    """Адрес YouTube и только он: демон качает по команде со страницы.
+    """A YouTube address and only it: the daemon downloads on command from the page.
 
-    Хост сравнивается целиком (или как поддомен youtube.com), а не «содержит»:
-    youtube.com.evil.example — чужой сайт, и yt-dlp не должен о нём узнать.
+    The host is compared whole (or as a subdomain of youtube.com), not "contains":
+    youtube.com.evil.example is a foreign site, and yt-dlp must not learn about it.
     """
     try:
         parts = urlsplit(url)
@@ -68,10 +68,10 @@ def link_id(url: str) -> str:
 
 
 def clean_duration(raw: object) -> int | None:
-    """Секунды из того, что пришло от yt-dlp или с диска; мусор — это None.
+    """Seconds from what came from yt-dlp or from disk; garbage is None.
 
-    Метраж нужен строке списка, поэтому мусорное значение лучше потерять, чем
-    показать «NaN:NaN» или отрицательное время.
+    The duration is needed by the list row, so a garbage value is better lost than
+    showing "NaN:NaN" or a negative time.
     """
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
@@ -80,7 +80,7 @@ def clean_duration(raw: object) -> int | None:
 
 
 def load(path: Path | None = None) -> list[Link]:
-    """Ссылки с диска. Битый или отсутствующий файл — пустой список, а не падение."""
+    """Links from disk. A broken or missing file is an empty list, not a crash."""
     path = LINKS_PATH if path is None else path
 
     try:
@@ -120,7 +120,7 @@ def add(
     duration: int | None = None,
     path: Path | None = None,
 ) -> Link:
-    """Добавить ссылку. Та же ссылка второй раз возвращает уже сохранённую запись."""
+    """Add a link. The same link a second time returns the already saved record."""
     items = load(path)
     known = link_id(url)
 
@@ -129,7 +129,7 @@ def add(
             return link
 
     if len(items) >= MAX_LINKS:
-        raise TooManyLinks(f"не больше {MAX_LINKS} ссылок")
+        raise TooManyLinks(f"no more than {MAX_LINKS} links")
 
     link = Link(id=known, url=url, title=title, kind=kind, duration=clean_duration(duration))
     save([link, *items], path)

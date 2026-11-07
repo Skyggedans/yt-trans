@@ -1,4 +1,4 @@
-"""Сеть: адрес из конфига; страница самого демона ходит к нему с того же источника."""
+"""Network: the address from the config; the daemon's own page calls it from the same origin."""
 
 import asyncio
 
@@ -27,7 +27,7 @@ def test_the_same_authority_is_another_spelling_of_ourselves():
 
 
 async def test_the_page_served_by_the_daemon_may_call_the_api(client):
-    # 404, а не 403: запрос дошёл до обработчика и не нашёл задания.
+    # 404, not 403: the request reached the handler and found no job.
     response = await client.get(
         "/v1/jobs/zzzzzzzzzzz", headers={"Origin": "http://test"}
     )
@@ -41,7 +41,7 @@ async def test_a_foreign_page_still_cannot(client):
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "origin не разрешён"
+    assert response.json()["detail"] == "origin is not allowed"
 
 
 async def test_the_socket_still_refuses_a_foreign_page():
@@ -73,13 +73,13 @@ async def test_on_the_loop_health_still_diagnoses(client):
 
     assert body["ok"] is True
     assert "models" in body
-    # Токена больше нет — и подсказки, где он лежит, тоже.
+    # There is no token any more — and no hint where it lives, either.
     assert "token_path" not in body
 
 
 async def test_in_the_network_health_says_only_that_it_is_alive(client, monkeypatch):
-    # Без ключа и на всех интерфейсах: имена моделей, состояние заданий, размер
-    # кэша и путь к настройкам с именем пользователя — это карта чужой машины.
+    # Without a key and on all interfaces: model names, job state, cache
+    # size and the config path with the user's name are a map of someone else's machine.
     monkeypatch.setattr(helper_app, "HOST", "0.0.0.0")
 
     body = (await client.get("/v1/health")).json()

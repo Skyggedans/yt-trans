@@ -1,19 +1,19 @@
-"""Спайк 1: сколько на самом деле стоит сербский ASR.
+"""Spike 1: what Serbian ASR actually costs.
 
-Публичной цифры WER для large-v3 на сербском не существует. Единственная первичная —
-16–29% на FLEURS по трём меткам bs/hr/sr, эпоха large-v2, декабрь 2022. Всё остальное
-в обороте либо оттуда, либо из in-domain read speech, который польстит любой модели.
+There is no public WER number for large-v3 on Serbian. The only primary one —
+16–29% on FLEURS across three labels bs/hr/sr, large-v2 era, December 2022. Everything else
+in circulation is either from there or from in-domain read speech, which flatters any model.
 
-Меряем три вещи, и WER из них не самая важная:
-  * WER — насколько плох транскрипт;
-  * доля кириллицы — стабильна ли письменность (Whisper колеблется между двумя);
-  * максимальный повтор n-граммы — ушла ли модель в цикл галлюцинаций.
+We measure three things, and WER is not the most important of them:
+  * WER — how bad the transcript is;
+  * the share of Cyrillic — whether the script is stable (Whisper wavers between the two);
+  * the longest n-gram repeat — whether the model fell into a hallucination loop.
 
-Обе стороны нормализуются в латиницу ДО сравнения. Без этого меряется выбор
-письменности, а не точность, и цифры получаются бессмысленные.
+Both sides are normalized to Latin BEFORE comparison. Without this, it measures the choice
+of script, not accuracy, and the numbers come out meaningless.
 
   python spikes/asr_wer.py --fleurs 100
-  python spikes/asr_wer.py --clips clips/          # свои ролики + .txt рядом
+  python spikes/asr_wer.py --clips clips/          # your own videos + .txt next to them
 """
 
 from __future__ import annotations
@@ -33,12 +33,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import helper.env  # noqa: F401  — уводит кэш HF с ramdisk, обязателен до faster_whisper
+import helper.env  # noqa: F401  — moves the HF cache off the ramdisk, mandatory before faster_whisper
 
-# (модель, язык) — каждое плечо отвечает на свой вопрос:
-#   large-v3/sr   базовая линия
-#   turbo/sr      цена turbo, чья оценка почти наверняка не включала сербский
-#   large-v3/hr   цена екавицы против иекавицы и расхождения лексики
+# (model, language) — each arm answers its own question:
+#   large-v3/sr   baseline
+#   turbo/sr      the cost of turbo, whose evaluation almost certainly did not include Serbian
+#   large-v3/hr   the cost of ekavian versus ijekavian and vocabulary divergence
 ARMS = [
     ("large-v3", "sr"),
     ("large-v3-turbo", "sr"),
@@ -50,11 +50,11 @@ PUNCT = str.maketrans("", "", string.punctuation + "«»„“”—–…")
 
 
 def normalize(text: str) -> str:
-    """В латиницу, без пунктуации, в нижний регистр.
+    """To Latin, without punctuation, lowercase.
 
-    Направление важно: кириллица → латиница это инъективное отображение, а обратное
-    неоднозначно на диграфах lj/nj/dž через границу морфемы (nadživeti → надживети,
-    а не наџивети), и правиловые транслитераторы там ошибаются.
+    Direction matters: Cyrillic → Latin is an injective mapping, while the reverse
+    is ambiguous on the digraphs lj/nj/dž across a morpheme boundary (nadživeti → надживети,
+    not наџивети), and rule-based transliterators make mistakes there.
     """
     latin = cyrtranslit.to_latin(text, "sr")
 
@@ -71,7 +71,7 @@ def cyrillic_ratio(text: str) -> float:
 
 
 def max_ngram_repeat(text: str, n: int = 3) -> int:
-    """Длина самого длинного подряд идущего повтора n-граммы — детектор цикла."""
+    """Length of the longest consecutive repeat of an n-gram — a loop detector."""
     words = text.split()
     best = 0
 
@@ -100,11 +100,11 @@ class ArmResult:
 
 
 def load_fleurs(limit: int) -> list[tuple[np.ndarray, str]]:
-    """Только нужные сэмплы теста, потоком.
+    """Only the needed test samples, as a stream.
 
-    Без streaming `datasets` материализует все сплиты целиком (train там 2944 записи
-    со звуком) ещё до того, как применит срез `test[:100]` — несколько гигабайт ради
-    ста примеров.
+    Without streaming `datasets` materializes all splits in full (train there is 2944 records
+    with audio) even before applying the `test[:100]` slice — several gigabytes for
+    a hundred examples.
     """
     import io
     from itertools import islice
@@ -114,8 +114,8 @@ def load_fleurs(limit: int) -> list[tuple[np.ndarray, str]]:
 
     from helper.env import CACHE_DIR
 
-    # Streaming ничего не кэширует, а тянется он долго. Прогонов будет много —
-    # раскладываем распакованные сэмплы рядом, чтобы перезапуск был мгновенным.
+    # Streaming caches nothing, and it takes a long time. There will be many runs —
+    # we lay the decoded samples next to it so that a restart is instant.
     cache = CACHE_DIR / f"fleurs_sr_{limit}.npz"
     texts_path = cache.with_suffix(".json")
 
@@ -127,9 +127,9 @@ def load_fleurs(limit: int) -> list[tuple[np.ndarray, str]]:
 
     ds = load_dataset("google/fleurs", "sr_rs", split="test", streaming=True)
 
-    # decode=False обязателен: начиная с datasets 5.x декодирование аудио идёт через
-    # torchcodec, то есть тянет весь torch ради чтения wav. Байты мы и так умеем
-    # прочитать soundfile'ом, который уже стоит ради своих клипов.
+    # decode=False is mandatory: since datasets 5.x audio decoding goes through
+    # torchcodec, that is, it pulls the whole torch just to read wav. We can already read
+    # the bytes with soundfile, which is installed for its own clips anyway.
     ds = ds.cast_column("audio", Audio(decode=False))
     items = []
 
@@ -140,7 +140,7 @@ def load_fleurs(limit: int) -> list[tuple[np.ndarray, str]]:
             audio = audio.mean(axis=1)
 
         if rate != 16000:
-            raise SystemExit(f"FLEURS отдал {rate} Гц вместо 16000")
+            raise SystemExit(f"FLEURS returned {rate} Hz instead of 16000")
 
         items.append((audio, row["transcription"]))
 
@@ -153,7 +153,7 @@ def load_fleurs(limit: int) -> list[tuple[np.ndarray, str]]:
 
 
 def load_clips(directory: Path) -> list[tuple[np.ndarray, str]]:
-    """Свои ролики: <name>.wav рядом с <name>.txt (эталон, выправленный руками)."""
+    """Your own videos: <name>.wav next to <name>.txt (a reference corrected by hand)."""
     import soundfile as sf
 
     items = []
@@ -162,7 +162,7 @@ def load_clips(directory: Path) -> list[tuple[np.ndarray, str]]:
         ref = wav.with_suffix(".txt")
 
         if not ref.exists():
-            print(f"  пропуск {wav.name}: нет {ref.name}")
+            print(f"  skipping {wav.name}: no {ref.name}")
             continue
 
         audio, rate = sf.read(wav, dtype="float32")
@@ -171,7 +171,7 @@ def load_clips(directory: Path) -> list[tuple[np.ndarray, str]]:
             audio = audio.mean(axis=1)
 
         if rate != 16000:
-            raise SystemExit(f"{wav} должен быть 16 кГц, а не {rate}")
+            raise SystemExit(f"{wav} must be 16 kHz, not {rate}")
 
         items.append((audio, ref.read_text(encoding="utf-8")))
 
@@ -213,7 +213,7 @@ def run_arm(model_name: str, language: str, data: list[tuple[np.ndarray, str]]) 
     norm_hyps = [normalize(h) for h in hyps]
     norm_refs = [normalize(r) for r in refs]
 
-    # Пустая гипотеза ломает jiwer и всё равно означает провал — считаем её как есть.
+    # An empty hypothesis breaks jiwer and still means failure — we count it as is.
     pairs = [(r, h) for r, h in zip(norm_refs, norm_hyps) if r]
 
     return ArmResult(
@@ -229,25 +229,25 @@ def run_arm(model_name: str, language: str, data: list[tuple[np.ndarray, str]]) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fleurs", type=int, default=0, help="сколько сэмплов FLEURS sr_rs")
-    parser.add_argument("--clips", type=Path, help="каталог со своими .wav + .txt")
+    parser.add_argument("--fleurs", type=int, default=0, help="how many FLEURS sr_rs samples")
+    parser.add_argument("--clips", type=Path, help="directory with your own .wav + .txt")
     parser.add_argument("--out", type=Path, default=Path("spikes/asr_wer.json"))
     args = parser.parse_args()
 
     data: list[tuple[np.ndarray, str]] = []
 
     if args.fleurs:
-        print(f"загружаю FLEURS sr_rs [:{args.fleurs}] …")
+        print(f"loading FLEURS sr_rs [:{args.fleurs}] …")
         data += load_fleurs(args.fleurs)
 
     if args.clips:
-        print(f"загружаю свои клипы из {args.clips} …")
+        print(f"loading own clips from {args.clips} …")
         data += load_clips(args.clips)
 
     if not data:
-        parser.error("нужен --fleurs и/или --clips")
+        parser.error("need --fleurs and/or --clips")
 
-    print(f"{len(data)} сэмплов, {len(ARMS)} плеч\n")
+    print(f"{len(data)} samples, {len(ARMS)} arms\n")
     results = []
 
     for model_name, language in ARMS:
@@ -255,14 +255,14 @@ def main() -> int:
         result = run_arm(model_name, language, data)
         results.append(result)
         print(
-            f"   WER {result.wer:.3f}   кириллица {result.cyrillic_ratio:.2f}   "
-            f"повтор ×{result.max_repeat}   {result.seconds:.1f} с"
+            f"   WER {result.wer:.3f}   Cyrillic {result.cyrillic_ratio:.2f}   "
+            f"repeat ×{result.max_repeat}   {result.seconds:.1f} s"
         )
 
     args.out.write_text(json.dumps([asdict(r) for r in results], indent=2), encoding="utf-8")
-    print(f"\nзаписано в {args.out}")
+    print(f"\nwritten to {args.out}")
 
-    print(f"\n{'модель':22s} {'яз':3s} {'WER':>7s} {'кир':>6s} {'повтор':>7s} {'сек':>8s}")
+    print(f"\n{'model':22s} {'lang':3s} {'WER':>7s} {'cyr':>6s} {'repeat':>7s} {'sec':>8s}")
 
     for r in sorted(results, key=lambda x: x.wer):
         print(

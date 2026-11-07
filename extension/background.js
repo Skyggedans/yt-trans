@@ -1,59 +1,63 @@
 /**
- * Транспорт до локального демона: длинные опросы поверх обычного HTTP.
+ * Transport to the local daemon: long polling over plain HTTP.
  *
- * WebSocket здесь не работает, и это не чинится настройкой на нашей стороне.
- * Контекст расширения считается защищённым, поэтому браузер повышает ws://
- * до wss:// как смешанное содержимое. Исключение для локального адреса,
- * благодаря которому проходит обычный http://, на WebSocket не распространяется.
- * Замерено ловушкой на живом браузере: 13 попыток TLS против 10 успешных
- * обычных запросов к тому же порту.
+ * WebSocket does not work here, and that cannot be fixed by a setting on our side.
+ * The extension context counts as secure, so the browser upgrades ws://
+ * to wss:// as mixed content. The local-address exemption, thanks to which
+ * plain http:// goes through, does not extend to WebSocket. Measured with a trap
+ * on a live browser: 13 TLS attempts against 10 successful
+ * plain requests to the same port.
  *
- * Длинный опрос это лечит целиком: тот же самый http://, который демонстрирует
- * работоспособность, плюс побочная выгода — короткие повторяющиеся запросы
- * сбрасывают таймер простоя service worker'а в Chrome, тогда как один долгий
- * его, наоборот, убивает после тридцати секунд.
+ * Long polling cures this entirely: the same http:// that demonstrates
+ * that things work, plus a side benefit — short repeated requests
+ * reset the idle timer of Chrome's service worker, whereas one long
+ * request, on the contrary, kills it after thirty seconds.
  */
 
 const api = globalThis.browser ?? globalThis.chrome;
 
 const DEFAULTS = {
-  // Протокол до демона. Демон с сертификатом ([server] tls_cert в config.toml)
-  // слушает ТОЛЬКО https: обычному http такой порт не отвечает ничем, и зритель
-  // видел бы «демон не отвечает» при живом демоне. Выбирается в настройках.
+  // Protocol to the daemon. A daemon with a certificate ([server] tls_cert in
+  // config.toml) listens ONLY over https: a plain http request gets nothing from
+  // such a port, and the viewer would see "the daemon does not respond" while it
+  // is alive. Selected in the settings.
   scheme: "http",
   host: "127.0.0.1",
   port: 8756,
   targetLang: "ru",
-  // Готовая дорожка автора вместо распознавания, если она у ролика есть.
+  // A ready-made author track instead of recognition, if the video has one.
   useAuthorTrack: true,
 };
 
-// Пауза после сбоя. Демон может быть не запущен — долбиться в него чаще незачем.
+// Pause after a failure. The daemon may not be running — there is no point
+// hammering it more often.
 const RETRY_MS = 3000;
 
-// Проверка живости после обрыва: первая сразу, дальше всё реже, но не реже раза
-// в десять секунд — поднятый заново демон должен подхватываться быстро.
+// Liveness probe after a break: the first one immediately, then rarer and rarer,
+// but no rarer than once in ten seconds — a restarted daemon must be picked up
+// quickly.
 const PROBE_MIN_MS = 1000;
 const PROBE_MAX_MS = 10000;
 
-// Проверочный запрос отвечает мгновенно. Три секунды тишины — это уже не работа
-// демона, а зависший процесс или порт, который никто не слушает.
+// The probe request answers instantly. Three seconds of silence is no longer the
+// daemon working but a hung process, or a port nobody listens on.
 const PROBE_TIMEOUT_MS = 3000;
 
-/** Порты content script'ов по идентификатору вкладки. */
+/** Content script ports by tab identifier. */
 const tabs = new Map();
 
-/** Какой ролик смотрит вкладка. */
+/** Which video the tab is watching. */
 const watching = new Map();
 
 /**
- * Идущие опросы по идентификатору ролика: { controller, create, cursor, broken }.
+ * Running polls by video identifier: { controller, create, cursor, broken }.
  *
- * broken — зрителю показан сбой. Нужен, чтобы сообщить о ВОССТАНОВЛЕНИИ связи:
- * без этого сообщения надпись об обрыве оставалась на кнопке навсегда — опрос
- * успешно возобновлялся, но успех никому не сообщался, и зритель видел обрыв
- * при совершенно живом демоне. Живёт в самом опросе, а не в цикле, потому что
- * сбой бывает показан и до его начала: повтор сообщает о недошедшем сбросе сам.
+ * broken — a failure has been shown to the viewer. Needed to report RECOVERY
+ * of the connection: without that message the break notice stayed on the button
+ * forever — the poll resumed successfully, but the success was never reported,
+ * and the viewer saw a break while the daemon was perfectly alive. It lives in
+ * the poll itself rather than the loop because a failure may be shown before
+ * the poll starts: the retry reports the missed recovery itself.
  */
 const polls = new Map();
 
@@ -64,21 +68,22 @@ async function settings() {
 }
 
 function baseUrl({ scheme, host, port }) {
-  // Всё, кроме явного https, — http: в хранилище может лежать что угодно, а
-  // собирать из этого адрес запроса нельзя.
+  // Anything except an explicit https is http: the storage may hold anything,
+  // and a request address must not be built from it.
   return `${scheme === "https" ? "https" : "http"}://${host}:${port}`;
 }
 
 /**
- * Какой протокол до демона отвечает сейчас.
+ * Which protocol to the daemon answers right now.
  *
- * Настройке верить нельзя: временное дополнение теряет хранилище с каждой
- * перезагрузкой браузера, а демон с сертификатом слушает только https. Поэтому
- * протокол выбирается по первому же ответу — живой запоминается до конца сеанса.
+ * The setting cannot be trusted: a temporary add-on loses its storage on every
+ * browser restart, and a daemon with a certificate listens only over https. So
+ * the protocol is chosen by the very first response — the live one is remembered
+ * until the end of the session.
  */
 let liveScheme = null;
 
-/** Порядок проверки: живой протокол первым, второй — запасной. */
+/** Check order: the live protocol first, the other one as a fallback. */
 function schemes(config) {
   const chosen = config.scheme === "https" ? "https" : "http";
   const other = chosen === "https" ? "http" : "https";
@@ -87,11 +92,11 @@ function schemes(config) {
 }
 
 /**
- * Запрос к демону по живому протоколу.
+ * A request to the daemon over the live protocol.
  *
- * Отказ сети на одном протоколе не приговор: http к порту с TLS молчит так же,
- * как закрытый порт, а второй протокол в это время отвечает. Отмену не повторяем
- * никогда — это наш собственный unwatch, а не сбой.
+ * A network refusal on one protocol is not final: http to a TLS port is silent
+ * just like a closed port, while the other protocol answers at the same time.
+ * We never repeat a cancellation — it is our own unwatch, not a failure.
  */
 async function call(config, path, init = {}) {
   let failure;
@@ -110,7 +115,7 @@ async function call(config, path, init = {}) {
     }
   }
 
-  // Ни один не ответил: демон мог перезапуститься с другим сертификатом.
+  // Neither answered: the daemon may have restarted with a different certificate.
   liveScheme = null;
 
   throw failure;
@@ -127,8 +132,8 @@ function deliver(videoId, message) {
     if (!port) continue;
 
     try {
-      // videoId проставляем здесь: демон о нём в событиях не пишет, а content
-      // script обязан отбрасывать всё, что относится к предыдущему ролику.
+      // videoId is set here: the daemon does not write about it in events, and the
+      // content script must discard everything that belongs to the previous video.
       port.postMessage({ ...message, videoId });
     } catch {
       tabs.delete(tabId);
@@ -136,7 +141,7 @@ function deliver(videoId, message) {
   }
 }
 
-/** Стадия, на которой задание оказалось по итогам ответа опроса. */
+/** The stage the job ended up at according to the poll response. */
 function lastStage(data) {
   let stage = data.snapshot?.stage;
 
@@ -148,23 +153,24 @@ function lastStage(data) {
 }
 
 async function pollLoop(videoId, poll) {
-  // Обрывы подряд. Одиночный почти всегда устраивает не демон, а сам браузер:
-  // при смене сети — переподнятый интерфейс docker'а, выход из сна — Firefox
-  // закрывает каждое соединение, по которому пять секунд не шло ни байта,
-  // локальные тоже, и такой запрос не повторяет. Длинный опрос молчит до
-  // двадцати пяти секунд и попадает под это всякий раз. Свежее соединение после
-  // такой чистки работает сразу, поэтому первый обрыв зрителю не показываем
-  // и спрашиваем снова без паузы. Второй подряд — уже повод проверить демон.
+  // Breaks in a row. A single one is almost always caused not by the daemon but by
+  // the browser itself: on a network change — docker's interface brought back up,
+  // waking from sleep — Firefox closes every connection that carried no byte for
+  // five seconds, local ones too, and does not repeat such a request. Long polling
+  // stays silent for up to twenty-five seconds and hits this every time. A fresh
+  // connection after such a cleanup works at once, so the first break is not shown
+  // to the viewer and we ask again without a pause. A second one in a row is
+  // already a reason to check the daemon.
   let failures = 0;
 
-  // Сверяем сам объект, а не наличие ключа. Остановленный и тут же поднятый
-  // заново опрос по тому же ролику — это уже другой опрос, и старый цикл,
-  // проснувшись после await, иначе продолжил бы работать рядом с новым.
+  // Compare the object itself, not the presence of the key. A poll stopped and
+  // immediately restarted for the same video is a different poll, and the old loop,
+  // waking up after await, would otherwise keep running next to the new one.
   while (polls.get(videoId) === poll) {
     const config = await settings();
 
-    // Опрос могли остановить, пока читались настройки. Запрос, ушедший после
-    // этого, оборвать было бы уже некому.
+    // The poll could have been stopped while the settings were being read. A request
+    // sent after that would have nobody left to abort it.
     if (polls.get(videoId) !== poll) return;
 
     const controller = new AbortController();
@@ -176,8 +182,9 @@ async function pollLoop(videoId, poll) {
       `&authorTrack=${config.useAuthorTrack === false ? "false" : "true"}` +
       `&create=${poll.create ? "true" : "false"}`;
 
-    // Дошёл ли запрос до ответа. Отличает обрыв от ответа, который не удалось
-    // разобрать: второй повторять без паузы нельзя, см. ниже.
+    // Whether the request reached a response. Distinguishes a break from a response
+    // that could not be parsed: the latter must not be retried without a pause, see
+    // below.
     let answered = false;
 
     try {
@@ -186,8 +193,8 @@ async function pollLoop(videoId, poll) {
         cache: "no-store",
       });
 
-      // Ответ пришёл — какой угодно, но от живого процесса. Счёт обрывов
-      // ведётся только по запросам, которые не дошли вовсе.
+      // A response arrived — any response, but from a live process. The break count
+      // is kept only for requests that did not arrive at all.
       answered = true;
       failures = 0;
 
@@ -195,7 +202,7 @@ async function pollLoop(videoId, poll) {
         deliver(videoId, {
           type: "helper",
           ok: false,
-          reason: `демон ответил ${response.status}`,
+          reason: `the daemon answered ${response.status}`,
         });
         poll.broken = true;
         await sleep(RETRY_MS);
@@ -211,8 +218,9 @@ async function pollLoop(videoId, poll) {
         deliver(videoId, { type: "helper", ok: true });
       }
 
-      // Задания на демоне больше нет: его перезапустили или реестр вытеснил
-      // готовое. Создавать новое мы не вправе — согласия на это не давали.
+      // The job no longer exists on the daemon: it was restarted or the registry
+      // evicted the finished one. We have no right to create a new one — consent
+      // for that was never given.
       if (data.gone) {
         deliver(videoId, { type: "gone" });
         stopPolling(videoId);
@@ -226,11 +234,11 @@ async function pollLoop(videoId, poll) {
 
       for (const event of data.events || []) deliver(videoId, event);
 
-      // Готовое или упавшее задание больше ничего не пришлёт. Опрос по нему —
-      // это соединение, молчащее по двадцать пять секунд, которое браузер рвёт
-      // на каждой смене сети, и обрыв на экране поверх давно законченной работы.
-      // Заново такое задание начинает только зритель — повтором или сменой
-      // источника реплик, — и опрос тогда поднимается снова.
+      // A finished or failed job will send nothing more. Polling it is
+      // a connection silent for twenty-five seconds, which the browser tears
+      // on every network change, and a break on the screen on top of long
+      // finished work. Only the viewer starts such a job again — with a retry or
+      // a change of cue source — and the poll is raised again then.
       const stage = lastStage(data);
 
       if (stage === "done" || stage === "error") {
@@ -239,36 +247,37 @@ async function pollLoop(videoId, poll) {
         return;
       }
     } catch (error) {
-      // Отмена — это наш собственный unwatch, а не сбой.
+      // Cancellation is our own unwatch, not a failure.
       if (error.name === "AbortError") return;
 
       if (polls.get(videoId) !== poll) return;
 
       if (answered) {
-        // Ответ пришёл, но разобрать его не вышло: на порту слушает не демон,
-        // а другой сервер, или тело не того вида. Обрывом это не считается —
-        // повтор без паузы долбил бы тот сервер без единой передышки, а зритель
-        // смотрел бы на застывшую кнопку. Поступаем как с ответом-ошибкой.
-        console.warn(`yt-trans: ответ на опрос ${videoId} не разобран`, error);
-        deliver(videoId, { type: "helper", ok: false, reason: "непонятный ответ демона" });
+        // A response arrived, but it could not be parsed: something other than
+        // the daemon is listening on the port, or the body is of the wrong shape.
+        // This does not count as a break — repeating without a pause would hammer
+        // that server without a single breather, and the viewer would watch a
+        // frozen button. We act as with an error response.
+        console.warn(`yt-trans: could not parse the poll response ${videoId}`, error);
+        deliver(videoId, { type: "helper", ok: false, reason: "unclear daemon response" });
         poll.broken = true;
         await sleep(RETRY_MS);
         continue;
       }
 
-      console.warn(`yt-trans: опрос ${videoId} оборвался`, error);
+      console.warn(`yt-trans: poll ${videoId} broke off`, error);
       failures += 1;
 
       if (failures < 2) continue;
 
       poll.broken = true;
-      deliver(videoId, { type: "helper", ok: false, reason: "демон не отвечает, переподключаюсь…" });
+      deliver(videoId, { type: "helper", ok: false, reason: "the daemon is not responding, reconnecting…" });
 
       if (!(await waitForDaemon(videoId, poll))) return;
 
-      // Сообщаем сразу, не дожидаясь следующего опроса: на тихом задании тот
-      // молчит до двадцати пяти секунд, и всё это время кнопка твердила бы
-      // про обрыв, которого уже нет.
+      // Report at once without waiting for the next poll: on a quiet job it stays
+      // silent for up to twenty-five seconds, and all that time the button would
+      // keep repeating a break that no longer exists.
       poll.broken = false;
       failures = 0;
       deliver(videoId, { type: "helper", ok: true });
@@ -277,13 +286,13 @@ async function pollLoop(videoId, poll) {
 }
 
 /**
- * Дождаться, пока процесс демона снова ответит.
+ * Wait until the daemon process answers again.
  *
- * Спрашиваем то, на что демон отвечает сразу, ничего не создавая: снимок задания
- * или 404, если задания нет. Годится ЛЮБОЙ HTTP-ответ, даже 403 — важно не что
- * сказано, а что сказал живой процесс.
+ * We ask for something the daemon answers at once without creating anything: a job
+ * snapshot or a 404 if there is no job. ANY HTTP response is good enough, even a
+ * 403 — what matters is not what was said but that a live process said it.
  *
- * Возвращает false, если опрос за это время остановили.
+ * Returns false if the poll was stopped in the meantime.
  */
 async function waitForDaemon(videoId, poll) {
   for (let delay = PROBE_MIN_MS; ; delay = Math.min(delay * 2, PROBE_MAX_MS)) {
@@ -300,7 +309,8 @@ async function waitForDaemon(videoId, poll) {
 
       return polls.get(videoId) === poll;
     } catch {
-      // Порт закрыт или демон не успел ответить — ждём и спрашиваем снова.
+      // The port is closed or the daemon did not have time to answer — wait and ask
+      // again.
     }
 
     await sleep(delay);
@@ -314,11 +324,11 @@ function sleep(ms) {
 }
 
 /**
- * Спросить демон, есть ли уже что-то по этому ролику, и подхватить.
+ * Ask the daemon whether something already exists for this video, and pick it up.
  *
- * Зовётся при каждой загрузке страницы, поэтому обязана быть дешёвой и молчаливой:
- * запрос локальный, работы не запускает, а если демона нет или ролик незнаком —
- * просто ничего не делает, и зритель видит обычную кнопку запуска.
+ * Called on every page load, so it must be cheap and silent: the request is local,
+ * starts no work, and if there is no daemon or the video is unfamiliar it simply
+ * does nothing, and the viewer sees the usual start button.
  */
 async function restore(tabId, videoId, duration) {
   const config = await settings();
@@ -327,9 +337,9 @@ async function restore(tabId, videoId, duration) {
     `/v1/jobs/${encodeURIComponent(videoId)}/restore` +
     `?target=${encodeURIComponent(config.targetLang)}` +
     `&authorTrack=${config.useAuthorTrack === false ? "false" : "true"}` +
-    // Ноль — это «плеер ещё не прочитал метаданные», а не длительность. Уйди он
-    // в запрос как настоящий, сверка с кэшем провалилась бы, и восстановление
-    // молча не сработало бы именно на быстрой перезагрузке.
+    // Zero means "the player has not read the metadata yet", not a duration. If it
+    // went into the request as a real one, the cache check would fail, and the
+    // restore would silently not work precisely on a fast reload.
     (Number.isFinite(duration) && duration > 0 ? `&duration=${duration}` : "");
 
   let data;
@@ -346,45 +356,46 @@ async function restore(tabId, videoId, duration) {
 
   if (!data.found) return;
 
-  // Между просьбой и ответом зритель мог уйти на другой ролик: запрос идёт через
-  // два await. Без этой проверки опрос поднимался бы по покинутому ролику и жил
-  // вечно — останавливать его было бы уже некому.
+  // Between the request and the response the viewer could have moved to another
+  // video: the request goes through two awaits. Without this check the poll would
+  // be raised for an abandoned video and live forever — there would be nobody left
+  // to stop it.
   if (watching.get(tabId) !== videoId) return;
 
-  // Порядок важен: сперва отметка о восстановлении, она включает оверлей,
-  // и только потом снимок. Иначе реплики придут в неактивный оверлей
-  // и будут отброшены.
+  // The order matters: first the restore marker, which enables the overlay,
+  // and only then the snapshot. Otherwise cues would arrive into an inactive
+  // overlay and be discarded.
   deliver(videoId, { type: "restored" });
 
   if (data.snapshot) deliver(videoId, data.snapshot);
 
-  // По законченному заданию ждать нечего — опрос не поднимаем вовсе. Иначе он
-  // вечно дёргал бы создающий эндпоинт на каждой открытой вкладке. Упавшее
-  // сюда же: опрос с курсора в конце журнала о нём ничего нового не узнает
-  // и остановить себя не сможет.
+  // There is nothing to wait for on a finished job — we do not raise the poll at
+  // all. Otherwise it would forever poke the creating endpoint on every open tab.
+  // A failed one is the same: a poll from the end of the journal learns nothing
+  // new about it and cannot stop itself.
   if (data.stage === "done" || data.stage === "error") return;
 
   startPolling(videoId, { create: false, cursor: data.cursor ?? 0 });
 }
 
 /**
- * Поднять опрос событий.
+ * Raise the event poll.
  *
- * create различает две подписки. Обычная — следствие нажатия кнопки, и она вправе
- * создать задание: подписка на ролик и ЕСТЬ согласие на работу. Восстановленная
- * согласия не несёт: вкладку всего лишь перезагрузили, и если задания на демоне
- * уже нет, создавать его нельзя — иначе F5 сам начинал бы качать аудио и занимать
- * карту. Права только повышаются: нажатие на кнопку поверх восстановления делает
- * подписку полноценной.
+ * create distinguishes the two subscriptions. The usual one is a consequence of the
+ * button press, and it has the right to create a job: subscribing to a video IS
+ * consent to the work. A restored one carries no consent: the tab was merely
+ * reloaded, and if there is no job on the daemon anymore, it must not be created —
+ * otherwise F5 alone would start downloading audio and occupying the GPU. Rights
+ * only increase: a button press on top of a restore makes the subscription full.
  */
 function startPolling(videoId, { create = true, cursor = 0 } = {}) {
   const existing = polls.get(videoId);
 
   if (existing) {
-    // Право создавать только что дано — нажатием во вкладке, открытой
-    // перезагрузкой. Висящий запрос ушёл без него и промолчит до двадцати пяти
-    // секунд, а приостановленное задание по нему так и не возобновится.
-    // Поднимаем опрос заново с той же позиции, чтобы согласие дошло сразу.
+    // The right to create was just granted — by a press in a tab opened by a
+    // reload. The hanging request went out without it and will stay silent for up
+    // to twenty-five seconds, and a paused job will not resume through it. We raise
+    // the poll again from the same position so that consent arrives at once.
     if (create && !existing.create) {
       stopPolling(videoId);
       startPolling(videoId, { create: true, cursor: existing.cursor });
@@ -407,18 +418,19 @@ function stopPolling(videoId) {
 
   polls.delete(videoId);
 
-  // Обрываем висящий запрос, иначе он додержит соединение до конца ожидания.
+  // Abort the hanging request, otherwise it will hold the connection until the end
+  // of the timeout.
   if (poll.controller) poll.controller.abort();
 }
 
 /**
- * Повторить упавшее задание по просьбе зрителя.
+ * Retry a failed job at the viewer's request.
  *
- * Отказ на демоне прилипает: окончательный — навсегда, временный — на минуту
- * остывания. Иначе опрос сам устраивал бы шторм повторов с обращением к YouTube
- * на каждом витке. Зритель этой минуты ждать не должен, поэтому повтор — это
- * сброс задания и подписка заново. Курсор с нуля: у нового задания свой журнал,
- * и позиция в старом ничего в нём не значит.
+ * A refusal on the daemon sticks: a final one forever, a temporary one for a minute
+ * of cooling down. Otherwise the poll would itself cause a storm of retries hitting
+ * YouTube on every round. The viewer should not wait that minute, so a retry is a
+ * reset of the job and a fresh subscription. Cursor from zero: a new job has its
+ * own journal, and a position in the old one means nothing in it.
  */
 async function retry(videoId) {
   stopPolling(videoId);
@@ -428,12 +440,12 @@ async function retry(videoId) {
   let unreachable = false;
 
   try {
-    // Сбрасываем только то, что всё ещё лежит упавшим. Кнопка повтора бывает
-    // старше самого отказа: соседняя вкладка с тем же роликом его уже повторила,
-    // а до этой события нового задания не доходят, если фоновая страница
-    // успела уснуть и забыть, кто что смотрит. Сброс вслепую убил бы идущую
-    // работу — вплоть до распознавания на середине — и начал бы её с нуля.
-    // Идущее задание подписка просто подхватит.
+    // We reset only what is still lying failed. The retry button may be older than
+    // the refusal itself: a neighbouring tab with the same video has already retried
+    // it, and events of the new job do not reach this one if the background page
+    // managed to fall asleep and forget who is watching what. A blind reset would
+    // kill running work — even a recognition halfway through — and start it from
+    // scratch. A running job is simply picked up by the subscription.
     const response = await call(config, job, { cache: "no-store" });
     const snapshot = response.ok ? await response.json() : null;
 
@@ -441,23 +453,26 @@ async function retry(videoId) {
       await call(config, `${job}/drop`, { method: "POST", cache: "no-store" });
     }
   } catch (error) {
-    // Сброс не дошёл. Опрос поднимаем всё равно: дожидаться демона он умеет сам,
-    // а если отказ так и остался на месте, зритель увидит его снова и нажмёт ещё раз.
-    console.warn(`yt-trans: сброс ${videoId} не дошёл`, error);
+    // The reset did not arrive. We raise the poll anyway: it knows how to wait for
+    // the daemon itself, and if the refusal is still in place, the viewer will see
+    // it again and press once more.
+    console.warn(`yt-trans: reset ${videoId} did not arrive`, error);
     unreachable = true;
-    deliver(videoId, { type: "helper", ok: false, reason: "демон не отвечает, переподключаюсь…" });
+    deliver(videoId, { type: "helper", ok: false, reason: "the daemon is not responding, reconnecting…" });
   }
 
-  // Пока шёл сброс, зритель мог уйти с ролика. Задание без зрителя не нужно никому.
+  // While the reset was going on, the viewer could have left the video. A job with
+  // no viewer is needed by nobody.
   if (viewers(videoId).length === 0) return;
 
   startPolling(videoId, { create: true, cursor: 0 });
 
-  // Об обрыве зритель уже знает — значит, и о восстановлении должен узнать.
+  // The viewer already knows about the break — so they must learn about the
+  // recovery too.
   if (unreachable) polls.get(videoId).broken = true;
 }
 
-/** Отметить, какой ролик смотрит вкладка, отпустив прежний, если он больше никому не нужен. */
+/** Mark which video the tab is watching, releasing the previous one if nobody needs it anymore. */
 function follow(tabId, videoId) {
   const previous = watching.get(tabId);
 
@@ -478,8 +493,8 @@ async function sendPlayhead(videoId, t) {
       body: JSON.stringify({ t }),
     });
   } catch {
-    // Позиция просмотра — подсказка приоритета, а не команда. Потеря её
-    // ничего не ломает: следующая придёт через секунду.
+    // The playhead position is a priority hint, not a command. Losing it breaks
+    // nothing: the next one will come in a second.
   }
 }
 
@@ -497,15 +512,15 @@ api.runtime.onConnect.addListener((port) => {
       follow(tabId, message.videoId);
       startPolling(message.videoId);
     } else if (message.op === "restore") {
-      // Ролик вкладки отмечаем синхронно, до запроса: он нужен и для доставки
-      // сообщений, и как признак того, что вкладка всё ещё здесь, когда ответ
-      // вернётся. Работы это не начинает — её начинает только startPolling.
+      // Mark the tab's video synchronously, before the request: it is needed both
+      // for message delivery and as a sign that the tab is still here when the
+      // response returns. This starts no work — only startPolling starts it.
       follow(tabId, message.videoId);
       restore(tabId, message.videoId, message.duration);
     } else if (message.op === "retry") {
-      // Вкладка с законченным заданием после переподключения порта о себе
-      // не напоминает, поэтому отмечаем её заново: без этого новому заданию
-      // некому было бы доставлять события.
+      // A tab with a finished job does not announce itself after the port reconnects,
+      // so we mark it again: without this there would be nobody to deliver events of
+      // the new job to.
       follow(tabId, message.videoId);
       retry(message.videoId);
     } else if (message.op === "playhead") {
@@ -527,21 +542,23 @@ api.runtime.onConnect.addListener((port) => {
   });
 });
 
-// Смена адреса или протокола: обрываем опросы, они переподключатся
-// с новыми настройками на следующем витке цикла.
+// Address or protocol change: we break the polls, they will reconnect
+// with the new settings on the next round of the loop.
 //
-// Поднимаем заново только те, что шли, и каждый с его же правом создавать.
-// Законченное задание опроса не держит, и подписка с правом создания по нему
-// начала бы работу без нажатия: упавшее, остыв, демон пересоздаёт. То же
-// с восстановленной вкладкой — согласия она не давала, и смена настроек его
-// не даёт. Курсор с нуля: по новому адресу может отвечать другой демон,
-// и позиция в чужом журнале ничего не значит.
+// We raise again only those that were running, each with its own right to create.
+// A finished job holds no poll, and a subscription with the right to create on it
+// would start work without a press: the daemon recreates a failed one after it
+// cools down. The same with a restored tab — it gave no consent, and a settings
+// change does not give it. Cursor from zero: a different daemon may answer at the
+// new address, and a position in someone else's journal means nothing.
 api.storage.onChanged.addListener((changes) => {
   if (changes.scheme || changes.host || changes.port) {
-    // Новый адрес — новый выбор протокола: прежний мог достаться другому демону.
+    // A new address — a new protocol choice: the previous one may have belonged
+    // to another daemon.
     liveScheme = null;
 
-    // По копии: stopPolling меняет polls, а менять коллекцию во время обхода нельзя.
+    // On a copy: stopPolling changes polls, and the collection must not be changed
+    // while iterating.
     const running = [...polls].map(([videoId, poll]) => [videoId, poll.create]);
 
     for (const [videoId] of running) stopPolling(videoId);

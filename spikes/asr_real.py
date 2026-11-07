@@ -1,16 +1,16 @@
-"""Диагностика ASR на реальных роликах — без эталонов.
+"""ASR diagnostics on real videos — without references.
 
-FLEURS это начитанная википедийная проза; она ранжирует модели, но польстит любой
-и не предсказывает продуктовый опыт. Здесь меряем то, что можно померить без
-размеченного эталона, и что для оверлея важнее десятой доли WER:
+FLEURS is read-out Wikipedia prose; it ranks models, but flatters any
+and does not predict the product experience. Here we measure what can be measured without
+a labeled reference, and what matters more for an overlay than a tenth of WER:
 
-  * доля кириллицы до и после нормализации — колеблется ли Whisper между письменностями;
-  * максимальный подряд идущий повтор n-граммы — ушла ли модель в цикл;
-  * реплики на музыкальном интро — галлюцинирует ли на тишине и музыке;
-  * скорость относительно реального времени.
+  * the share of Cyrillic before and after normalization — whether Whisper wavers between scripts;
+  * the longest consecutive n-gram repeat — whether the model fell into a loop;
+  * cues over a musical intro — whether it hallucinates on silence and music;
+  * speed relative to real time.
 
-Плюс это первый сквозной прогон боевого пути: yt-dlp → ffmpeg → PCM → воркер
-в отдельном процессе → нормализация письменности. Читать вывод глазами обязательно.
+Plus this is the first end-to-end run of the production path: yt-dlp → ffmpeg → PCM → worker
+in a separate process → script normalization. Reading the output with your eyes is mandatory.
 
   python spikes/asr_real.py --ids VIDEOID1 VIDEOID2 --max-seconds 300
 """
@@ -52,10 +52,10 @@ def max_ngram_repeat(text: str, n: int = 3) -> int:
 
 
 def run_worker(pcm_bytes: bytes, language: str, model: str, timeout: float) -> dict:
-    """Боевой путь: воркер отдельным процессом, PCM через stdin.
+    """Production path: worker as a separate process, PCM through stdin.
 
-    Именно отдельным, а не вызовом функции — так проверяется и протокол, и то,
-    что процесс действительно отдаёт VRAM на выходе.
+    Separate, not a function call — this way both the protocol and the fact that
+    the process really gives VRAM back on exit are checked.
     """
     proc = subprocess.run(
         [
@@ -85,7 +85,7 @@ def main() -> int:
     parser.add_argument("--language", default="sr")
     parser.add_argument("--model", default="large-v3")
     parser.add_argument("--max-seconds", type=float, default=300.0)
-    parser.add_argument("--show", type=int, default=8, help="сколько реплик показать")
+    parser.add_argument("--show", type=int, default=8, help="how many cues to show")
     parser.add_argument("--out", type=Path, default=Path("spikes/asr_real.json"))
     args = parser.parse_args()
 
@@ -97,9 +97,9 @@ def main() -> int:
         try:
             info = probe(video_id)
             print(f"  {info.title[:66]}")
-            print(f"  канал: {info.channel} | длительность: {int(info.duration or 0)} с")
+            print(f"  channel: {info.channel} | duration: {int(info.duration or 0)} s")
         except YtDlpError as exc:
-            print(f"  ОШИБКА метаданных: {exc}")
+            print(f"  METADATA ERROR: {exc}")
             continue
 
         try:
@@ -107,35 +107,35 @@ def main() -> int:
             audio = audio_pcm(video_id)
             fetch_seconds = time.monotonic() - started
         except YtDlpError as exc:
-            print(f"  ОШИБКА аудио: {exc}")
+            print(f"  AUDIO ERROR: {exc}")
             continue
 
         full_seconds = audio.size / SAMPLE_RATE
         audio = audio[: int(args.max_seconds * SAMPLE_RATE)]
         clip_seconds = audio.size / SAMPLE_RATE
-        print(f"  аудио: {full_seconds:.0f} с получено за {fetch_seconds:.1f} с, "
-              f"беру первые {clip_seconds:.0f} с")
+        print(f"  audio: {full_seconds:.0f} s received in {fetch_seconds:.1f} s, "
+              f"taking the first {clip_seconds:.0f} s")
 
         try:
             started = time.monotonic()
             result = run_worker(audio.tobytes(), args.language, args.model, timeout=1800)
             asr_seconds = time.monotonic() - started
         except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-            print(f"  ОШИБКА ASR: {str(exc)[:400]}")
+            print(f"  ASR ERROR: {str(exc)[:400]}")
             continue
 
         cues = result["cues"]
         raw = " ".join(c["text"] for c in cues)
         latin = to_latin(raw)
 
-        # Боевой порядок целиком: нормализация письменности, затем сборка реплик.
-        # Сегменты Whisper — это тридцатисекундные окна по ~300 знаков, а не субтитры;
-        # отдавать их дальше по пайплайну нельзя ни для показа, ни для перевода.
+        # The full production order: script normalization, then cue assembly.
+        # Whisper segments are thirty-second windows of ~300 characters, not subtitles;
+        # they cannot be passed further down the pipeline either for display or for translation.
         subtitle_cues = build_cues(normalize_cues(cues))
 
-        # Покрытие ловит то, чего не ловит WER: молча выброшенную речь. Модель,
-        # пропустившая двадцать секунд рассказа, по WER на коротких отрывках
-        # выглядит нормально, а на реальном ролике это дыра в субтитрах.
+        # Coverage catches what WER does not: silently dropped speech. A model
+        # that missed twenty seconds of the story looks fine by WER on short excerpts,
+        # but on a real video that is a hole in the subtitles.
         spoken = sum(c["end"] - c["start"] for c in cues)
 
         entry = {
@@ -157,45 +157,45 @@ def main() -> int:
             ]
             if subtitle_cues
             else 0,
-            # В файл идут все реплики после сегментации: он служит входом
-            # для следующих спайков. Урезание до args.show касается только печати.
+            # All cues after segmentation go into the file: it serves as input
+            # for the following spikes. Trimming to args.show affects only printing.
             "cues_text": [c.text for c in subtitle_cues],
         }
         report.append(entry)
 
         print(
-            f"  сегментов {entry['cues']} → реплик {entry['subtitle_cues']} "
-            f"(медиана {entry['median_cue_chars']} знаков)   "
-            f"покрытие {entry['coverage']:.0%}   "
-            f"кириллица {entry['cyrillic_before']:.2f} → {entry['cyrillic_after']:.2f}   "
-            f"повтор ×{entry['max_repeat']}   "
-            f"ASR {asr_seconds:.1f} с (×{entry['realtime_factor']:.0f} рт)"
+            f"  segments {entry['cues']} → cues {entry['subtitle_cues']} "
+            f"(median {entry['median_cue_chars']} chars)   "
+            f"coverage {entry['coverage']:.0%}   "
+            f"Cyrillic {entry['cyrillic_before']:.2f} → {entry['cyrillic_after']:.2f}   "
+            f"repeat ×{entry['max_repeat']}   "
+            f"ASR {asr_seconds:.1f} s (×{entry['realtime_factor']:.0f} RT)"
         )
 
         if entry["first_cue_start"] is not None:
-            print(f"  первая реплика на {entry['first_cue_start']:.1f} с")
+            print(f"  first cue at {entry['first_cue_start']:.1f} s")
 
-        print("  ── первые реплики ──")
+        print("  ── first cues ──")
 
         for cue in cues[: args.show]:
             print(f"   {cue['start']:6.1f}  {to_latin(cue['text'])[:64]}")
 
     args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n{'=' * 72}\nзаписано в {args.out}")
+    print(f"\n{'=' * 72}\nwritten to {args.out}")
 
     if report:
         flips = [r for r in report if 0.05 < r["cyrillic_before"] < 0.95]
         loops = [r for r in report if r["max_repeat"] >= 3]
 
-        print(f"\nроликов: {len(report)}")
-        print(f"смешанная письменность внутри ролика: {len(flips)}")
-        print(f"подозрение на цикл галлюцинаций:      {len(loops)}")
+        print(f"\nvideos: {len(report)}")
+        print(f"mixed script within a video: {len(flips)}")
+        print(f"suspected hallucination loop:      {len(loops)}")
 
         if flips:
-            print("  → initial_prompt на латинице нужен, чтобы прибить письменность")
+            print("  → an initial_prompt in Latin is needed to pin the script")
 
         if loops:
-            print(f"  → проверить: {', '.join(r['video_id'] for r in loops)}")
+            print(f"  → check: {', '.join(r['video_id'] for r in loops)}")
 
     return 0
 

@@ -1,4 +1,4 @@
-"""Оснастка тестов демона: реестр заданий на временных путях и клиент поверх приложения."""
+"""Daemon test harness: a job registry on temporary paths and a client on top of the app."""
 
 import asyncio
 import atexit
@@ -19,37 +19,37 @@ import numpy as np
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-# Подмена путей стоит на уровне модуля и выполняется ДО любого `import helper.*`.
-# helper.env считает CACHE_DIR и CONFIG_DIR один раз, при импорте, а всё остальное
-# строится уже на них: JobManager() в конструкторе сносит PAUSED_AUDIO_DIR (там звук
-# приостановленных заданий настоящего демона), TrackCache пишет в настоящие
-# index.sqlite и tracks/, а импорт helper.app сам строит такой JobManager и читает
-# настоящий конфиг. Опоздай подмена на один импорт — первый же прогон тронул бы
-# всё это.
+# The path override sits at module level and runs BEFORE any `import helper.*`.
+# helper.env computes CACHE_DIR and CONFIG_DIR once, at import, and everything else
+# is built on them already: JobManager() in its constructor wipes PAUSED_AUDIO_DIR (that is where the audio
+# of paused jobs of the real daemon lives), TrackCache writes to the real
+# index.sqlite and tracks/, and importing helper.app itself builds such a JobManager and reads
+# the real config. Were the override one import late, the very first run would touch
+# all of that.
 #
-# tmp_path_factory здесь не годится: он существует только внутри фикстур, а conftest
-# импортируется раньше тестовых модулей. По той же причине helper.* ниже
-# импортируется лениво, внутри фикстур, а не наверху файла.
+# tmp_path_factory is no good here: it exists only inside fixtures, while conftest
+# is imported before the test modules. For the same reason helper.* below is
+# imported lazily, inside fixtures, and not at the top of the file.
 #
-# Присваивание безусловное: у человека, чей демон запущен с этими же переменными,
-# они есть и в оболочке, и setdefault оставил бы прогон на настоящем кэше.
+# The assignment is unconditional: for a person whose daemon runs with these same variables,
+# they are in the shell as well, and setdefault would leave the run on the real cache.
 os.environ["YT_TRANS_CACHE"] = tempfile.mkdtemp(prefix="yt-trans-cache-")
 os.environ["YT_TRANS_CONFIG"] = tempfile.mkdtemp(prefix="yt-trans-config-")
 
-# /tmp в Fedora — tmpfs, то есть память: за сотни прогонов каталоги накопились бы.
+# /tmp on Fedora is tmpfs, that is memory: over hundreds of runs the directories would pile up.
 for _variable in ("YT_TRANS_CACHE", "YT_TRANS_CONFIG"):
     atexit.register(shutil.rmtree, os.environ[_variable], ignore_errors=True)
 
 
 @pytest.fixture
 def manager(monkeypatch):
-    """Реестр заданий на временных путях, который не запускает конвейер.
+    """A job registry on temporary paths that does not start the pipeline.
 
-    Гарантии, на которые опираются тесты реестра и эндпоинтов:
-      * пути кэша и конфига временные (см. начало файла);
-      * Job.start и Job.resume ничего не запускают, а дописывают video_id
-        в manager.started — обычный list[str] в порядке вызовов;
-      * helper.app.manager — тот же объект, что получил тест.
+    Guarantees the registry and endpoint tests rely on:
+      * the cache and config paths are temporary (see the top of the file);
+      * Job.start and Job.resume start nothing but append video_id
+        to manager.started — a plain list[str] in call order;
+      * helper.app.manager — the same object the test received.
     """
     from helper import app as helper_app
     from helper import jobs
@@ -57,47 +57,47 @@ def manager(monkeypatch):
 
     started: list[str] = []
 
-    # Настоящие start и resume делают asyncio.create_task(runner.run(job)). В обычном
-    # тесте это «no running event loop», а в async-тесте — запуск настоящего конвейера:
-    # yt-dlp пошёл бы на YouTube, а пропуск на GPU взялся бы у настоящей карты. Тесты
-    # проверяют логику реестра и состояний, не конвейер, поэтому оба метода лишь
-    # записывают, что их позвали: возобновление приостановленного задания дописывает
-    # его video_id в started ещё раз, наравне с первым запуском.
+    # The real start and resume call asyncio.create_task(runner.run(job)). In an ordinary
+    # test that is "no running event loop", and in an async test it is starting the real pipeline:
+    # yt-dlp would go to YouTube, and the GPU lease would be taken from the real card. The tests
+    # check the logic of the registry and the states, not the pipeline, so both methods only
+    # record that they were called: resuming a paused job appends
+    # its video_id to started once more, on a par with the first start.
     def record(job, runner) -> None:
         started.append(job.video_id)
 
     monkeypatch.setattr(jobs.Job, "start", record)
     monkeypatch.setattr(jobs.Job, "resume", record)
 
-    # Конфигурация собрана в памяти из умолчаний: load() полез бы читать config.toml.
+    # The configuration is built in memory from defaults: load() would go read config.toml.
     registry = jobs.JobManager(config=Config(asr=AsrConfig(), translator=TranslatorConfig()))
     registry.started = started
 
-    # Обработчики приложения читают модульный helper.app.manager — отдельный
-    # JobManager, собранный при импорте. Подменяем его тем же объектом, что отдаём
-    # тесту: иначе запрос через client и прямой вызов manager шли бы в два реестра.
+    # The app's handlers read the module-level helper.app.manager — a separate
+    # JobManager built at import. We replace it with the same object we give to
+    # the test: otherwise a request through client and a direct manager call would go to two registries.
     monkeypatch.setattr(helper_app, "manager", registry)
 
     yield registry
 
-    # У TrackCache нет close(), и соединение sqlite закрыл бы только сборщик мусора —
-    # с ResourceWarning на Python 3.13+, который при запуске с -W error падал бы
-    # на случайном соседнем тесте, где как раз сработает сборка.
+    # TrackCache has no close(), and only the garbage collector would close the sqlite connection —
+    # with a ResourceWarning on Python 3.13+, which under -W error would crash
+    # on a random neighbouring test where the collection happens to run.
     registry.cache._db.close()
 
 
 @pytest.fixture
 def clock(monkeypatch):
-    """Монотонные часы, что стоят на месте, пока тест не позовёт advance(секунды).
+    """A monotonic clock that stands still until the test calls advance(seconds).
 
-    Подмена на уровне модуля time: jobs.py читает time.monotonic() через модуль.
-    Только для обычных тестов, не async: по этим же часам ходит цикл событий, и стоящие
-    часы остановили бы его таймеры.
+    The override is at the module level of time: jobs.py reads time.monotonic() through the module.
+    For ordinary tests only, not async: the event loop runs on these same clocks, and a standing
+    clock would stop its timers.
 
-    Отсчёт идёт от целого числа, а не от настоящего показания часов. Возраст записи —
-    разность двух вещественных, и «начало плюс срок минус начало» не всегда ровно срок:
-    сумма, перешагнувшая степень двойки, округляется. Проверку границы «ровно
-    PLAYHEAD_TTL» такой шум сделал бы случайной.
+    The count starts from a whole number, not from the real clock reading. The age of a record is
+    the difference of two floats, and "start plus term minus start" is not always exactly the term:
+    a sum that crossed a power of two is rounded. Such noise would make the "exactly
+    PLAYHEAD_TTL" boundary check random.
     """
     now = [1000.0]
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
@@ -110,11 +110,11 @@ def clock(monkeypatch):
 
 @pytest.fixture
 def audio_dir(manager):
-    """Каталог отложенного звука: к началу теста чистый, по окончании убранный.
+    """The paused audio directory: clean at the start of the test, removed at its end.
 
-    После manager, а не раньше: JobManager() при создании сносит этот каталог.
-    Убирать надо и ради разреженных файлов на гигабайты: места они не занимают, но
-    остались бы в каталоге кэша до конца прогона.
+    After manager, not before: JobManager() wipes this directory when created.
+    It must be cleaned for gigabyte sparse files too: they take no space, but
+    they would stay in the cache directory until the end of the run.
     """
     from helper.jobs import PAUSED_AUDIO_DIR
 
@@ -127,12 +127,12 @@ def audio_dir(manager):
 
 @pytest.fixture
 def refuse_in_audio_dir(monkeypatch):
-    """Фабрика refuse(method): метод Path внутри каталога звука пауз отказывает правами.
+    """The refuse(method) factory: a Path method inside the pause audio directory refuses on permissions.
 
-    Отказ такой же, как у настоящего каталога без прав: PermissionError с именем пути.
-    Права на сам каталог тесту не годятся: под root их не проверяет никто, и тест
-    проходил бы там, где ничего не проверил. Пути вне каталога работают как обычно, чтобы
-    подмена не задела ни остальной демон, ни pytest. Подмена держится до конца теста.
+    The refusal is the same as that of a real directory without permissions: PermissionError with the path name.
+    Permissions on the directory itself are no good for the test: under root nobody checks them, and the test
+    would pass where it checked nothing. Paths outside the directory work as usual, so that
+    the override touches neither the rest of the daemon nor pytest. The override lasts until the end of the test.
     """
     from helper.jobs import PAUSED_AUDIO_DIR
 
@@ -152,11 +152,11 @@ def refuse_in_audio_dir(monkeypatch):
 
 @pytest.fixture
 async def client(manager):
-    """HTTP-клиент поверх настоящего приложения. Токена нет: демон открыт тому, кого пускает Origin."""
+    """An HTTP client on top of the real app. No token: the daemon is open to whoever Origin lets in."""
     from helper import app as helper_app
 
-    # manager в аргументах не ради значения, а ради порядка: подмена
-    # helper.app.manager должна быть на месте до первого запроса.
+    # manager is in the arguments not for its value but for the order: the helper.app.manager
+    # override must be in place before the first request.
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=helper_app.app),
         base_url="http://test",
@@ -164,41 +164,41 @@ async def client(manager):
         yield http
 
 
-# Предел ожидания в тестах сокета. Всё идёт в одном цикле событий и без сети, так что
-# в норме ответ приходит за доли миллисекунды. Секунды нужны лишь затем, чтобы
-# сломанный тест падал с TimeoutError, а не висел.
+# The wait limit in socket tests. Everything runs in one event loop and without the network, so
+# normally an answer comes within fractions of a millisecond. The seconds are needed only so that
+# a broken test fails with TimeoutError rather than hanging.
 SOCKET_TIMEOUT = 2.0
 
 
 class FakeSocket:
-    """Подмена WebSocket для helper.app.websocket: ровно то, чем пользуется обработчик.
+    """A WebSocket stand-in for helper.app.websocket: exactly what the handler uses.
 
-    TestClient.websocket_connect здесь не годится по двум причинам. Модуль testclient
-    при импорте печатает StarletteDeprecationWarning, и один раз на процесс: фильтр на
-    отдельных тестах поймал бы его только у того, кто импортирует первым. И он гоняет
-    приложение в потоке портала anyio, а тесту нужно класть события прямо в задания
-    (job._emit) и видеть, что дошло до сокета: asyncio.Queue из чужого потока не
-    будят, и читатель проснулся бы неизвестно когда. Здесь обработчик и тест живут
-    в одном цикле, и порядок событий определён.
+    TestClient.websocket_connect is no good here for two reasons. The testclient module
+    prints a StarletteDeprecationWarning on import, once per process: a filter on
+    individual tests would catch it only for whoever imports first. And it runs
+    the app in an anyio portal thread, while the test needs to put events straight into the jobs
+    (job._emit) and see what reached the socket: an asyncio.Queue from a foreign thread is not
+    woken, and the reader would wake at an unknown time. Here the handler and the test live
+    in one loop, and the order of events is defined.
 
-    receive_json, send_json и accept — то, что обработчик зовёт у настоящего сокета.
-    say, hear и disconnect — сторона клиента, для теста.
+    receive_json, send_json and accept are what the handler calls on a real socket.
+    say, hear and disconnect are the client side, for the test.
     """
 
     def __init__(self) -> None:
-        # Задача обработчика: её ставит фикстура connection, а disconnect дожидается.
+        # The handler's task: the connection fixture sets it, and disconnect waits for it.
         self.handler: asyncio.Task | None = None
-        # Без Origin: check_origin пускает такие запросы, как curl, — иных пропусков
-        # у демона нет, токен убран.
+        # Without Origin: check_origin lets such requests, like curl's, through — the daemon has no
+        # other exceptions, the token was removed.
         self.headers: dict[str, str] = {}
         self.query_params: dict[str, str] = {}
-        # Что клиент сказал демону; None — разрыв соединения.
+        # What the client said to the daemon; None is a broken connection.
         self._incoming: asyncio.Queue = asyncio.Queue()
-        # Что демон отправил клиенту, строго по порядку.
+        # What the daemon sent to the client, strictly in order.
         self._outgoing: asyncio.Queue = asyncio.Queue()
-        # Обработчик разобрал всё сказанное и ждёт следующего сообщения.
+        # The handler has parsed everything that was said and is waiting for the next message.
         self._idle = asyncio.Event()
-        # Что обработчик сделал с соединением: принял или закрыл и с каким кодом.
+        # What the handler did with the connection: accepted it or closed it, and with what code.
         self.accepted = False
         self.closed: int | None = None
 
@@ -209,10 +209,10 @@ class FakeSocket:
         self.closed = code
 
     async def receive_json(self) -> dict:
-        # Очередь пуста: всё, что клиент сказал, уже разобрано, и обработчик ждёт.
-        # Верно, пока между разбором сообщения и следующим receive_json обработчик
-        # ни на чём не ждёт: появись там await на внешнем, say вернулся бы раньше,
-        # чем разбор закончен.
+        # The queue is empty: everything the client said has been parsed, and the handler is waiting.
+        # True as long as the handler does not wait on anything external between parsing a message
+        # and the next receive_json: if there were an await on something external there, say would return
+        # before parsing was finished.
         if self._incoming.empty():
             self._idle.set()
 
@@ -227,20 +227,20 @@ class FakeSocket:
         self._outgoing.put_nowait(event)
 
     async def say(self, message: dict) -> None:
-        """Клиент говорит демону. Возвращается, когда демон разобрал сказанное."""
+        """The client speaks to the daemon. Returns when the daemon has parsed what was said."""
         self._idle.clear()
         self._incoming.put_nowait(message)
         await asyncio.wait_for(self._idle.wait(), SOCKET_TIMEOUT)
 
     async def hear(self) -> dict:
-        """Следующее событие, отправленное демоном клиенту. Порядок — как в очереди."""
+        """The next event the daemon sent to the client. The order is the queue's."""
         return await asyncio.wait_for(self._outgoing.get(), SOCKET_TIMEOUT)
 
     async def disconnect(self) -> None:
-        """Разрыв, как у закрытой вкладки. Возвращается, когда обработчик закончил.
+        """A disconnect, like a closed tab. Returns when the handler has finished.
 
-        Обработчик выходит штатно, глушит насос и снимает подписки. Можно звать
-        повторно: готовую задачу ожидание не трогает.
+        The handler exits cleanly, stops the pump and removes the subscriptions. It can be called
+        again: the wait does not touch a finished task.
         """
         self._incoming.put_nowait(None)
         await asyncio.wait_for(self.handler, SOCKET_TIMEOUT)
@@ -248,29 +248,29 @@ class FakeSocket:
 
 @pytest.fixture
 async def connection(manager):
-    """Клиент WebSocket, подключённый к настоящему обработчику /v1/ws без сети."""
+    """A WebSocket client connected to the real /v1/ws handler without the network."""
     from helper import app as helper_app
 
-    # manager в аргументах ради порядка, как у client: подмена helper.app.manager
-    # должна стоять до первого сообщения.
+    # manager is in the arguments for the order, as with client: the helper.app.manager
+    # override must be in place before the first message.
     socket = FakeSocket()
     socket.handler = asyncio.create_task(helper_app.websocket(socket))
 
     yield socket
 
-    # Без ожидания задача обработчика пережила бы тест.
+    # Without the wait the handler's task would outlive the test.
     await socket.disconnect()
 
 
-# ── конвейер на подделках ────────────────────────────────────────────────
+# ── the pipeline on fakes ────────────────────────────────────────────────
 
 
 def metadata(**overrides):
-    """VideoInfo ролика abcdefghijk: все поля по умолчанию, overrides — поля по имени.
+    """VideoInfo of the video abcdefghijk: all fields at defaults, overrides — fields by name.
 
-    Обычная функция, а не фикстура: тесты берут её `from conftest import metadata`.
-    manual_tracks принимает и строки: "sr" — это CaptionTrack(lang="sr", url="",
-    ext="json3", name=""); готовый CaptionTrack идёт как есть.
+    An ordinary function, not a fixture: tests take it with `from conftest import metadata`.
+    manual_tracks accepts strings too: "sr" is CaptionTrack(lang="sr", url="",
+    ext="json3", name=""); a ready CaptionTrack goes as is.
     """
     from helper.sources.ytdlp import CaptionTrack, VideoInfo
 
@@ -297,12 +297,12 @@ def metadata(**overrides):
 
 
 def watch(video_id, **fields):
-    """Сообщение watch от вкладки: подписка на задание ролика."""
+    """The watch message from a tab: a subscription to the video's job."""
     return {"op": "watch", "videoId": video_id, **fields}
 
 
 async def hear_until_done(connection):
-    """Всё, что сокет услышал до конца задания: до события state со стадией done или error."""
+    """Everything the socket heard until the end of the job: up to the state event with a done or error stage."""
     heard = []
 
     while True:
@@ -314,7 +314,7 @@ async def hear_until_done(connection):
 
 
 def preempt_after_asr(pipeline, monkeypatch):
-    """Карту отбирают сразу после распознавания: первая проверка вытеснения после воркера."""
+    """The card is taken away right after recognition: the first preemption check after the worker."""
     from helper import gpulease
 
     real_check = gpulease._Holder.check
@@ -332,11 +332,11 @@ def preempt_after_asr(pipeline, monkeypatch):
 
 
 class FakeLease:
-    """Пропуск на карту без NVML и ollama: записывает обращения и выдаёт настоящий _Holder.
+    """A card lease without NVML and ollama: records calls and hands out a real _Holder.
 
-    calls по порядку: ("claim", модель), ("unload", модель), ("acquire", МиБ, модель),
-    ("release", МиБ). holders — выданные ручки; holders[-1].preempt() — то, что сделал бы
-    сторож, увидев пользователя на карте.
+    calls in order: ("claim", model), ("unload", model), ("acquire", MiB, model),
+    ("release", MiB). holders — the handles handed out; holders[-1].preempt() is what the
+    watchman would have done on seeing a user on the card.
     """
 
     def __init__(self) -> None:
@@ -364,10 +364,10 @@ class FakeLease:
 
 
 class RecordingCache:
-    """Настоящий TrackCache, который помнит ключи: под какими искали (gets) и писали (puts).
+    """The real TrackCache that remembers keys: which ones were looked up (gets) and written (puts).
 
-    Пишет по-настоящему, в каталог теста, и variants() читает записанное с диска. Всё,
-    кроме get и put, уходит к нему как есть.
+    It writes for real, into the test's directory, and variants() reads what was written from disk. Everything
+    except get and put goes to it as is.
     """
 
     def __init__(self, store) -> None:
@@ -389,16 +389,16 @@ class RecordingCache:
 
 
 class FakeWorker:
-    """subprocess.Popen для `python -m helper.asr.worker`: запоминает вызов, отвечает сценарием.
+    """subprocess.Popen for `python -m helper.asr.worker`: remembers the call, answers with a scenario.
 
-    args — argv целиком, как его собрал JobRunner._run_asr; options — флаги после
-    `-m helper.asr.worker` парами; input — байты звука из communicate; killed — звали kill().
-    Ответ берётся у конвейера в момент communicate: stdout — asr_result (dict уходит
-    JSON-ом, bytes — как есть), код выхода — asr_exit, stderr — asr_stderr. Убитый
-    отвечает кодом -9 и пустым выводом, как после SIGKILL.
+    args — the whole argv, as JobRunner._run_asr assembled it; options — the flags after
+    `-m helper.asr.worker` in pairs; input — the audio bytes from communicate; killed — kill() was called.
+    The answer is taken from the pipeline at communicate time: stdout is asr_result (a dict goes as
+    JSON, bytes as is), the exit code is asr_exit, stderr is asr_stderr. A killed one
+    answers with code -9 and empty output, as after SIGKILL.
 
-    gate держит communicate, как долгий Whisper, а kill() его отпускает. communicate
-    идёт в рабочем потоке (asyncio.to_thread), поэтому gate — threading.Event, не asyncio.
+    gate holds communicate, like a long Whisper, and kill() releases it. communicate
+    runs in a worker thread (asyncio.to_thread), so gate is a threading.Event, not asyncio.
     """
 
     def __init__(self, rig, args, **kwargs) -> None:
@@ -447,23 +447,23 @@ class FakeWorker:
 
 
 class Pipeline:
-    """Настоящий JobRunner на подделках: сети, карты и ollama нет, конвейер свой.
+    """The real JobRunner on fakes: no network, card or ollama, the pipeline is its own.
 
-    Сценарий (тест задаёт до run):
-      info        — VideoInfo, которую отдаёт probe; по умолчанию metadata();
-      audio       — звук от audio_pcm: две секунды нулей, float32, 16 кГц;
-      track       — реплики дорожки автора от fetch_manual_track или исключение, которое
-                    она бросит (YtDlpError уводит конвейер в распознавание);
-      asr_result  — stdout воркера: dict уходит JSON-ом, bytes — как есть;
-      asr_exit    — код выхода воркера (0); asr_stderr — его stderr (b"");
-      gate        — threading.Event или None: держит воркер до set() или kill().
-    Записи (тест читает после):
-      calls          — обращения наружу по порядку: ("probe", id), ("track", id, язык),
-                       ("audio", id), ("asr", флаги воркера), ("translate", реплики);
-      workers        — запущенные FakeWorker; worker_started — Popen уже позван;
-      lease          — FakeLease: calls и holders;
-      cache          — RecordingCache: gets и puts (CacheKey), variants(id) с диска;
-      runner, config — бегун и его настройка; их пересобирает configure().
+    Scenario (the test sets it before run):
+      info        — the VideoInfo probe returns; metadata() by default;
+      audio       — audio from audio_pcm: two seconds of zeros, float32, 16 kHz;
+      track       — the author track's cues from fetch_manual_track, or the exception it
+                    will raise (YtDlpError sends the pipeline to recognition);
+      asr_result  — the worker's stdout: a dict goes as JSON, bytes as is;
+      asr_exit    — the worker's exit code (0); asr_stderr — its stderr (b"");
+      gate        — threading.Event or None: holds the worker until set() or kill().
+    Records (the test reads them after):
+      calls          — outside calls in order: ("probe", id), ("track", id, language),
+                       ("audio", id), ("asr", worker flags), ("translate", cues);
+      workers        — started FakeWorker; worker_started — Popen has been called;
+      lease          — FakeLease: calls and holders;
+      cache          — RecordingCache: gets and puts (CacheKey), variants(id) from disk;
+      runner, config — the runner and its config; configure() rebuilds them.
     """
 
     def __init__(self, manager, cache) -> None:
@@ -488,10 +488,10 @@ class Pipeline:
         self.configure()
 
     def configure(self, **asr) -> None:
-        """Бегун на Config(asr=AsrConfig(**asr)); тот же Config и бегун получает реестр.
+        """A runner on Config(asr=AsrConfig(**asr)); the registry gets the same Config and runner.
 
-        Запись пропуска начинается заново: сразу после вызова в lease.calls только
-        ("claim", модель переводчика) нового бегуна.
+        The lease record starts over: right after the call lease.calls holds only
+        the new runner's ("claim", translator model).
         """
         from helper import jobs
         from helper.config import AsrConfig, Config, TranslatorConfig
@@ -499,33 +499,33 @@ class Pipeline:
         self.config = Config(asr=AsrConfig(**asr), translator=TranslatorConfig())
         self.lease.calls.clear()
         self.runner = jobs.JobRunner(self.lease, self.cache, self.config)
-        # restore считает ключ по manager.config: та же настройка, что у бегуна.
+        # restore computes the key from manager.config: the same config as the runner's.
         self.manager.config = self.config
         self.manager.runner = self.runner
 
     def names(self) -> list[str]:
-        """Имена обращений наружу по порядку: ["probe", "audio", "asr", "translate"]."""
+        """The names of outside calls in order: ["probe", "audio", "asr", "translate"]."""
         return [call[0] for call in self.calls]
 
     async def run(self, job) -> None:
-        """Настоящий JobRunner.run(job): _pipeline со всеми его ветками и отказами."""
+        """The real JobRunner.run(job): _pipeline with all its branches and refusals."""
         await self.runner.run(job)
 
 
 @pytest.fixture
 def pipeline(manager, monkeypatch):
-    """JobRunner на подделках: настоящий конвейер без сети, карты и ollama. См. Pipeline."""
+    """JobRunner on fakes: the real pipeline without network, card or ollama. See Pipeline."""
     from helper import cache as track_cache
     from helper import env, jobs
 
-    # Свой кэш у каждого теста. Общий кэш прогона наполнился бы готовыми дорожками, и
-    # restore в чужих тестах их находил бы. CACHE_DIR подменён до TrackCache(): индекс
-    # index.sqlite открывается в конструкторе.
+    # Each test has its own cache. The run's shared cache would fill up with ready tracks, and
+    # restore in other tests would find them. CACHE_DIR is overridden before TrackCache(): the
+    # index.sqlite index is opened in the constructor.
     base = Path(tempfile.mkdtemp(prefix="pipeline-", dir=env.CACHE_DIR))
     monkeypatch.setattr(track_cache, "CACHE_DIR", base)
     rig = Pipeline(manager, RecordingCache(track_cache.TrackCache(root=base / "tracks")))
-    # Простым присваиванием, не monkeypatch: его откат пришёл бы уже после того, как
-    # manager закроет индекс своего кэша, и закрыл бы он тогда этот.
+    # By plain assignment, not monkeypatch: its rollback would come after
+    # manager closes its own cache's index, and it would close this one instead.
     shared = manager.cache
     manager.cache = rig.cache
 
@@ -563,7 +563,7 @@ def pipeline(manager, monkeypatch):
     monkeypatch.setattr(jobs, "translate_dual", translate_dual)
     monkeypatch.setattr(jobs, "translate_batch", translate_batch)
     monkeypatch.setattr(jobs, "FETCH_BACKOFF", (0.0, 0.0))
-    # Подменён только subprocess модуля helper.jobs: yt-dlp и asyncio видят настоящий.
+    # Only helper.jobs's subprocess is overridden: yt-dlp and asyncio see the real one.
     monkeypatch.setattr(
         jobs,
         "subprocess",
@@ -581,11 +581,11 @@ def pipeline(manager, monkeypatch):
     shutil.rmtree(base, ignore_errors=True)
 
 
-# ── воркер на подделке faster_whisper ────────────────────────────────────
+# ── the worker on a faster_whisper fake ──────────────────────────────────
 
 
 class FakeWhisperModel:
-    """WhisperModel без карты: помнит, с чем её построили, и всегда слышит сербский."""
+    """WhisperModel without a card: remembers what it was built with, and always hears Serbian."""
 
     def __init__(self, name, device, compute_type) -> None:
         self.name = name
@@ -593,14 +593,14 @@ class FakeWhisperModel:
         self.compute_type = compute_type
 
     def detect_language(self, audio=None, features=None, vad_filter=False, **kwargs):
-        # С задачи 5 определитель работает при каждом transcribe. Ответ — как у настоящей:
-        # лучший язык, его доля и всё распределение. Окна и голоса проверяет задача 5
-        # своими тестами, на своей заглушке модели.
+        # Since task 5 the detector runs on every transcribe. The answer is the real one's:
+        # the best language, its share and the whole distribution. Task 5 checks windows and voices
+        # with its own tests, on its own model stub.
         return "sr", 1.0, [("sr", 1.0)]
 
 
 class FakeBatchedPipeline:
-    """BatchedInferencePipeline без карты: запоминает аргументы, отдаёт сегменты сценария."""
+    """BatchedInferencePipeline without a card: remembers the arguments, returns the scenario's segments."""
 
     def __init__(self, whisper, model) -> None:
         self.whisper = whisper
@@ -625,15 +625,15 @@ class FakeBatchedPipeline:
 
 
 class FakeWhisper:
-    """faster_whisper без карты для тестов воркера: transcribe и _detect настоящие.
+    """faster_whisper without a card for worker tests: transcribe and _detect are the real ones.
 
-    Сценарий (задаёт тест):
-      segments — что вернёт BatchedInferencePipeline.transcribe; строить через segment().
-    Записи (читает тест):
-      model  — последняя модель, что построил воркер: name, device, compute_type;
-      kwargs — именованные аргументы последнего BatchedInferencePipeline.transcribe.
-    VAD не подменён: faster_whisper.vad.get_speech_timestamps — настоящий Silero, на
-    процессоре и без сети; в нулях речи он не находит.
+    Scenario (set by the test):
+      segments — what BatchedInferencePipeline.transcribe returns; build with segment().
+    Records (read by the test):
+      model  — the last model the worker built: name, device, compute_type;
+      kwargs — the keyword arguments of the last BatchedInferencePipeline.transcribe.
+    VAD is not overridden: faster_whisper.vad.get_speech_timestamps is the real Silero, on
+    the CPU and without the network; it finds no speech in zeros.
     """
 
     def __init__(self) -> None:
@@ -660,9 +660,9 @@ class FakeWhisper:
         compression_ratio=1.5,
         words=(),
     ):
-        """Настоящий faster_whisper.transcribe.Segment: имена полей проверяет сама библиотека.
+        """The real faster_whisper.transcribe.Segment: the library itself checks the field names.
 
-        words — faster_whisper.transcribe.Word, как их отдаёт word_timestamps=True.
+        words — faster_whisper.transcribe.Word, as word_timestamps=True returns them.
         """
         from faster_whisper.transcribe import Segment
 
@@ -683,16 +683,16 @@ class FakeWhisper:
 
 @pytest.fixture
 def whisper(monkeypatch):
-    """Подделка faster_whisper для тестов воркера, см. FakeWhisper. Карта не нужна."""
-    # Сначала helper.env, как в самом воркере: он ставит HF_HOME во временный кэш до того,
-    # как faster_whisper потянет huggingface_hub.
+    """A faster_whisper fake for worker tests, see FakeWhisper. No card needed."""
+    # helper.env first, as in the worker itself: it points HF_HOME at a temporary cache before
+    # faster_whisper pulls huggingface_hub.
     import helper.env  # noqa: F401
 
     import faster_whisper
 
     fake = FakeWhisper()
-    # transcribe импортирует оба класса внутри себя, при каждом вызове: подмена в модуле
-    # faster_whisper до него доходит. VAD остаётся настоящим.
+    # transcribe imports both classes inside itself, on every call: the override in the
+    # faster_whisper module reaches it. VAD stays real.
     monkeypatch.setattr(faster_whisper, "WhisperModel", fake.build_model)
     monkeypatch.setattr(faster_whisper, "BatchedInferencePipeline", fake.build_pipeline)
 

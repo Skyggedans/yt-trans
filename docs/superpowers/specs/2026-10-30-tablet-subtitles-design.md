@@ -1,1301 +1,1289 @@
-# Субтитры на планшете: страница, которую раздаёт демон
+# Subtitles on the tablet: the page the daemon serves
 
-Замысел. 2026-10-30.
+Design. 2026-10-30.
 
-## Зачем
+## Why
 
-Сейчас субтитры к сербским роликам живут только там, где установлено расширение
-и открыт браузер на компьютере. Значит смотреть можно, лишь сидя за столом.
-Хозяин хочет лежать в другой комнате с планшетом — и это единственная причина
-затеи. Всё остальное в документе служит ей.
+Right now subtitles for Serbian videos live only where the extension is installed
+and a browser is open on the computer. So one can watch only while sitting at the desk.
+The owner wants to lie in another room with a tablet — and this is the only reason for
+the undertaking. Everything else in the document serves it.
 
-Компьютер остаётся движком: карта распознаёт и переводит. Планшет — тонкий
-клиент, который получает реплики и показывает их поверх картинки.
+The computer remains the engine: the GPU recognizes and translates. The tablet is a thin
+client that receives cues and shows them over the picture.
 
-## Сцена
+## Scene
 
-Человек лежит в другой комнате с планшетом в руках. Открывает страницу, которую
-раздаёт домашний компьютер. Видит свои каналы и плейлисты, выбирает ролик,
-смотрит с русскими субтитрами. Пока свежий ролик готовится, уходит в другую
-вкладку и смотрит там что-то без перевода. Возвращается — готово.
+A person lies in another room with a tablet in his hands. Opens the page the
+home computer serves. Sees his channels and playlists, chooses a video,
+watches with Russian subtitles. While a fresh video is being prepared, he goes to another
+tab and watches something there without translation. Comes back — it's ready.
 
-Иногда ему нужно вернуться за компьютер поработать. Тогда его собственная работа
-занимает карту, и планшету придётся подождать — честно, с объяснением на экране,
-а не молча.
+Sometimes he needs to come back to the computer to work. Then his own work
+occupies the GPU, and the tablet will have to wait — honestly, with an explanation on the screen,
+not silently.
 
-Устройств в доме несколько: планшет, телефон, ноутбук, чужой iPad. Все ходят на
-один адрес, с одним ключом, с одним языком перевода. Разделения людей по профилям
-нет и пока не нужно — слово «пока» сказано хозяином, и дорога к профилям не
-должна быть закрыта.
+There are several devices in the house: a tablet, a phone, a laptop, someone else's iPad. All go to
+one address, with one key, with one translation language. There is no separation of people into
+profiles and it is not needed yet — the word “yet” was said by the owner, and the road to profiles must not
+be closed.
 
-## Цели
+## Goals
 
-1. Видео играет на планшете, субтитры поверх картинки, в том числе в полный экран.
-2. Качество 1080p и выше.
-3. Вход — плейлисты каналов, а не поле для вставки ссылки (вставка остаётся
-   запасным путём).
-4. Несколько устройств в доме работают одновременно и не ломают друг друга.
-5. Задание не падает, когда зритель ушёл со страницы, закрыл вкладку или заснул.
-6. Когда карта занята, клиент говорит это словами и показывает место в очереди.
-7. Существующее расширение продолжает работать без изменений.
+1. Video plays on the tablet, subtitles over the picture, including in full screen.
+2. Quality 1080p and above.
+3. Entry — channel playlists, not a field for pasting a link (pasting remains
+   a fallback).
+4. Several devices in the house work simultaneously and do not break each other.
+5. A job does not fail when the viewer leaves the page, closes the tab or falls asleep.
+6. When the GPU is busy, the client says so in words and shows the place in the queue.
+7. The existing extension keeps working without changes.
 
-## Не-цели
+## Non-goals
 
-- Замена YouTube: ни ленты, ни поиска, ни комментариев, ни подписок.
-- Работа вне домашней сети.
-- Профили на человека: язык и настройки общие.
-- Публикация в магазине приложений. Своего приложения вообще нет.
-- Проигрывание в фоне с погашенным экраном.
+- Replacing YouTube: no feed, no search, no comments, no subscriptions.
+- Working outside the home network.
+- Per-person profiles: language and settings are shared.
+- Publishing to an app store. There is no app of its own at all.
+- Playing in the background with the screen off.
 
-## Анти-цели
+## Anti-goals
 
-Признаки того, что получилось плохо, даже если формально работает:
+Signs that it turned out badly, even if it formally works:
 
-- Субтитры уезжают от речи настолько, что это видно. Эталон задан: на компьютере
-  расширение попадает в реплику с точностью кадра, и планшет не должен быть
-  заметно хуже.
-- Пустой экран без объяснения, пока что-то считается или ждёт карту.
-- Зритель обнаруживает, что его уход со страницы отменил работу.
-- Планшет мешает работе за компьютером сильнее, чем хозяин согласился терпеть.
-- ~~Второе место, где надо вручную держать в соответствии отрисовку субтитров.~~
-  **Снято решением хозяина 2026-10-30:** демон — это сервис, а расширение и
-  веб-приложение — два независимых его потребителя. Общего кода отрисовки между
-  ними нет и не планируется, расхождение внешнего вида допустимо. См. «Ответы
-  хозяина».
+- Subtitles drift from speech enough that it is visible. The benchmark is set: on the computer
+  the extension lands within a cue with frame accuracy, and the tablet must not be
+  noticeably worse.
+- An empty screen without explanation while something is being computed or waiting for the GPU.
+- The viewer discovers that leaving the page cancelled the work.
+- The tablet interferes with work at the computer more than the owner agreed to tolerate.
+- ~~A second place where subtitle rendering must be kept in sync by hand.~~
+  **Withdrawn by the owner's decision on 2026-10-30:** the daemon is a service, and the extension and
+  the web app are two independent consumers of it. There is no shared rendering code between
+  them and none is planned, a difference in appearance is acceptable. See “Owner's
+  answers”.
 
-## Решения хозяина
+## Owner's decisions
 
-Приняты им, не обсуждаются:
+Made by him, not up for discussion:
 
-- Смотреть на планшете, лёжа, в другой комнате. Видео играет на планшете.
-- Браузера достаточно. Своё приложение не нужно.
-- Многопользовательность означает много устройств, а не много учётных записей.
-  Ключ один на всех, язык один на всех, аккаунт YouTube один — пока.
-- Вход через плейлисты на каналах. Копирование ссылки руками приемлемо в первом
-  приближении; регистрация в системном «поделиться» — желаемое, не обязательное.
-- 1080p и выше.
-- Пробу на устройстве решили не делать, писать замысел сразу.
+- Watching on the tablet, lying down, in another room. The video plays on the tablet.
+- A browser is enough. No app of its own is needed.
+- Multi-user means many devices, not many accounts.
+  One key for all, one language for all, one YouTube account — for now.
+- Entry through playlists on channels. Copying a link by hand is acceptable as a first
+  approximation; registration in the system “share” is desirable, not mandatory.
+- 1080p and above.
+- We decided not to do a device trial, and to write the design right away.
 
-## Решения, принятые мной
+## Decisions made by me
 
-Это мои решения, а не согласованные с хозяином. Строитель вправе их оспорить,
-если найдёт основание, но должен понимать причину.
+These are my decisions, not ones agreed with the owner. The builder has the right to contest them
+if he finds grounds, but must understand the reason.
 
-### Встроенного плеера YouTube в схеме нет
+### There is no embedded YouTube player in the scheme
 
-Первая версия замысла ставила внутрь страницы официальный плеер в рамке
-(IFrame Player API) и рисовала субтитры поверх него. Это отменено по трём
-причинам, каждая самостоятельно достаточна:
+The first version of the design put the official player in a frame (IFrame Player API)
+inside the page and drew subtitles over it. This is cancelled for three
+reasons, each sufficient on its own:
 
-1. Условия YouTube для встроенного плеера прямо запрещают рисовать поверх него:
-   «You must not display overlays, frames, or other visual elements in front of
-   any part of a YouTube embedded player» (Required Minimum Functionality).
-   Для одной частной установки никто это не применит, но запрет написан именно
-   про то, что мы собирались делать, и закрывает любое будущее распространение.
-2. Наш слой пропадает, когда плеер уходит в свой собственный полный экран:
-   элемент в полноэкранном режиме — рамка, а наш слой ей не родственник.
-   Обходится своим полным экраном на нашем контейнере, но это уже борьба.
-3. Ролики с запретом встраивания и возрастным ограничением не играют вовсе
-   (ошибки 101/150), а реклама внутри рамки идёт по тем же часам, и во время
-   неё `getCurrentTime()` — не время контента.
+1. YouTube's terms for the embedded player directly forbid drawing over it:
+   “You must not display overlays, frames, or other visual elements in front of
+   any part of a YouTube embedded player” (Required Minimum Functionality).
+   For a single private installation nobody would enforce it, but the prohibition is written precisely
+   about what we were going to do, and closes off any future distribution.
+2. Our layer disappears when the player goes into its own full screen:
+   the element in full-screen mode is the frame, and our layer is no relative of it.
+   It is worked around by our own full screen on our container, but that is already a fight.
+3. Videos with embedding disabled and age restriction do not play at all
+   (errors 101/150), and ads inside the frame run on the same clock, and during
+   them `getCurrentTime()` is not the content time.
 
-Плюс, менее важное: часы встроенного плеера читаются опросом через мост, а не
-покадрово.
+Plus, less important: the embedded player's clock is read by polling through the bridge, not
+frame by frame.
 
-### Картинку отдаёт демон, плеер — обычный `<video>`
+### The daemon serves the picture, the player is an ordinary `<video>`
 
-Демон уже качает звук для распознавания. Пусть качает и картинку, склеивает и
-отдаёт. Страница играет обычный `<video src="…от демона…">`.
+The daemon already downloads audio for recognition. Let it download the picture too, mux and
+serve it. The page plays an ordinary `<video src="…from the daemon…">`.
 
-Что это даёт:
+What this gives:
 
-- Часы — настоящие часы декодера: `video.currentTime` плюс
-  `requestVideoFrameCallback`. Это ровно тот механизм, который уже работает в
-  [extension/content.js](../../../extension/content.js) и даёт точность кадра.
-  Никакого моста, никакого опроса, никакой интерполяции.
-- Отрисовка переезжает из `content.js` почти дословно, вместе с теневым деревом,
-  двумя строками, строкой для изучения и особым видом непереведённых реплик.
-  Это прямо отвечает анти-цели про второе место сопровождения.
-- Условия встраивания не применяются: мы не встраиваем плеер YouTube.
-- Рекламы нет. Возрастные ролики играют — демон уже умеет подставлять аккаунт
-  с подтверждённым возрастом (эта работа в репозитории не закоммичена, но есть).
-- Полный экран наш: контейнер со видео и слоем внутри, один `requestFullscreen`.
-- Работает в любом браузере, включая iOS, без установки чего-либо.
+- The clock is the decoder's real clock: `video.currentTime` plus
+  `requestVideoFrameCallback`. This is exactly the mechanism that already works in
+  [extension/content.js](../../../extension/content.js) and gives frame accuracy.
+  No bridge, no polling, no interpolation.
+- The rendering moves out of `content.js` almost verbatim, together with the shadow tree,
+  the two lines, the study line and the special look of untranslated cues.
+  This directly answers the anti-goal about a second place of maintenance.
+- The embedding terms do not apply: we are not embedding the YouTube player.
+- No ads. Age-restricted videos play — the daemon already knows how to substitute an account
+  with confirmed age (this work is not committed in the repository, but exists).
+- Full screen is ours: a container with the video and a layer inside, one `requestFullscreen`.
+- Works in any browser, including iOS, without installing anything.
 
-Цена: демон становится раздатчиком байтов, и появляется диск под кэш видео.
+The price: the daemon becomes a distributor of bytes, and a disk for the video cache appears.
 
-### Транспорт картинки: скачать, склеить, отдать файлом
+### Picture transport: download, mux, serve as a file
 
-Измерено на реальном ролике (yt-dlp 2026.08.19, `KCR-dkZIhxY`, 1568 с):
-48 форматов, из них 28 по обычному https и 16 плейлистов m3u8. **Склеенных
-форматов нет ни одного** — ни 360p, ни какого-либо другого. 1080p существует
-только как отдельные дорожки: 137 (H.264, 1910 кбит/с), 248 (VP9, 1363),
-399 (AV1, 896). Звук отдельно: 140 (AAC, 129), 251 (opus, 142).
+Measured on a real video (yt-dlp 2026.08.19, `KCR-dkZIhxY`, 1568 s):
+48 formats, of which 28 over plain https and 16 m3u8 playlists. **There is not a single
+muxed format** — neither 360p nor any other. 1080p exists
+only as separate tracks: 137 (H.264, 1910 kbit/s), 248 (VP9, 1363),
+399 (AV1, 896). Audio separately: 140 (AAC, 129), 251 (opus, 142).
 
-То есть требование 1080p автоматически означает, что картинку и звук надо
-соединять у себя. Выбран самый простой из работающих способов:
+That is, the 1080p requirement automatically means that picture and audio must be
+joined at our end. The simplest of the working ways is chosen:
 
-1. yt-dlp качает выбранную пару дорожек.
-2. ffmpeg склеивает без перекодирования (`-c copy`, `-movflags +faststart`).
-   ffmpeg 8.1.2 в системе есть.
-3. Готовый файл лежит в кэше и отдаётся с поддержкой `Range`.
+1. yt-dlp downloads the chosen pair of tracks.
+2. ffmpeg muxes without re-encoding (`-c copy`, `-movflags +faststart`).
+   ffmpeg 8.1.2 is present in the system.
+3. The finished file lies in the cache and is served with `Range` support.
 
-Почему так, а не поток через прокси с манифестом DASH:
+Why this and not a stream through a proxy with a DASH manifest:
 
-- Перемотка работает сама, без кода.
-- Браузеру не нужен сторонний проигрыватель на JS (`<video>` не умеет DASH).
-- Нет перекодирования: карта и процессор не тратятся.
-- Нет возни с переподписыванием ссылок googlevideo при 403 посреди просмотра.
-  Ссылки на дорожки содержат адрес выдавшего их узла внутри подписанной части;
-  отдавать их планшету напрямую нельзя, и это тоже снимается тем, что байты
-  идут через демон.
-- Файл переиспользуется: второй просмотр и второе устройство мгновенны.
+- Seeking works by itself, without code.
+- The browser does not need a third-party JS player (`<video>` cannot do DASH).
+- No re-encoding: the GPU and CPU are not spent.
+- No fiddling with re-signing googlevideo links on a 403 in the middle of viewing.
+  Track links contain the address of the node that issued them inside the signed part;
+  they cannot be given to the tablet directly, and this too is removed by the fact that the bytes
+  go through the daemon.
+- The file is reused: a second viewing and a second device are instant.
 
-Чем платим: просмотр начинается после склейки, а не сразу. Это терпимо ровно
-потому, что есть предзагрузка (ниже), и потому что хозяин всё равно уже ждёт в
-другой вкладке. Если ожидание на практике окажется заметным, путь к апгрейду
-описан в «оставлено строителю».
+What we pay: viewing starts after muxing, not immediately. This is tolerable precisely
+because there is preloading (below), and because the owner is waiting in
+another tab anyway. If the wait turns out noticeable in practice, the upgrade path is
+described in “left to the builder”.
 
-Профиль по умолчанию — **H.264 1080p + AAC в mp4**: играет везде, включая iOS и
-старые устройства. Выше 1080p YouTube отдаёт только VP9 и AV1; это настройка
-демона, а не автоматика, потому что она сужает список устройств, которые смогут
-это открыть. Диск: 1080p H.264 со звуком — около 2 Мбит/с, то есть примерно
-400 МБ на 26 минут. Кэшу нужен потолок и вытеснение по давности.
+The default profile is **H.264 1080p + AAC in mp4**: plays everywhere, including iOS and
+old devices. Above 1080p YouTube gives only VP9 and AV1; this is a daemon setting,
+not automation, because it narrows the list of devices that will be able to
+open it. Disk: 1080p H.264 with audio is about 2 Mbit/s, that is roughly
+400 MB for 26 minutes. The cache needs a ceiling and eviction by age.
 
-### Задание живёт без зрителя
+### The job lives without a viewer
 
-Проверено в коде: задание в [helper/jobs.py](../../../helper/jobs.py) — отдельная
-задача, которая на подписчиков не смотрит. `_subscribers` только получают
-события, прогресс от них не зависит. Отменяет задание ровно один путь — явный
-`/drop`. `_evict` выбрасывает только уже завершённые задания сверх лимита.
+Verified in the code: a job in [helper/jobs.py](../../../helper/jobs.py) is a separate
+task that does not look at subscribers. `_subscribers` only receive
+events, progress does not depend on them. Exactly one path cancels a job — an explicit
+`/drop`. `_evict` throws out only already finished jobs above the limit.
 
-Значит правило для страницы: уход со страницы, засыпание вкладки и обрыв связи
-не роняют ничего. `/drop` уходит только по явному нажатию «отменить». Это уже
-верно в демоне и должно остаться верным.
+So the rule for the page: leaving the page, the tab falling asleep and a connection drop
+break nothing. `/drop` goes only on an explicit press of “cancel”. This is already
+true in the daemon and must remain true.
 
-Шероховатость, которую надо показывать словами: у задания, у которого отобрали
-карту, отложенный звук живёт `PAUSED_AUDIO_TTL` = 30 минут, потом выбрасывается.
-Возврат к такому ролику через час начнётся с повторной качки.
+A rough edge that must be shown in words: for a job that has had the GPU taken away, the deferred audio lives for `PAUSED_AUDIO_TTL` = 30 minutes, then it is thrown out.
+Returning to such a video an hour later will begin with a repeated download.
 
-**Как построено** (ветка `worktree-daemon-second-client`, 2026-11-01). Звук может
-уйти и раньше срока: когда всего отложенного звука больше 4 ГиБ
-(`PAUSED_AUDIO_MAX_BYTES`), убирается самый старый по времени записи. А пауза, к
-которой 30 минут никто не обращался, перестаёт занимать место под пределом
-незавершённых заданий (см. «Что надо починить до начала»); сама она остаётся в
-реестре со своими репликами и возобновится, когда к ней вернутся.
+**How it is built** (branch `worktree-daemon-second-client`, 2026-11-01). Audio may
+run out earlier than the deadline: when all deferred audio is more than 4 GiB
+(`PAUSED_AUDIO_MAX_BYTES`), the oldest by recording time is removed. And a pause that
+nobody has touched for 30 minutes stops occupying a place under the limit
+of unfinished jobs (see “What must be fixed before the start”); it itself remains in the
+registry with its cues and will resume when someone returns to it.
 
-### Предзагрузка следующего по списку
+### Preloading the next in the list
 
-Пока зритель смотрит ролик, карта и сеть свободны. Демон готовит следующий ролик
-плейлиста: качает, склеивает, распознаёт, переводит. Тогда переход к нему
-мгновенный, и главный недостаток файлового транспорта исчезает.
+While the viewer watches a video, the GPU and the network are free. The daemon prepares the next video
+of the playlist: downloads, muxes, recognizes, translates. Then the transition to it is
+instant, and the main drawback of file transport disappears.
 
-Глубина предзагрузки — настройка (по умолчанию один ролик вперёд). Предзагрузка
-обязана уступать: запрос живого зрителя всегда важнее подготовки будущего, а при
-нехватке места на диске или занятой карте предзагрузка просто не начинается.
+The preload depth is a setting (default one video ahead). Preloading
+must yield: a live viewer's request is always more important than preparing the future, and when
+there is not enough disk space or the GPU is busy, preloading simply does not start.
 
-### Очередь и карта
+### Queue and GPU
 
-Карта — RTX 4090, 24564 МиБ, из них при обычной работе рабочего стола занято
-около 4.4 ГиБ (измерено). Прежняя оценка «18.5 ГиБ» в заметках — это остаток при
-загруженном рабочем столе, а не объём карты. То есть жёсткого потолка на одно
-задание нет, а есть конкуренция с собственной работой хозяина за столом.
+The GPU is an RTX 4090, 24564 MiB, of which about 4.4 GiB is occupied during normal
+desktop work (measured). The previous estimate “18.5 GiB” in the notes is the remainder with the
+desktop loaded, not the card's size. That is, there is no hard ceiling per job, but there is
+competition with the owner's own work at the desk.
 
-Отсюда требование: клиент показывает состояние карты словами. Три различимых
-случая, каждый со своим текстом:
+Hence the requirement: the client shows the GPU state in words. Three distinguishable
+cases, each with its own text:
 
-- карту занял кто-то другой в доме — показать, какой ролик и своё место в очереди;
-- карту заняла работа хозяина за компьютером — сказать именно это, потому что
-  решение тут человеческое, а не техническое;
-- карта свободна, идёт работа — показать стадию и долю переведённого.
+- the GPU was taken by someone else in the house — show which video and one's place in the queue;
+- the GPU was taken by the owner's work at the computer — say exactly that, because
+  the decision here is human, not technical;
+- the GPU is free, work is going on — show the stage and the share translated.
 
-Третий случай уже есть в расширении. Первые два — новые, и именно их отсутствие
-даёт сейчас зависание в `translating` с бесконечным «карта не освободилась».
+The third case already exists in the extension. The first two are new, and it is precisely their absence that
+gives the current hang in `translating` with an endless “the card has not been freed”.
 
-### Сеть, доступ, ключи
+### Network, access, keys
 
-- Порт остаётся на петле по умолчанию. Привязка к сети — только по явной
-  настройке (`[server] host`), плюс список разрешённых адресов. Это важно:
-  на машине firewalld уже пускает `1025-65535/tcp+udp`, то есть привязка к петле
-  сейчас и есть вся защита, а `0.0.0.0` откроет порт ещё и десятку мостов docker.
-- Ключ установки остаётся, но хранилище ключей становится списком с метками,
-  перечитываемым по времени изменения файла. Сейчас смена ключа требует
-  перезапуска демона. Один ключ на всех — это выбор хозяина; список с метками
-  нужен, чтобы «пока» однажды кончилось без переделки.
-- Проверка `Origin` сейчас пропускает запрос без заголовка и отбивает всё, кроме
-  схем расширений. Страница, которую раздаёт сам демон, придёт со своим
-  `Origin`, и его надо разрешить — иначе `POST /v1/jobs`, `playhead`, `drop` и
-  рукопожатие WebSocket будут отбиты с кодом 403. Для `GET` того же
-  происхождения это незаметно, что делает ошибку особенно обидной при отладке.
-- `/v1/health` отдаётся без ключа и рассказывает перечень моделей, память карты,
-  чужие модели, размер кэша, список заданий и путь к файлу ключа — то есть имя
-  пользователя. На петле это неважно, в сети надо урезать до «живой/не живой».
-  Отдельно: он падает с кодом 500, когда ollama не отвечает, то есть очевидная
-  проверка живости врёт ровно тогда, когда нужна.
-- Пароль от сети Wi-Fi — вся граница доверия. Это осознанный выбор для частного
-  инструмента в своей квартире. Отсюда же, однако, вытекает обязательный предел
-  на незавершённые задания: сейчас `_evict` выбрасывает только завершённые,
-  ~~а отложенный звук `PAUSED_AUDIO_DIR` не ограничен ничем~~.
-  **Сделано** (ветка `worktree-daemon-second-client`, 2026-11-01): незавершённых
-  заданий не больше 16, отложенного звука не больше 4 ГиБ. Подробности и что
-  отложено — в «Что надо починить до начала».
-- ~~`loginctl enable-linger` обязателен.~~ Сейчас `Linger=no` (проверено), то есть
-  юнит демона существует только внутри графического сеанса: компьютер на экране
-  входа — демона нет, а это ровно та ситуация, ради которой всё делается.
-  **Не применено** (ветка `worktree-daemon-second-client`, 2026-11-01): запуск без
-  сеанса нужен по-прежнему, но lingering — не одна команда и не единственный путь.
-  Он поднимает без сеанса весь менеджер пользователя, а с ним звук и ай-трекер;
-  что поправить до него — в пункте 2 «Что надо починить до начала» и в
+- The port stays on loopback by default. Binding to the network is only by an explicit
+  setting (`[server] host`), plus a list of allowed addresses. This is important:
+  on the machine firewalld already lets through `1025-65535/tcp+udp`, that is, binding to loopback
+  is currently the whole protection, and `0.0.0.0` would open the port to a dozen docker bridges as well.
+- The install key remains, but the key store becomes a list with labels,
+  re-read by the file's modification time. Currently changing the key requires
+  restarting the daemon. One key for all is the owner's choice; a list with labels
+  is needed so that “for now” one day ends without a rework.
+- The `Origin` check currently lets a request without the header through and rejects everything except
+  extension schemes. The page served by the daemon itself will come with its own
+  `Origin`, and it must be allowed — otherwise `POST /v1/jobs`, `playhead`, `drop` and
+  the WebSocket handshake will be rejected with code 403. For a `GET` of the same
+  origin this is invisible, which makes the error especially hurtful when debugging.
+- `/v1/health` is served without a key and tells the list of models, GPU memory,
+  foreign models, cache size, the list of jobs and the path to the key file — that is, the user
+  name. On loopback this does not matter, on the network it must be trimmed to “alive/not alive”.
+  Separately: it fails with code 500 when ollama does not answer, that is, the obvious
+  liveness check lies exactly when it is needed.
+- The Wi-Fi network password is the whole trust boundary. This is a conscious choice for a private
+  tool in one's own apartment. From this, however, follows a mandatory limit
+  on unfinished jobs: currently `_evict` throws out only finished ones,
+  ~~and the deferred audio `PAUSED_AUDIO_DIR` is not limited by anything~~.
+  **Done** (branch `worktree-daemon-second-client`, 2026-11-01): no more than 16 unfinished
+  jobs, no more than 4 GiB of deferred audio. Details and what is deferred are in “What must be fixed before the start”.
+- ~~`loginctl enable-linger` is mandatory.~~ Currently `Linger=no` (verified), that is,
+  the daemon unit exists only inside the graphical session: a computer on the login
+  screen — no daemon, and this is exactly the situation for which everything is being done.
+  **Not applied** (branch `worktree-daemon-second-client`, 2026-11-01): startup without a
+  session is still needed, but lingering is not one command and not the only path.
+  It brings up the whole user manager without a session, and with it sound and the eye tracker;
+  what to fix before it is in item 2 of “What must be fixed before the start” and in
   [docs/running.md](../../running.md).
 
-Защищённый контекст (https) в первой версии не нужен: обычный `<video>`,
-`fetch` и `requestVideoFrameCallback` работают по открытому http. Он нужен ровно
-для двух вещей — регистрации в системном «поделиться» (Web Share Target требует
-установленного PWA) и удержания экрана от засыпания через Wake Lock. Первое
-хозяин назвал желаемым, не обязательным, поэтому в первую версию не входит.
-Второе надо проверить на устройстве: играющее видео само обычно не даёт экрану
-гаснуть, и тогда Wake Lock не нужен.
+A secure context (https) is not needed in the first version: an ordinary `<video>`,
+`fetch` and `requestVideoFrameCallback` work over open http. It is needed for exactly
+two things — registration in the system “share” (Web Share Target requires
+an installed PWA) and keeping the screen from sleeping via Wake Lock. The first the
+owner called desirable, not mandatory, so it is not in the first version.
+The second must be checked on the device: a playing video usually does not let the screen
+go dark by itself, and then Wake Lock is not needed.
 
-## Поверхность демона
+## Daemon surface
 
-Что добавляется. Имена условные, строитель вправе их изменить.
+What is added. The names are conditional, the builder has the right to change them.
 
-**Отдача страницы.** Статические файлы страницы с корня. Это же снимает вопрос
-происхождения: страница и API — одно происхождение.
+**Serving the page.** Static files of the page from the root. This also removes the question
+of origin: the page and the API are one origin.
 
-**Видео.**
-- `GET /v1/video/{videoId}` — готовый склеенный файл, с поддержкой `Range`.
-  Пока файла нет, отвечает состоянием подготовки, а не ошибкой.
-- Состояние подготовки видео — отдельная стадия в событиях задания; новых
-  значений `Stage` не вводить (см. «совместимость»).
+**Video.**
+- `GET /v1/video/{videoId}` — the finished muxed file, with `Range` support.
+  While the file is absent, it answers with a preparation state, not an error.
+- The video preparation state is a separate stage in job events; new
+  `Stage` values must not be introduced (see “compatibility”).
 
-**Плейлисты.**
-- `GET /v1/playlists` — список сохранённых каналов и плейлистов хозяина.
-- `GET /v1/playlists/{id}` — развёрнутый список роликов. Разворачивает yt-dlp,
-  ключ Google Data API не нужен. Отдаёт для каждого ролика признак «уже готов /
-  готовится / ничего нет», чтобы список сразу показывал, что можно смотреть
-  мгновенно.
-- Сохранение и удаление плейлиста.
+**Playlists.**
+- `GET /v1/playlists` — the list of the owner's saved channels and playlists.
+- `GET /v1/playlists/{id}` — the expanded list of videos. Expanded by yt-dlp,
+  no Google Data API key is needed. Returns for each video a sign “already ready /
+  being prepared / nothing there”, so that the list immediately shows what can be watched
+  instantly.
+- Saving and deleting a playlist.
 
-**Дорожка субтитров файлом.**
-- `GET /v1/jobs/{videoId}/track?format=srt|vtt|json` — только для готового
-  задания, ничего не запускает. `pysubs2` уже в `requirements.txt` и не
-  используется. Нужен для запасных путей (посмотреть в сторонем проигрывателе,
-  скачать с собой) и для отладки. Непереведённые реплики обязаны быть помечены
-  или выброшены, иначе файл молча выдаёт сербский за русский.
+**Subtitle track as a file.**
+- `GET /v1/jobs/{videoId}/track?format=srt|vtt|json` — only for a finished
+  job, starts nothing. `pysubs2` is already in `requirements.txt` and is not
+  used. Needed for fallback paths (watch in a third-party player,
+  take it with you) and for debugging. Untranslated cues must be marked
+  or thrown out, otherwise the file silently passes Serbian off as Russian.
 
-**Снимок задания** дополняется полями: `duration`, `source` (`asr` или
-`manual:<язык>`), `targetLang`, `studyLang`, `authorTrack`, `generation`.
-**Уже есть** (ветка `worktree-daemon-second-client`, 2026-11-01): `authorTrack`,
-`targetLang` и `generation`; остальных трёх пока нет.
+**The job snapshot** is extended with fields: `duration`, `source` (`asr` or
+`manual:<language>`), `targetLang`, `studyLang`, `authorTrack`, `generation`.
+**Already there** (branch `worktree-daemon-second-client`, 2026-11-01): `authorTrack`,
+`targetLang` and `generation`; the other three are not there yet.
 
-**Как построено** (ветка `source-language`, 2026-11-04): источник реплик и язык лежат
-в объекте `language` (`source` — `asr` или `manual`, `track` — метка дорожки автора),
-а не в поле `source` на верхнем уровне снимка: его расширение показало бы надписью
-«качаю asr…» (`extension/content.js`, ветка `message.source`). Поля — в разделе
-«Решения» ниже.
+**How it is built** (branch `source-language`, 2026-11-04): the source of cues and the language lie
+in a `language` object (`source` — `asr` or `manual`, `track` — the label of the author's track),
+and not in a `source` field at the top level of the snapshot: the extension would show it as the label
+“downloading asr…” (`extension/content.js`, branch `message.source`). The fields are in the
+“Decisions” section below.
 
-`studyLang` несущее: когда режим изучения выключен, поле `study` у реплики
-содержит исходный текст распознавания, и на проводе ничто об этом не говорит —
-клиент уверенно подпишет сербский как черногорский. ~~`generation` нужно, чтобы
-клиент понимал, относится ли пришедший снимок к тому же заданию: нумерация
-реплик у дорожки автора и у распознавания не совпадает.~~
+`studyLang` is load-bearing: when the study mode is off, the `study` field of a cue
+contains the source text of recognition, and nothing on the wire says so —
+the client would confidently label Serbian as Montenegrin. ~~`generation` is needed so that the
+client understands whether the incoming snapshot belongs to the same job: the cue numbering of the author's
+track and of recognition do not match.~~
 
-**Как построено** (там же). Варианты ролика различает `authorTrack`: у каждого
-варианта своё задание, см. «Что надо починить до начала». `generation` считает
-пересоздания под одним ключом: у первого задания 0, у пересозданного после
-остывшего повторяемого отказа — на единицу больше (оно может получить другой язык
-или взять дорожку автора там, где прежнее откатилось на распознавание, и
-нумерация реплик у них разная). После `/drop` реестр задание забывает, и счёт
-снова с 0, так что через сброс номер ничего не различает. Курсоры различает
-случайное основание журнала: курсор чужого журнала в диапазон этого не попадает и
-получает снимок. Отсюда правило для клиента: на каждом снимке реплики
-**заменяются** целиком, а не сливаются с показанными, — снимок приходит, когда
-клиент подключился, перешёл на другое задание или отстал. Расширение так не
-делает (`mergeCues` в `extension/content.js` сливает по номеру и не чистит); оно
-заморожено, и правило — для новых клиентов.
+**How it is built** (there). Video variants are distinguished by `authorTrack`: each
+variant has its own job, see “What must be fixed before the start”. `generation` counts
+recreations under one key: the first job has 0, one recreated after
+a cooled-down repeatable failure has one more (it may get a different language
+or take the author's track where the previous one fell back to recognition, and their
+cue numbering is different). After `/drop` the registry forgets the job, and the count
+is again from 0, so through a reset the number distinguishes nothing. Cursors are distinguished by
+the random journal base: a cursor from a foreign journal does not fall into the range of this one and
+gets a snapshot. Hence the rule for the client: on every snapshot the cues are
+**replaced** entirely, not merged with the shown ones — a snapshot comes when the
+client connected, switched to another job or fell behind. The extension does not do
+that (`mergeCues` in `extension/content.js` merges by number and does not clean); it is
+frozen, and the rule is for new clients.
 
-**Ошибки** получают машинный код рядом с `retryable`. Сейчас всё, кроме этого
-признака, — свободный русский текст, и клиент не может решить, что показать.
+**Errors** get a machine code next to `retryable`. Currently everything except this
+sign is free Russian text, and the client cannot decide what to show.
 
-**Состояние карты** в снимке: занята/свободна и кем — своей работой или другим
-заданием, плюс место в очереди.
+**GPU state** in the snapshot: busy/free and by whom — one's own work or another
+job, plus the place in the queue.
 
-### Совместимость
+### Compatibility
 
-Расширение не должно заметить ничего. Главное правило: **новых значений `Stage`
-не вводить.** Расширение сверяется с известным списком стадий, и незнакомая
-стадия оставит его с устаревшей надписью и опросом, который никогда не
-остановится. Новые сведения — только в новых полях.
+The extension must notice nothing. The main rule: **do not introduce new `Stage` values.**
+The extension checks against a known list of stages, and an unfamiliar
+stage will leave it with an outdated label and a poll that will never
+stop. New information — only in new fields.
 
-**Что расширение всё же замечает** после ветки `worktree-daemon-second-client`
-(2026-11-01). Новых стадий нет, но поведение сдвинулось в трёх местах:
+**What the extension does notice nevertheless** after the branch `worktree-daemon-second-client`
+(2026-11-01). There are no new stages, but the behaviour shifted in three places:
 
-- Первый ответ опроса — сразу снимок, без ожидания: курсор 0 лежит ниже
-  случайного основания журнала. Это лишний круг запроса, а надпись «в очереди»
-  появляется на миллисекунды раньше. В снимке нет источника загрузки и номера
-  попытки, которые несут события `state`, поэтому вкладка, подключившаяся посреди
-  загрузки, до следующего такого события показывает общую надпись.
-- Переключение дорожки автора посреди идущего задания оставляет прежний вариант
-  работать: выбранный ждёт карту, пока прежний не закончит (обычно минуту-две), и
-  надпись говорит об ожидании карты.
-- На пределе незавершённых заданий значок показывает фразу отказа с кнопкой
-  повтора, а опрос останавливается.
+- The first poll response is a snapshot right away, without waiting: cursor 0 lies below
+  the random journal base. This is an extra request round, and the label “in queue”
+  appears a few milliseconds earlier. The snapshot has no download source and attempt number, which
+  the `state` events carry, so a tab that connected in the middle of a
+  download shows a general label until the next such event.
+- Switching the author's track in the middle of a running job leaves the previous variant
+  working: the chosen one waits for the GPU until the previous one finishes (usually a minute or two), and
+  the label speaks of waiting for the GPU.
+- At the limit of unfinished jobs, the badge shows the refusal phrase with a retry
+  button, and the poll stops.
 
-## Что надо починить до начала
+## What must be fixed before the start
 
-Не улучшения, а предусловия. Оба найдены в живом коде.
+Not improvements but preconditions. Both found in live code.
 
-*Состояние на 2026-11-01, ветка `worktree-daemon-second-client`: первое сделано,
-второе не применено; из пунктов последнего абзаца сделаны оба предела. Подробности —
-в пометках «Как построено» и «Не применено» ниже.*
+*State as of 2026-11-01, branch `worktree-daemon-second-client`: the first is done,
+the second is not applied; of the items of the last paragraph both limits are done. Details
+are in the “How it is built” and “Not applied” notes below.*
 
-**1. Дорожка автора пересоздаёт живое задание.**
-[helper/jobs.py](../../../helper/jobs.py), `get_or_create`: если признак
-`use_author_track` у обратившегося не совпал с заданием, задание сбрасывается
-через `drop` и создаётся заново. Комментарий рядом обосновывает это тем, что
-«значение приходит из настроек и между опросами не меняется, так что расхождение
-случается ровно один раз на переключение». Это верно для одного клиента и
-неверно для двух: признак начинает расходиться на каждом опросе. Воспроизведено:
-113 пересозданий за 90 секунд.
+**1. The author's track recreates a live job.**
+[helper/jobs.py](../../../helper/jobs.py), `get_or_create`: if the `use_author_track` sign
+of the caller does not match the job, the job is reset
+through `drop` and created anew. The comment nearby justifies this by the fact that
+“the value comes from settings and does not change between polls, so a mismatch
+happens exactly once per switch”. This is true for one client and
+false for two: the sign begins to differ on every poll. Reproduced:
+113 recreations in 90 seconds.
 
-Усугубляется двумя обстоятельствами. `drop` зовёт `cancel`, но качалка живёт в
-`asyncio.to_thread`, которую отмена не останавливает, — остаются осиротевшие
-процессы yt-dlp, обращающиеся к googlevideo с адреса хозяина. Это
-правдоподобный источник записанных в заметках 403. И отдельно:
-[helper/app.py](../../../helper/app.py) в `POST /v1/jobs` и в операции `watch`
-по WebSocket зашивает `authorTrack` по умолчанию, тогда как опрос передаёт
-настоящее значение, — то есть клиент, собранный на любом из этих двух путей,
-будет спорить с расширением независимо от своих намерений.
+Aggravated by two circumstances. `drop` calls `cancel`, but the downloader lives in
+`asyncio.to_thread`, which cancellation does not stop — orphaned yt-dlp
+processes remain, accessing googlevideo from the owner's address. This is a
+plausible source of the 403s recorded in the notes. And separately:
+[helper/app.py](../../../helper/app.py) in `POST /v1/jobs` and in the WebSocket `watch` operation hardcodes `authorTrack` by default, whereas the poll passes
+the real value — that is, a client built on either of these two paths
+will argue with the extension regardless of its intentions.
 
-**Лечение — как построено** (ветка `worktree-daemon-second-client`, 2026-11-01).
-Задание ключуется парой (ролик, `use_author_track`): у каждого варианта своё
-задание, и никто не пересоздаёт чужое. Замысел советовал более дешёвое правило
-«первый клиент решает», но оно сломало переключатель в расширении: расширение
-рассчитывает, что опрос уносит настройку на каждом витке и сменённый признак даёт
-другое задание, а при «первом решающем» переключение не делало ничего, пока
-задание не вытеснят, не сбросят или не перезапустят демон. Язык перевода в ключ не
-входит и остаётся за первым обратившимся: он один на всех, а расхождение клиент
-видит в `targetLang` снимка.
+**The cure — as built** (branch `worktree-daemon-second-client`, 2026-11-01).
+The job is keyed by the pair (video, `use_author_track`): each variant has its own
+job, and nobody recreates someone else's. The design advised the cheaper rule
+“the first client decides”, but it broke the switch in the extension: the extension
+expects that the poll carries the setting on every round and a changed sign yields
+another job, and under “first decides” the switch did nothing until
+the job was evicted, reset or the daemon restarted. The translation language is not in the key and
+remains with the first caller: it is one for all, and the client
+sees a mismatch in the snapshot's `targetLang`.
 
-Чем платим. Два клиента с разным признаком — два конвейера на один ролик (их
-число ограничивает предел незавершённых заданий, см. ниже). Переключение в
-расширении посреди идущего задания оставляет прежний вариант работать: он держит
-карту, пока не закончит, а выбранный ждёт. Отменять прежний нельзя: он может идти
-у другого клиента, а отмена соседнего варианта при создании своего и давала шторм.
-Дорожка прежнего при этом не пропадает, а ложится в кэш. Смягчение — на будущий
-план: при создании варианта переводить идущий соседний в паузу (`PAUSED`), откуда
-он продолжится при следующем обращении.
+What we pay. Two clients with different signs — two pipelines per video (their
+number is limited by the limit on unfinished jobs, see below). Switching in the
+extension in the middle of a running job leaves the previous variant working: it holds the
+GPU until it finishes, and the chosen one waits. Cancelling the previous one is not allowed: it may be running
+for another client, and cancelling the neighbouring variant when creating one's own is what produced the storm.
+The previous one's track does not disappear, but goes into the cache. The mitigation is for the future
+plan: when creating a variant, put the running neighbouring one into pause (`PAUSED`), from where
+it will continue on the next access.
 
-Где ролик назван без признака дорожки: снимок `GET /v1/jobs/{id}` берёт самый
-недавно тронутый вариант; позиция просмотра и `unwatch` действуют на все варианты
-ролика; сброс без `clientId` отменяет все варианты.
+Where the video is named without a track sign: the snapshot `GET /v1/jobs/{id}` takes the most
+recently touched variant; the viewing position and `unwatch` act on all variants
+of the video; a reset without `clientId` cancels all variants.
 
-Мгновенный путь при устаревшем курсоре оставлен: это и есть путь
-пересинхронизации, без него клиент с чужим курсором молча ждал бы, пока журнал
-дорастёт до его позиции, и терял бы всё до неё. Шторм рождало пересоздание на
-каждом опросе, а мгновенный ответ лишь разгонял его. Каждый журнал теперь
-начинается со случайного 48-битного основания, а не с нуля; 48 бит — чтобы курсор
-оставался точным целым в JavaScript, ниже 2^53: расширение носит его числом JSON.
-Курсор чужого журнала, с другого варианта или со сброшенного задания, в диапазон
-этого не попадает и получает один снимок, а раз опрос задание больше не
-пересоздаёт, шторму взяться неоткуда.
+The instant path with an outdated cursor is kept: this is the
+resynchronization path, without it a client with a foreign cursor would silently wait until the journal
+grows to its position and would lose everything up to it. The storm was born by recreation on
+every poll, and the instant response only accelerated it. Every journal now
+starts from a random 48-bit base, not from zero; 48 bits — so that the cursor
+remains an exact integer in JavaScript, below 2^53: the extension carries it as a JSON number.
+A cursor from a foreign journal, from another variant or from a reset job, does not fall into the range of
+this one and gets one snapshot, and since the poll no longer recreates the job,
+there is nowhere for a storm to come from.
 
-Из двух обстоятельств выше `POST /v1/jobs` и `watch` **исправлены**: передают
-присланный признак, а не умолчание, и требуют настоящий boolean, иначе не-boolean
-лёг бы в ключ призрачным третьим вариантом. Нет признака — `true`; всё, что не
-boolean, — отказ: 400 у `POST`, событие отказа без подписки у `watch`. **Открытым
-остаётся** осиротевший yt-dlp: `cancel` по-прежнему не останавливает загрузку,
-уже идущую в `asyncio.to_thread`. Шторм, который это умножал, ушёл, но задание,
-отменённое посреди загрузки, оставляет процесс доработать.
+Of the two circumstances above, `POST /v1/jobs` and `watch` **are fixed**: they pass
+the supplied sign, not the default, and require a real boolean, otherwise a non-boolean
+would get into the key as a phantom third variant. No sign — `true`; anything that is not a
+boolean — refusal: 400 in `POST`, a refusal event without a subscription in `watch`. **Still open**
+is the orphaned yt-dlp: `cancel` still does not stop a download
+already running in `asyncio.to_thread`. The storm that multiplied this is gone, but a job
+cancelled in the middle of a download leaves the process to finish.
 
-**2. `loginctl enable-linger`.** ~~Одна команда, без неё вся затея не работает
-при выходе хозяина из сеанса.~~
+**2. `loginctl enable-linger`.** ~~One command, without it the whole undertaking does not work
+when the owner logs out of the session.~~
 
-**Не применено** (ветка `worktree-daemon-second-client`, 2026-11-01; `Linger=no`).
-Без запуска вне сеанса затея по-прежнему не работает при выходе хозяина из сеанса
-и после загрузки без входа, но одной командой это не решается. Lingering поднимает
-без сеанса весь менеджер пользователя, а не один демон: при загрузке вместе с ним
-стартуют звук (`keep-soundbar-alive`, `guitar-monitor-link`, а через его `Wants=` —
-`pipewire` с `wireplumber`) и ай-трекер (`tobii-gaze-keys`, а через его
-`Requires=` — `tobiid`). Условием их к сеансу не привязать: юнит, пропущенный по
-условию, свои `Wants=` и `Requires=` всё равно подтягивает (так пробовали
-2026-11-01 и откатили). Предусловие — правка самих юнитов там, откуда их
-раскладывают (`system-config`, а для `tobii-gaze-keys` ещё `tobii`): в `[Install]`
-`WantedBy=graphical-session.target` вместо `default.target`, затем
-`systemctl --user reenable`, чтобы не осталась прежняя ссылка из
-`default.target.wants`. Потом один выход и вход — звук и клавиши взгляда должны
-работать, — и только после этого `enable-linger`. Подробно, с запасным вариантом
-(системный юнит с `User=`), — в [docs/running.md](../../running.md).
+**Not applied** (branch `worktree-daemon-second-client`, 2026-11-01; `Linger=no`).
+Without starting outside the session the undertaking still does not work when the owner logs out of the session
+and after booting without login, but one command does not solve it. Lingering brings up
+the whole user manager without a session, not one daemon: on boot, together with it,
+sound starts (`keep-soundbar-alive`, `guitar-monitor-link`, and through its `Wants=` —
+`pipewire` with `wireplumber`) and the eye tracker (`tobii-gaze-keys`, and through its
+`Requires=` — `tobiid`). They cannot be tied to the session by a condition: a unit skipped by
+condition still pulls in its `Wants=` and `Requires=` (that is how they tried it
+on 2026-11-01 and rolled it back). The precondition is editing the units themselves where they are
+deployed from (`system-config`, and for `tobii-gaze-keys` also `tobii`): in `[Install]`
+`WantedBy=graphical-session.target` instead of `default.target`, then
+`systemctl --user reenable`, so that the previous link from
+`default.target.wants` does not remain. Then one log out and log in — sound and gaze keys must
+work — and only after that `enable-linger`. In detail, with a fallback option
+(a system unit with `User=`) — in [docs/running.md](../../running.md).
 
-Хорошо бы в том же заходе, но не обязательно до начала: предел на незавершённые
-задания, предел на `PAUSED_AUDIO_DIR`, ограничение частоты создания заданий,
-`proxy_headers=False` у uvicorn (по умолчанию он доверяет `X-Forwarded-For`
-с петли и подменяет адрес обратившегося до того, как до него доберётся наша
-проверка).
+It would be good in the same pass, but not mandatory before the start: the limit on unfinished
+jobs, the limit on `PAUSED_AUDIO_DIR`, rate limiting of job creation,
+`proxy_headers=False` in uvicorn (by default it trusts `X-Forwarded-For`
+from loopback and substitutes the caller's address before our check reaches it).
 
-**Как построено** (ветка `worktree-daemon-second-client`, 2026-11-01): оба предела
-сделаны, ограничение частоты и `proxy_headers` — нет.
+**How it is built** (branch `worktree-daemon-second-client`, 2026-11-01): both limits
+are done, rate limiting and `proxy_headers` are not.
 
-- **Не больше 16 незавершённых заданий** (`MAX_ACTIVE_JOBS`). Это защита от
-  злоупотребления, а не глубина очереди: расширение ставит в очередь столько
-  роликов, сколько открыто вкладок, и пятая вкладка обычного вечера отказа получать
-  не должна, а ожидающее задание дёшево — его задача стоит на пропуске к карте.
-  Брошенная пауза в счёт не идёт: стадия `PAUSED`, живой задачи нет, и к заданию
-  30 минут никто не обращался (`PAUSED_AUDIO_TTL`). Пауза продолжается только по
-  запросу клиента, и без этого исключения шестнадцать брошенных закрыли бы демон
-  для новых роликов до перезапуска. Брошенная остаётся в реестре с репликами, и
-  вернувшийся зритель её возобновит. Предел стережёт только создание: задание, что
-  уже есть, отдаётся и при пределе, а упавшее, чей отказ остыл, — как есть, без
-  повтора.
-- **Вид отказа** на трёх путях, что создают задание: `POST /v1/jobs` — 429 с фразой
-  в `detail`; `watch` — событие `{"type": "state", "stage": "error", "videoId": …,
-  "message": …, "retryable": true}` без подписки; `/events?create=true` — 200 со
-  снимком в стадии `error` и фразой в его поле `error`, а задание не заводится.
-  Почему у опроса не 429: на любой ответ не 200 расширение пишет «демон ответил
-  <код>», как о сломанном демоне, и повторяет запрос через паузу, а снимок со
-  стадией `error` показывает фразой и опрос останавливает; повторит зритель
-  кнопкой. Это единственный путь, которым расширение заводит задания.
-- **Отложенного звука не больше 4 ГиБ** всего (`PAUSED_AUDIO_MAX_BYTES`, около
-  шести трёхчасовых роликов в паузе). Сверх потолка убирается самый старый по
-  времени записи файл, а если он числится за заданием — через само задание, чтобы
-  его ручка не указывала на пропавший файл. Задание без звука при возобновлении
-  скачает его заново.
-- **Ограничение частоты и `proxy_headers=False` отложены** в план вывода демона в
-  сеть: оба опираются на адрес обратившегося, которого на петле нет.
-- **Известное ограничение.** При пределе пути, что создают задание, отказывают и
-  ролику, чья дорожка уже лежит в кэше: дешёвой проверки кэша в момент создания
-  нет — ключу нужны длительность ролика и отпечаток дорожки, а они известны только
-  после запроса метаданных. Подхвата готового через `/restore` предел не касается.
-  План предзагрузки обязан пускать готовые ролики мимо предела и не тратить на
-  предзагрузку места зрителя.
+- **No more than 16 unfinished jobs** (`MAX_ACTIVE_JOBS`). This is protection from
+  abuse, not queue depth: the extension queues as many
+  videos as there are open tabs, and the fifth tab of an ordinary evening should not get a refusal,
+  and a waiting job is cheap — its task stands on the pass to the GPU.
+  An abandoned pause is not counted: stage `PAUSED`, no live task, and nobody has touched the job
+  for 30 minutes (`PAUSED_AUDIO_TTL`). A pause continues only on
+  a client's request, and without this exception sixteen abandoned ones would close the daemon
+  to new videos until a restart. An abandoned one remains in the registry with cues, and
+  a returning viewer will resume it. The limit guards only creation: a job that
+  already exists is served even at the limit, and a failed one whose refusal has cooled — as it is, without
+  a retry.
+- **The form of refusal** on the three paths that create a job: `POST /v1/jobs` — 429 with the phrase
+  in `detail`; `watch` — the event `{"type": "state", "stage": "error", "videoId": …,
+  "message": …, "retryable": true}` without a subscription; `/events?create=true` — 200 with a
+  snapshot in stage `error` and the phrase in its `error` field, and the job is not created.
+  Why the poll does not get 429: on any non-200 response the extension writes “the daemon answered
+  <code>”, as about a broken daemon, and repeats the request after a pause, whereas a snapshot with
+  stage `error` shows it as a phrase and stops the poll; the viewer retries
+  with the button. This is the only path by which the extension creates jobs.
+- **No more than 4 GiB of deferred audio** in total (`PAUSED_AUDIO_MAX_BYTES`, about
+  six three-hour videos in pause). Above the ceiling the oldest by recording
+  time file is removed, and if it is listed for a job — through the job itself, so that
+  its handle does not point to a missing file. A job without audio on resumption
+  will download it again.
+- **Rate limiting and `proxy_headers=False` are deferred** to the plan for exposing the daemon to the network:
+  both rely on the caller's address, which does not exist on loopback.
+- **Known limitation.** At the limit the paths that create a job refuse also
+  a video whose track already lies in the cache: there is no cheap cache check at the moment of creation —
+  the key needs the video duration and the track fingerprint, and they are known only
+  after a metadata request. Picking up a ready one through `/restore` is not affected by the limit.
+  The preloading plan must let ready videos past the limit and not spend the viewer's
+  place on preloading.
 
-## Измерения, на которые опирается замысел
+## Measurements the design relies on
 
-Сделаны на этой машине, 2026-10-29/30.
+Made on this machine, 2026-10-29/30.
 
-| Что | Значение | Откуда |
+| What | Value | Source |
 |---|---|---|
-| Карта | RTX 4090, 24564 МиБ, занято 4422 | `nvidia-smi` |
-| Распознавание | в 81.7–96.1 раза быстрее реального времени | `spikes/asr_real_v3.json`, `asr_real_turbo.json` |
-| Перевод | 120 реплик за 28.4–32.4 с (≈4 реплики в секунду), `qwen3.8:27b` | `spikes/mt_quality.json` |
-| Форматы ролика | 48 всего, 28 по https, 16 m3u8, склеенных 0 | yt-dlp 2026.08.19 на `KCR-dkZIhxY` |
-| 1080p | только отдельными дорожками: 137 H.264 1910 кбит/с, 248 VP9, 399 AV1 | там же |
-| Звук | 140 AAC 129 кбит/с, 251 opus 142 | там же |
-| Автозапуск демона | `Linger=no` | `loginctl show-user` |
+| GPU | RTX 4090, 24564 MiB, 4422 in use | `nvidia-smi` |
+| Recognition | 81.7–96.1 times faster than real time | `spikes/asr_real_v3.json`, `asr_real_turbo.json` |
+| Translation | 120 cues in 28.4–32.4 s (≈4 cues per second), `qwen3.8:27b` | `spikes/mt_quality.json` |
+| Video formats | 48 total, 28 over https, 16 m3u8, 0 muxed | yt-dlp 2026.08.19 on `KCR-dkZIhxY` |
+| 1080p | only as separate tracks: 137 H.264 1910 kbit/s, 248 VP9, 399 AV1 | same place |
+| Audio | 140 AAC 129 kbit/s, 251 opus 142 | same place |
+| Daemon autostart | `Linger=no` | `loginctl show-user` |
 | ffmpeg | 8.1.2 | `ffmpeg -version` |
 
-Следствие из первых трёх строк: перевод обгоняет зрителя примерно в двадцать
-раз, поэтому режим «смотреть сразу, реплики догонят» — настоящий. Складывать
-в очередь и смотреть потом не нужно. Полторы-две минуты ожидания на свежем
-ролике — это почти целиком загрузка моделей и качка, а не пропускная способность.
+The consequence of the first three rows: translation overtakes the viewer by about twenty
+times, so the mode “watch immediately, cues will catch up” is real. There is no need to put things
+in a queue and watch later. One and a half to two minutes of waiting on a fresh
+video is almost entirely model loading and downloading, not throughput.
 
-## Что оставлено строителю
+## What is left to the builder
 
-- Вёрстка и внешний вид страницы. Единственное требование — узнаваемость
-  относительно расширения: те же две строки, та же строка для изучения, тот же
-  особый вид непереведённых реплик.
-- Имена и точная форма новых эндпоинтов.
-- Как именно устроен кэш видео на диске: потолок, вытеснение, соседство с
-  существующим кэшем реплик.
-- Как показывать очередь и состояние карты: слова, а не схема.
-- Выбор между «одна страница на все устройства» и отдельной раскладкой для
-  телефона.
-- Апгрейд транспорта, если ожидание склейки окажется заметным на практике:
-  демон генерирует манифест (HLS или DASH), ссылающийся на свои же эндпоинты
-  прокси для двух дорожек, а страница проигрывает его через Shaka или hls.js.
-  Это даёт мгновенный старт без диска, но добавляет сторонний проигрыватель на
-  JS, нарезку на отрезки и переподписывание ссылок при 403 посреди просмотра.
-  Решать по измерению, а не заранее.
-- Нужен ли сертификат на домашнее имя. Он покупает регистрацию в системном
-  «поделиться» и Wake Lock; хозяин назвал «поделиться» желаемым, а не
-  обязательным. Если браться — локальный удостоверяющий центр (mkcert) или
+- Layout and appearance of the page. The only requirement — recognizability
+  relative to the extension: the same two lines, the same study line, the same
+  special look of untranslated cues.
+- Names and the exact shape of the new endpoints.
+- How exactly the on-disk video cache is arranged: ceiling, eviction, neighbourhood with the
+  existing cue cache.
+- How to show the queue and the GPU state: words, not a diagram.
+- The choice between “one page for all devices” and a separate layout for
+  the phone.
+- A transport upgrade, if the muxing wait turns out noticeable in practice:
+  the daemon generates a manifest (HLS or DASH) referencing its own
+  proxy endpoints for the two tracks, and the page plays it through Shaka or hls.js.
+  This gives an instant start without disk, but adds a third-party JS player,
+  segmentation into chunks and re-signing of links on a 403 in the middle of viewing.
+  Decide by measurement, not in advance.
+- Whether a certificate for a home name is needed. It buys registration in the system
+  “share” and Wake Lock; the owner called “share” desirable, not
+  mandatory. If taken on — a local certificate authority (mkcert) or
   Tailscale.
-- Обнаружение демона: адрес руками, QR-код с хозяйского экрана, или mDNS.
-  Простейшее из работающих.
+- Daemon discovery: the address by hand, a QR code from the host screen, or mDNS.
+  The simplest of the working ones.
 
-## Принятые допущения
+## Assumptions made
 
-Там, где хозяин не высказался, а решение требовалось:
+Where the owner did not speak and a decision was required:
 
-- Смотрят на домашней сети. Доступ извне не проектируется, но привязка к сети и
-  список разрешённых адресов сделаны так, чтобы Tailscale позже не потребовал
-  переделки.
-- Устройство — планшет на Android со свежим браузером. Профиль H.264 выбран так,
-  чтобы это допущение было необязательным.
-- Проигрывание с погашенным экраном не нужно.
-- Качество выбирается настройкой демона один раз, а не переключателем на каждый
-  ролик.
+- They watch on the home network. Access from outside is not being designed, but binding to the network and
+  the list of allowed addresses are made so that Tailscale later does not require
+  a rework.
+- The device is an Android tablet with a fresh browser. The H.264 profile is chosen so
+  that this assumption is optional.
+- Playing with the screen off is not needed.
+- The quality is chosen by a daemon setting once, not by a switch for each
+  video.
 
-## Добавлено после проверки строителями
+## Added after review by builders
 
-Документ прочитали три независимых строителя: со стороны демона, со стороны
-страницы и тот, кому выстраивать всё в последовательность. Ниже то, что они
-нашли, и решения по этому.
+The document was read by three independent builders: from the daemon side, from the
+page side, and the one who arranges everything into a sequence. Below is what they
+found, and the decisions on it.
 
-### Две дырки, которые замысел пропустил
+### Two holes the design missed
 
-**Гонка плейхеда между двумя устройствами.** Это попадание в цель 4, и оно
-серьёзнее шторма с дорожкой автора. В `Job._next_batch` следующий батч берётся
-вокруг `job.playhead`: `nearest = min(pending, key=lambda c: abs(c.start -
-job.playhead))`. А `job.playhead` — одно число, которое присваивает последний
-написавший, и оба клиента пишут его раз в секунду. Два зрителя на второй и на
-двадцатой минуте одного ролика будут гонять окно перевода между собой, и ни один
-не получит связного куска.
+**The playhead race between two devices.** This hits goal 4, and it is
+more serious than the author's track storm. In `Job._next_batch` the next batch is taken
+around `job.playhead`: `nearest = min(pending, key=lambda c: abs(c.start -
+job.playhead))`. And `job.playhead` is a single number assigned by the last
+writer, and both clients write it once a second. Two viewers at the second and at
+the twentieth minute of the same video will drive the translation window between themselves, and neither
+will get a coherent piece.
 
-Лечение входит в предусловия, рядом с дорожкой автора: плейхед становится
-величиной на клиента, а задание выбирает окно по одному из них с явным правилом
-~~(первый подписавшийся, либо тот, кто отстаёт)~~ (выбранное — ниже). Экран
-очереди обязан уметь сказать «сейчас переводим для другого устройства» — иначе
-зритель видит молчание и считает это поломкой.
+The cure is part of the preconditions, next to the author's track: the playhead becomes
+a per-client value, and the job chooses the window by one of them with an explicit rule
+~~(the first subscriber, or the one that lags)~~ (the chosen one — below). The queue screen must be able to say “currently translating for another device” — otherwise the
+viewer sees silence and considers it a breakdown.
 
-**Как построено** (ветка `worktree-daemon-second-client`, 2026-11-01). У каждого
-клиента своя запись позиции; ключ — необязательный `clientId` в `playhead`, по HTTP
-и по WebSocket. Без ключа или с негодным (пустой, не строка, длиннее 64 знаков)
-клиент — один общий `"legacy"`, так что расширение работает как с одним
-плейхедом. Правило — круг, а не «первый» и не «отстающий»: каждый батч берётся
-вокруг следующей по очереди из различных позиций живых клиентов, один ход на батч.
-Минимум заставил бы зрителя на двадцатой минуте ждать весь ролик, а перевод
-обгоняет зрителя примерно в двадцать раз, так что и половина скорости —
-десятикратный запас. Живой — тот, кто сообщал о себе не дольше 120 секунд назад
-(`PLAYHEAD_TTL`, с запасом на фоновую вкладку, которую браузер душит до раза в
-минуту). Замолчали все — окно стоит на последней известной позиции среди их
-записей, а не прыгает к началу ролика.
+**How it is built** (branch `worktree-daemon-second-client`, 2026-11-01). Each
+client has its own position record; the key is an optional `clientId` in `playhead`, over HTTP
+and over WebSocket. Without a key or with an invalid one (empty, not a string, longer than 64 characters)
+the client is a single shared `"legacy"`, so the extension works as with a single
+playhead. The rule is a round, not “first” and not “lagging”: each batch is taken
+around the next in turn of the distinct positions of live clients, one move per batch.
+The minimum would make a viewer at the twentieth minute wait the whole video, and translation
+overtakes the viewer by about twenty times, so even half the speed is
+a tenfold margin. Live — the one who reported about itself no longer than 120 seconds ago
+(`PLAYHEAD_TTL`, with margin for a background tab that the browser throttles to once a
+minute). All fell silent — the window stands at the last known position among their
+records, and does not jump to the start of the video.
 
-`/drop` с `clientId` снимает только этого клиента и отменяет задание, лишь когда
-живых записей не осталось; без `clientId` отменяет всё, как раньше (так шлёт
-расширение). «Зарегистрирован» значит «есть живая запись позиции»: подписка и
-длинный опрос регистрацией не считаются. Поэтому вкладка расширения с замороженной
-страницей, чей фоновый опрос ещё идёт, теряет задание от сброса планшета с ключом,
-а следующий опрос заводит его заново. Позиция приходит без признака дорожки и
-ложится на все варианты ролика, так что на деле регистрация — на ролик, а не на
-вариант. Странице для планшета отсюда правило: сообщать позицию сразу при подписке
-(0, если ещё не играли), иначе чужой сброс снимет задание раньше, чем она о себе
-заявила.
+`/drop` with `clientId` removes only that client and cancels the job only when
+no live records remain; without `clientId` it cancels everything, as before (that is how the
+extension sends). “Registered” means “has a live position record”: a subscription and a
+long poll do not count as registration. Therefore an extension tab with a frozen
+page whose background poll is still running loses the job from a tablet reset with a key,
+and the next poll creates it anew. The position comes without a track sign and
+falls on all variants of the video, so in reality registration is per video, not per
+variant. Hence the rule for the tablet page: report the position immediately on subscription
+(0, if not yet played), otherwise someone else's reset will remove the job before it has declared itself.
 
-**Не сделано:** поля для «сейчас переводим для другого устройства» в демоне пока
-нет — это работа плана страницы для планшета.
+**Not done:** the fields for “currently translating for another device” in the daemon do not
+exist yet — this is the work of the tablet page plan.
 
-**Не переведённые реплики не видны на проводе.** Снимок отдаёт только
-переведённые: `"cues": [c.payload() for c in self.cues if c.translated]`,
-а событие `segmented` приносит одно общее число. Страница не может отличить
-«здесь тишина» от «здесь перевод ещё не дошёл» — и в режиме «смотреть сразу,
-реплики догонят», который этот замысел называет настоящим, зритель половину
-времени смотрит на пустое место, не зная, ждать ему или нет. Это прямое
-попадание в анти-цель про пустой экран без объяснения.
+**Untranslated cues are not visible on the wire.** The snapshot returns only
+translated ones: `"cues": [c.payload() for c in self.cues if c.translated]`,
+and the `segmented` event brings one total number. The page cannot distinguish
+“silence here” from “translation has not reached here yet” — and in the mode “watch immediately,
+cues will catch up”, which this design calls real, the viewer half the time
+looks at empty space without knowing whether to wait. This is a direct
+hit on the anti-goal about an empty screen without explanation.
 
-Лечение: на проводе появляется граница готовности по времени ролика (до какой
-секунды перевод доведён), а у отрисовки — различимый вид для «тут будет текст,
-он ещё не готов». Заложить сразу: у отрисовки меняется модель данных, сейчас это
-плоский отсортированный массив с двоичным поиском.
+The cure: a readiness boundary by video time appears on the wire (up to which
+second the translation has been brought), and the rendering gets a distinguishable look for “there will be text here,
+it is not ready yet”. Lay it down at once: the rendering's data model changes, currently it is
+a flat sorted array with binary search.
 
-**Не сделано** (ветка `worktree-daemon-second-client`, 2026-11-01): эта дырка вне
-цели плана про второго клиента, и он её не трогал. Граница готовности на проводе и
-вид «ещё не готово» отложены в план страницы для планшета.
+**Not done** (branch `worktree-daemon-second-client`, 2026-11-01): this hole is outside
+the goal of the second-client plan, and it did not touch it. The readiness boundary on the wire and the
+“not ready yet” look are deferred to the tablet page plan.
 
-### Склейка — отдельный ресурс, а не часть задания
+### Muxing is a separate resource, not part of a job
 
-Склейка видео ключуется парой (ролик, профиль качества) и живёт своим реестром,
-со своим пределом параллельности и своим учётом места. В тождество задания
-признак «нужно ли видео» не входит, потому что реплики с видео и без него одни и
-те же. Варианты по `authorTrack` дают разные реплики и потому в ключ входят.
-(Поправлено 2026-11-01, ветка `worktree-daemon-second-client`: здесь стояло, что
-признак клиента в тождестве задания и есть баг номер один. Наоборот: баг номер
-один был признаком, который сравнивали, но в ключ не включали.) Расширение на
-компьютере склейку не запускает никогда и 400 МБ за ролик не платит.
+Video muxing is keyed by the pair (video, quality profile) and lives in its own registry,
+with its own parallelism limit and its own space accounting. The sign “is video needed”
+is not part of the job identity, because the cues with and without video are the same.
+Variants by `authorTrack` give different cues and therefore do enter the key.
+(Corrected 2026-11-01, branch `worktree-daemon-second-client`: here it said that
+the client's sign in the job identity is bug number one. The other way round: bug number
+one was a sign that was compared but not included in the key.) The extension on
+the computer never starts muxing and does not pay 400 MB per video.
 
-### Распознавание продолжает качать звук отдельно
+### Recognition keeps downloading audio separately
 
-Соблазнительно брать звук из склеенного файла: один поход к YouTube вместо двух.
-Отвергнуто — распознавание тогда не начинается до конца склейки, а оно самое
-быстрое звено (в 80–96 раз быстрее реального времени) и должно идти первым.
+It is tempting to take the audio from the muxed file: one trip to YouTube instead of two.
+Rejected — recognition would then not start until muxing ends, and it is the fastest
+link (80–96 times faster than real time) and must go first.
 
-Но отсюда вытекает условие, которое легко пропустить и больно обнаружить:
-**звуковую дорожку для склейки надо выбирать той же сортировкой, что в
-`helper/sources/ytdlp.py` для распознавания** (`-S lang,+size`). Иначе на ролике
-с автоматическим дубляжом зритель слышит одну речь, а субтитры сделаны по
-другой. Это тихий отказ: всё работает, перевод просто не про то.
+But hence follows a condition that is easy to miss and painful to discover:
+**the audio track for muxing must be chosen by the same sorting as in
+`helper/sources/ytdlp.py` for recognition** (`-S lang,+size`). Otherwise, on a video
+with automatic dubbing the viewer hears one speech, and the subtitles are made from
+another. This is a silent failure: everything works, the translation is just about the wrong thing.
 
-Отдельно: сейчас загрузка звука идёт **под пропуском на карту**
-(`lease.acquire(asr_vram_mib)` в `helper/jobs.py`). Минуты склейки держать под
-единственным пропуском нельзя. Порядок фаз и места проверки вытеснения
-переписываются в любом случае — склейка живёт вне пропуска.
+Separately: currently the audio download goes **under the pass to the GPU**
+(`lease.acquire(asr_vram_mib)` in `helper/jobs.py`). Holding minutes of muxing under
+the single pass is impossible. The order of phases and the places where eviction is checked
+are rewritten in any case — muxing lives outside the pass.
 
-### Решения, принятые мной по вопросам строителей
+### Decisions made by me on the builders' questions
 
-- **Полный экран.** Целевое устройство — планшет на Android. Полный экран
-  делается своим: `requestFullscreen` на контейнере, внутри которого и видео, и
-  слой, плюс `playsinline`. Это же работает на iPadOS. На iPhone системный
-  полный экран у видео — `webkitEnterFullscreen`, и слой поверх картинки там
-  невозможен в принципе; iPhone объявляется вне цели, с одной строкой в
-  известных ограничениях.
-- **Место просмотра и отметка «просмотрено»** — своё на устройство, в
-  `localStorage`. Ноль работы на сервере. Раздел «продолжить смотреть» на
-  главном экране из этого же.
-- **Смотреть без субтитров, пока карта занята** — разрешено и нужно: байты уже
-  лежат на диске, это одна кнопка, и она прямо отвечает анти-цели про пустой
-  экран. Не-цель «замена YouTube» не нарушается: ни ленты, ни поиска не
-  появляется.
-- **Чем вызывается предзагрузка.** Страница присылает контекст (плейлист и
-  позиция в нём), демон о сеансах устройств ничего не знает. Нет контекста —
-  предзагрузки нет, и это ничего не стоит. Предзагрузка всегда уступает живому
-  зрителю; при занятой карте или нехватке места просто не начинается.
-- **Политика обращений к YouTube.** За видео ходим анонимно, как сейчас, с
-  пределом на одновременные загрузки и с докачкой вместо качки с нуля (у звука
-  стоит `--no-part`, но терять 400 МБ на отказе 403 в конце — дорого). Аккаунт
-  из `[youtube] cookies` остаётся только под возрастным ограничением: репозиторий
-  берёг его намеренно, потому что yt-dlp предупреждает о бане. Если с домашнего
-  адреса придёт ограничение частоты, первой режется предзагрузка, а не
-  анонимность.
+- **Full screen.** The target device is an Android tablet. Full screen
+  is done by us: `requestFullscreen` on the container that holds both the video and the
+  layer, plus `playsinline`. The same works on iPadOS. On iPhone the system
+  full screen of the video is `webkitEnterFullscreen`, and a layer over the picture there is
+  impossible in principle; the iPhone is declared out of scope, with one line in
+  the known limitations.
+- **Viewing position and the “watched” mark** — per device, in
+  `localStorage`. Zero server work. The “continue watching” section on the
+  home screen comes from the same.
+- **Watching without subtitles while the GPU is busy** — allowed and needed: the bytes already
+  lie on disk, it is one button, and it directly answers the anti-goal about an empty
+  screen. The non-goal “replacing YouTube” is not violated: neither a feed nor a search
+  appears.
+- **What triggers preloading.** The page sends context (playlist and
+  position in it), the daemon knows nothing about device sessions. No context —
+  no preloading, and it costs nothing. Preloading always yields to a live
+  viewer; when the GPU is busy or space is short it simply does not start.
+- **The policy of requests to YouTube.** For video we go anonymously, as now, with a
+  limit on simultaneous downloads and with resumption instead of downloading from scratch (audio has
+  `--no-part`, but losing 400 MB on a 403 at the end is expensive). The account
+  from `[youtube] cookies` remains only under an age restriction: the repository
+  kept it deliberately, because yt-dlp warns of a ban. If a rate limit comes from the home
+  address, the first thing cut is preloading, not anonymity.
 
-## Открытые вопросы к хозяину
+## Open questions to the owner
 
-Четыре вопроса, без ответов на которые строитель будет угадывать, и ошибка
-будет дорогой. Остальное, что нашла проверка, решено выше или уже было в
-документе.
+Four questions; without answers the builder will guess, and the error
+will be expensive. The rest of what the review found is decided above or was already in the
+document.
 
-1. **«1080p и выше» — это пол или потолок?** Все три строителя назвали это
-   первым вопросом независимо друг от друга. H.264 1080p со звуком — около
-   400 МБ на 26 минут и играет везде. Выше 1080p YouTube отдаёт только VP9 и
-   AV1: это в 4–8 раз больше байтов (1.5–3 ГБ на тот же ролик), минуты вместо
-   секунд на качку и склейку, и на чужом iPad эти кодеки не гарантированы. Если
-   нужны оба, в кэше придётся держать по два-три варианта на ролик и выбирать
-   профиль под устройство, чего принятые допущения не предусматривают. И отдельно:
-   у многих роликов 1080p нет вовсе — «пол» означал бы отказ там, где логичнее
-   молча отдать 720p.
-2. **Откуда берётся список на главном экране** — из аккаунта YouTube (подписки,
-   «Посмотреть позже», личные и приватные плейлисты) или это публичные ссылки,
-   сохранённые руками? Подписки требуют cookies на каждый запрос метаданных и
-   именно основного аккаунта — другая политика и другой риск, плюс экран
-   состояния входа. Сохранённые ссылки — это список и кнопка «добавить», работы
-   втрое меньше.
-3. **Можно ли править расширение?** Анти-цель запрещает второе место, где
-   отрисовку держат в соответствии руками, а цель 7 говорит «расширение работает
-   без изменений». Одновременно и то и другое невозможно. Общий модуль требует
-   правки `extension/manifest.json` и `extension/content.js` плюс сборочного
-   шага или динамического импорта (в `extension/` сейчас нет ни сборки, ни
-   модулей, и заявлен Firefox 128). Копия дешевле сегодня и даёт расхождение
-   через месяц.
-4. **Будут ли в этих плейлистах не сербские каналы?** Язык распознавания и язык
-   учебной строки — сейчас глобальные настройки демона и часть ключа кэша. Если
-   да, они перестают быть одной настройкой на весь дом и становятся свойством
-   плейлиста; это трогает ключ кэша, начальный промпт и требует от страницы
-   уметь прятать учебную строку. Угадывать нельзя: в заметках уже есть случай,
-   когда сербскую речь распознали как английскую.
+1. **“1080p and above” — is this a floor or a ceiling?** All three builders called this
+   the first question independently of each other. H.264 1080p with audio is about
+   400 MB for 26 minutes and plays everywhere. Above 1080p YouTube gives only VP9 and
+   AV1: that is 4–8 times more bytes (1.5–3 GB for the same video), minutes instead of
+   seconds for download and muxing, and on someone else's iPad these codecs are not guaranteed. If
+   both are needed, the cache will have to hold two or three variants per video and choose
+   the profile for the device, which the accepted assumptions do not provide for. And separately:
+   many videos have no 1080p at all — “floor” would mean a refusal where it is more logical
+   to silently give 720p.
+2. **Where does the list on the home screen come from** — from the YouTube account (subscriptions,
+   “Watch later”, personal and private playlists) or is it public links
+   saved by hand? Subscriptions require cookies on every metadata request and
+   specifically of the main account — a different policy and a different risk, plus a login
+   state screen. Saved links are a list and an “add” button, three times less
+   work.
+3. **May the extension be edited?** The anti-goal forbids a second place where
+   rendering is kept in sync by hand, and goal 7 says “the extension works
+   without changes”. Both at once is impossible. A shared module requires
+   edits to `extension/manifest.json` and `extension/content.js` plus a build
+   step or dynamic import (in `extension/` there is currently neither a build nor
+   modules, and Firefox 128 is declared). A copy is cheaper today and gives a divergence
+   in a month.
+4. **Will there be non-Serbian channels in these playlists?** The recognition language and the
+   study line language are currently global daemon settings and part of the cache key. If
+   yes, they stop being one setting for the whole house and become a property of the
+   playlist; this touches the cache key, the initial prompt, and requires the page to
+   be able to hide the study line. One cannot guess: the notes already contain a case
+   where Serbian speech was recognized as English.
 
-**Все четыре отвечены 2026-10-30.** Ответы и их последствия — в разделе
-«Ответы хозяина» ниже; он имеет приоритет над формулировками выше.
+**All four were answered on 2026-10-30.** The answers and their consequences are in the section
+“Owner's answers” below; it takes precedence over the wording above.
 
-## Ответы хозяина, 2026-10-30
+## Owner's answers, 2026-10-30
 
-Этот раздел имеет приоритет над формулировками выше: где он расходится с
-допущениями из более ранних разделов, верен он.
+This section takes precedence over the wording above: where it diverges from the
+assumptions of earlier sections, it is right.
 
-### 1. Качество: 1080p — потолок, не пол
+### 1. Quality: 1080p is a ceiling, not a floor
 
-Причина названа хозяином прямо: экономия трафика, времени и места на диске.
-Следствия, снимающие сразу несколько развилок:
+The reason was named by the owner directly: saving traffic, time and disk space.
+Consequences that remove several forks at once:
 
-- **Один профиль на все устройства:** H.264 + AAC в mp4. VP9 и AV1 не
-  используются вообще. Значит нет ни выбора профиля под устройство, ни двух-трёх
-  склеенных вариантов одного ролика в кэше, ни требования к странице сообщать
-  свои возможности декодирования. Чужой iPad и старый телефон открывают тот же
-  файл, что планшет.
-- **Лестница вниз, а не отказ:** 1080p — верхняя граница. Нет у ролика 1080p —
-  берётся лучшее из имеющегося ниже (720p, 480p). Отказывать нельзя: у многих
-  роликов 1080p просто нет.
-- **Считаемый бюджет:** около 2 Мбит/с, то есть примерно 400 МБ на 26 минут и
-  примерно 15 МБ на минуту. Потолок кэша видео и вытеснение по давности считаются
-  от этой цифры; строителю больше нечего угадывать.
-- Апгрейд транспорта до манифеста с нарезкой остаётся там, где и был: решать
-  потом по измерению, не в первой версии.
+- **One profile for all devices:** H.264 + AAC in mp4. VP9 and AV1 are not
+  used at all. So there is no choosing a profile for a device, no two or three
+  muxed variants of one video in the cache, no requirement for the page to report
+  its decoding capabilities. Someone else's iPad and an old phone open the same
+  file as the tablet.
+- **A ladder down, not a refusal:** 1080p is the upper bound. If the video has no 1080p —
+  the best available below is taken (720p, 480p). Refusing is not allowed: many
+  videos simply have no 1080p.
+- **A countable budget:** about 2 Mbit/s, that is roughly 400 MB for 26 minutes and
+  about 15 MB per minute. The video cache ceiling and eviction by age are counted
+  from this figure; the builder has nothing more to guess.
+- The transport upgrade to a manifest with segmentation remains where it was: decide
+  later by measurement, not in the first version.
 
-### 2. Главный экран: только сохранённые ссылки
+### 2. Home screen: saved links only
 
-Аккаунт YouTube для метаданных не используется. Ни подписок, ни «Посмотреть
-позже», ни приватных плейлистов.
+The YouTube account is not used for metadata. No subscriptions, no “Watch
+later”, no private playlists.
 
-- Главный экран — список сохранённых хозяином ссылок (канал, плейлист, ролик) и
-  кнопка «добавить ссылку». Разворачивает yt-dlp, анонимно.
-- Cookies остаются ровно там, где были: подставляются только под возрастное
-  ограничение. Политика бережения аккаунта, уже заложенная в
-  `helper/sources/ytdlp.py` и `config.example.toml`, не меняется.
-- Экрана состояния входа и его отказов не существует. Это вычёркивает заметный
-  кусок работы и заметный класс отказов.
-- Вставленная ссылка на одиночный ролик — та же сохранённая ссылка, просто без
-  контекста плейлиста. Предзагрузки по ней нет, потому что нет «следующего».
+- The home screen is the list of links saved by the owner (channel, playlist, video) and
+  an “add link” button. Expanded by yt-dlp, anonymously.
+- Cookies remain exactly where they were: substituted only under an age
+  restriction. The account-saving policy already laid down in
+  `helper/sources/ytdlp.py` and `config.example.toml` does not change.
+- There is no login state screen and its refusals. This crosses out a noticeable
+  piece of work and a noticeable class of failures.
+- A pasted link to a single video is the same saved link, just without
+  playlist context. There is no preloading for it, because there is no “next”.
 
-### 3. Расширение не трогаем вообще
+### 3. We do not touch the extension at all
 
-Формулировка хозяина: цель — сделать сервис, который отдаёт видео и субтитры в
-веб-приложение, без пересечения с расширением.
+The owner's wording: the goal is to make a service that serves video and subtitles into
+the web app, without intersecting with the extension.
 
-- В `extension/` не меняется ни строки. Ни сборочного шага, ни общего модуля, ни
-  динамического импорта, ни перепроверки единственного инструмента, который
-  сейчас работает.
-- У веб-приложения своя отрисовка, написанная заново. Узнаваемость относительно
-  расширения — приятно, но не требование; расхождение внешнего вида со временем
-  допустимо и признано.
-- Снятая анти-цель отмечена выше по тексту.
-- Что из этого следует для протокола: демон становится сервисом с двумя
-  независимыми потребителями, и его изменения обязаны быть **только
-  добавляющими**. Правило «новых значений `Stage` не вводить» из этого же и
-  становится жёстче: оно теперь единственная защита расширения.
+- In `extension/` not a line changes. No build step, no shared module, no
+  dynamic import, no re-checking of the only tool that
+  currently works.
+- The web app has its own rendering, written anew. Recognizability relative to the
+  extension is pleasant but not a requirement; a divergence of appearance over time is
+  acceptable and acknowledged.
+- The withdrawn anti-goal is marked above in the text.
+- What follows for the protocol: the daemon becomes a service with two
+  independent consumers, and its changes must be **additive only**. The rule
+  “do not introduce new `Stage` values” becomes stricter from this too: it is now
+  the extension's only protection.
 
-### 4. Языки: вход любой, выход всегда один
+### 4. Languages: any input, always one output
 
-Уточнено хозяином 2026-10-30: английские и прочие ролики надо **распознавать и
-переводить в черногорский и русский, так же как сербские**.
+Clarified by the owner on 2026-10-30: English and other videos must be **recognized and
+translated into Montenegrin and Russian, just like Serbian ones**.
 
-Это снимает то, что я записал здесь сначала. Я прочёл «читать сербский перевод
-на английских роликах» как «цель перевода меняется» — неверно. Цель не меняется:
-на выходе всегда те же две строки, что и сегодня, русская и черногорская.
-Меняется только язык на входе. Прежнее «язык один на всех» тоже остаётся в силе
-в своей части: ключ и настройки общие, а язык источника — свойство материала.
+This removes what I wrote here first. I read “read the Serbian translation
+on English videos” as “the translation target changes” — wrong. The target does not change:
+the output is always the same two lines as today, Russian and Montenegrin.
+Only the input language changes. The earlier “one language for all” also remains in force
+in its part: the key and settings are shared, and the source language is a property of the material.
 
-**Что из этого следует.**
+**What follows.**
 
-Сегодня вторая строка почти бесплатна: `helper/montenegrin.py` преобразует
-сербский текст распознавания в черногорское прочтение правилами, без обращения к
-модели. Для английского ролика преобразовывать нечего — исходник не сербский.
+Today the second line is almost free: `helper/montenegrin.py` converts
+the Serbian recognition text into a Montenegrin reading by rules, without calling the
+model. For an English video there is nothing to convert — the source is not Serbian.
 
-Отсюда устройство, которое сохраняет существующий код целиком: **черногорское
-преобразование остаётся последним шагом, меняется только то, что ему
-подаётся.**
+Hence an arrangement that keeps the existing code entirely: **the Montenegrin
+conversion remains the last step, only what is fed to it changes.**
 
-| Источник | Первая строка (русская) | Что подаётся в `montenegrin.py` |
+| Source | First line (Russian) | What is fed to `montenegrin.py` |
 |---|---|---|
-| сербский | перевод sr → ru, как сейчас | текст распознавания, как сейчас — бесплатно |
-| английский и прочие | перевод xx → ru | перевод xx → sr, новый вызов модели |
+| Serbian | sr → ru translation, as now | recognition text, as now — free |
+| English and others | xx → ru translation | xx → sr translation, a new model call |
 
-То есть `montenegrin.py` — не тупик, а наоборот, единственная часть, которая не
-меняется вовсе. Новое здесь ровно одно: для не сербского источника появляется
-второе направление перевода, xx → sr, которого в конвейере не было.
+That is, `montenegrin.py` is not a dead end, but on the contrary, the only part that does not
+change at all. There is exactly one new thing here: for a non-Serbian source a
+second translation direction appears, xx → sr, which was not in the pipeline.
 
-**Чем платим.** На не сербском ролике перевод удваивается: две цели вместо
-одной. По замеру (около четырёх реплик в секунду на одну цель) это примерно две
-реплики в секунду, то есть всё ещё примерно в десять раз быстрее зрителя. Режим
-«смотреть сразу» выдерживает.
+**What we pay.** On a non-Serbian video the translation doubles: two targets instead of
+one. By measurement (about four cues per second per target) this is about two
+cues per second, that is, still about ten times faster than the viewer. The mode
+“watch immediately” holds.
 
-**Что это, наоборот, снимает.** Проверка вывода переводчика смотрит на
-письменность, и я записал выше, что на обратном направлении она перевернётся и
-начнёт браковать верное. Этого не произойдёт: цель всегда русский и
-черногорский, то есть ожидаемая письменность та же, что сегодня. Опасность
-снята, строку выше считать недействительной.
+**What this, on the contrary, removes.** The translator output check looks at
+the script, and I wrote above that in the reverse direction it would flip and
+start rejecting correct output. This will not happen: the target is always Russian and
+Montenegrin, that is, the expected script is the same as today. The danger is
+removed, consider the line above invalid.
 
-**Что становится главным риском вместо этого.** Определение языка источника.
-Пока все ролики сербские, «Whisper решил, что это английский» — надёжный признак
-поломки, и в заметках есть случай, когда по такому признаку поймали пять
-роликов, где сербскую речь распознали как английскую и перевели вместо
-расшифровки. Теперь английский в плейлистах законен, и этот признак перестаёт
-работать. Значит язык источника должен быть **свойством сохранённой ссылки**, а
-не результатом определения: канал на английском помечается один раз, и дальше
-распознавание не угадывает. Определение остаётся только для ссылок, которым
-язык не задали, и его результат обязан быть виден на экране, а не применён
-молча.
+**What becomes the main risk instead.** Source language
+detection. While all videos are Serbian, “Whisper decided it is English” is a reliable sign
+of breakage, and the notes contain a case where five videos were caught by this sign
+where Serbian speech was recognized as English and translated instead of transcribed. Now English in playlists is legitimate, and this sign stops
+working. So the source language must be **a property of the saved link**, and
+not a result of detection: an English channel is marked once, and afterwards
+recognition does not guess. Detection remains only for links whose
+language was not set, and its result must be visible on the screen, not applied
+silently.
 
-**Дешёвый путь для английских роликов.** У английских роликов, в отличие от
-сербских, почти всегда есть настоящие субтитры автора. Демон уже умеет брать их
-(`manual:<язык>` в коде) и пропускать распознавание целиком. Для английской
-части плейлистов это снимает и карту, и риск определения языка: остаётся только
-перевод. Проверяется в идущем исследовании.
+**A cheap path for English videos.** English videos, unlike
+Serbian ones, almost always have real author subtitles. The daemon already knows how to take them
+(`manual:<language>` in the code) and skip recognition entirely. For the English
+part of playlists this removes both the GPU and the language detection risk: only
+translation remains. Being checked in the ongoing research.
 
-Точный разбор — что конвейер умеет по направлениям, что именно меняется в
-распознавании, как язык проходит через ключ кэша и тождество задания —
-дописывается исследованием и ляжет ниже.
+The exact breakdown — what the pipeline can do by direction, what exactly changes in
+recognition, how the language passes through the cache key and the job identity — is
+being written by the research and will land below.
 
-**Как построено** (ветка `source-language`, 2026-11-04). Сохранённых ссылок в демоне
-пока нет, и объявить язык человек может одним способом: кодом в `[asr] language`
-файла `config.toml`, сразу для всех роликов (закреп); `auto` — не объявлять.
-Определитель запускается на каждом распознаваемом ролике, и при закрепе тоже: закреп
-решает токен декодера, а расхождение с услышанным уходит на провод (см. «Решения»).
-Объявление на ссылку или на ролик отложено вместе со своим последствием: язык в ключ
-реестра заданий не входит, а при объявлении на ссылку войти должен. Дешёвый путь для
-английских роликов не открыт: дорожка автора по-прежнему берётся только сербского
-семейства.
+**How it is built** (branch `source-language`, 2026-11-04). There are no saved links in the daemon
+yet, and a person can declare the language in one way: by a code in `[asr] language`
+of the `config.toml` file, for all videos at once (a pin); `auto` — do not declare.
+The detector runs on every recognized video, and under a pin too: the pin
+decides the decoder token, and a mismatch with what was heard goes onto the wire (see “Decisions”).
+Declaration per link or per video is deferred together with its consequence: the language does not enter the job
+registry key, and under declaration per link it must. The cheap path for
+English videos is not open: the author's track is still taken only for the Serbian
+family.
 
-## Исследование языков: что оказалось неверно и что реально ломается
+## Language research: what turned out wrong and what really breaks
 
-Разбор конвейера по направлениям, 2026-10-30. Он опровергает три вещи,
-написанные выше в этом же документе, поэтому начинается с них.
+A breakdown of the pipeline by direction, 2026-10-30. It refutes three things
+written above in this same document, so it starts with them.
 
-### Опровергнутое
+### Refuted
 
-**Дистиллированной модели перевода не существует.** Переводчик один:
-HTTP-запрос к ollama `/api/chat` (`helper/translate.py:245`) с одним именем
-модели из конфига. `ct2-opus-mt-converter` в `.venv/bin/` — это консольная точка
-входа пакета `ctranslate2`, который тянется зависимостью faster-whisper для
-распознавания; весов opus-mt нет нигде. Откуда взялась посылка: в
-`.remember/archive.md` записано «MT distillation (opus-mt-tc-big, 27M pairs)», а
-в исходной, несжатой формулировке стояло «MT distillation **strategy**» —
-решённый, записанный, но никогда не обученный план. Слово потерялось при сжатии
-памяти. Так что ветка не пустая, но смотрит в будущее: дистилляции нет, и новое
-требование по языкам — довод её **не** строить по паре на направление.
+**There is no distilled translation model.** There is one translator:
+an HTTP request to ollama `/api/chat` (`helper/translate.py:245`) with one model name
+from the config. `ct2-opus-mt-converter` in `.venv/bin/` is the console entry
+point of the `ctranslate2` package, which is pulled as a dependency of faster-whisper for
+recognition; there are no opus-mt weights anywhere. Where the premise came from: in
+`.remember/archive.md` it is written “MT distillation (opus-mt-tc-big, 27M pairs)”, and
+in the original, uncompressed wording it said “MT distillation **strategy**” —
+a decided, recorded, but never trained plan. The word was lost when the
+memory was compressed. So the branch is not empty, but looks to the future: there is no
+distillation, and the new language requirement is an argument **not** to build it per pair per direction.
 
-**Вторая строка не правило, а вторая модельная выдача.** Это главная поправка.
-`dual_cue_schema` (`helper/translate.py:135-171`) кладёт в схему ответа два
-буквальных ключа, `"crnogorski"` и `"ruski"`, ollama компилирует её в грамматику,
-и декодер физически выдаёт оба поля за один вызов. `translate_dual`
-(`translate.py:258-310`) отдаёт первый элемент в `cue.study`. Регулярные
-выражения в `helper/montenegrin.py` — не производитель, а **проверяльщик задним
-числом** (`score`/`check`, строки 126-168), результат которого `jobs.py:1100`
-только пишет в журнал.
+**The second line is not a rule but a second model output.** This is the main correction.
+`dual_cue_schema` (`helper/translate.py:135-171`) puts two
+literal keys into the response schema, `"crnogorski"` and `"ruski"`, ollama compiles it into a grammar,
+and the decoder physically emits both fields in one call. `translate_dual`
+(`translate.py:258-310`) returns the first element in `cue.study`. The regular
+expressions in `helper/montenegrin.py` are not the producer but a **post-hoc checker**
+(`score`/`check`, lines 126-168), whose result `jobs.py:1100`
+only writes to the log.
 
-Из этого следуют два вывода, отменяющих написанное выше:
+From this follow two conclusions that cancel what was written above:
 
-- **Перевод на не сербском источнике не удваивается.** Я писал «две цели вместо
-  одной, около двух реплик в секунду вместо четырёх» — неверно: обе строки и
-  сейчас получаются одним вызовом. Меняется только язык источника, цена та же.
-- **Схема «`montenegrin.py` остаётся последним шагом, меняется только то, что
-  ему подаётся» не имеет под собой ничего** — преобразующего шага не существует,
-  подавать некуда. Таблицу в разделе 4 считать недействительной.
+- **Translation on a non-Serbian source does not double.** I wrote “two targets instead of
+  one, about two cues per second instead of four” — wrong: both lines are
+  already obtained by one call. Only the source language changes, the price is the same.
+- **The scheme “`montenegrin.py` remains the last step, only what is fed to it changes”
+  has nothing behind it** — there is no converting step, there is nowhere to feed.
+  Consider the table in section 4 invalid.
 
-**Снятие опасности с проверки письменности было поспешным.** Я написал, что
-проверка не перевернётся, потому что цель всегда русский и черногорский. Но
-опасность не снята, а переехала — и, что важнее, она вообще не того рода.
-**Ни один проверяльщик не умеет забраковать:** и `validate_dual`, и `validate`
-попадают только в `log.info` (`jobs.py:1100-1103`, `1107-1109`), а лестница
-починки `_translate_halves` входит исключительно по исключению из модели
-(`RETRYABLE` на `jobs.py:64`, вход на `jobs.py:1052-1054`). Значит неверный
-вывод не отвергается, а проходит и попадает в кэш — ровно механизм записанного
-случая «36 отказов из 40, батч закэширован».
+**Removing the danger from the script check was hasty.** I wrote that
+the check would not flip, because the target is always Russian and Montenegrin. But the
+danger is not removed, it has moved — and, more importantly, it is not of that kind at all.
+**No checker can reject:** both `validate_dual` and `validate`
+only reach `log.info` (`jobs.py:1100-1103`, `1107-1109`), and the repair
+ladder `_translate_halves` is entered solely through an exception from the model
+(`RETRYABLE` at `jobs.py:64`, entry at `jobs.py:1052-1054`). So a wrong
+output is not rejected but passes and gets into the cache — exactly the mechanism of the recorded
+case “36 failures out of 40, the batch is cached”.
 
-### Что реально ломается на не сербском источнике
+### What really breaks on a non-Serbian source
 
-По порядку того, что увидит зритель.
+In the order of what the viewer will see.
 
-1. **Реплики съезжают, и этого никто не замечает.** `alignment_shifted`
-   (`translate.py:350-397`) — единственная защита от самого скверного отказа —
-   работает на совпадении четырёхбуквенных основ между источником и выводом, и в
-   коде прямо написано, что она опирается на их близость. Для английского
-   источника с сербским или русским выводом общей лексики нет: покрытие около
-   нуля в каждой позиции, порог не срабатывает ни разу, функция возвращает
-   «сдвига нет» на любом батче. На экране: пятая реплика показывает текст
-   десятой, складно сформулированный, и ни демон, ни журнал этого не видят.
-   **Это и есть то, что должно решать судьбу замысла** — не качество перевода.
-2. **Черногорский проверяльщик удостоверяет английский.** `score()` возвращает
-   `ratio = 1.0`, когда не совпал ни один маркер (`montenegrin.py:137`), так что
-   батч без единого черногорского признака получает идеальную оценку, и
-   `check()` молчит.
-3. **Затравка распознавания безусловно сербская**, а сбор имён собственных гонит
-   английские заголовки через сербскую транслитерацию: проверено, из английского
-   Title Case вылавливаются «Copyright», «All», «Rights», «Reserved»,
-   «Subscribe». А все заградители галлюцинаций, которые ставит воркер, в пакетном
-   режиме faster-whisper 1.2.1 — задокументированные пустышки
-   (`transcribe.py:351-369`), и затравка переподаётся каждому куску. На экране
-   посреди английского ролика — сербская служебная фраза как реплика, уехавшая
-   дальше в переводчик.
-4. **Язык берётся из метаданных раньше определителя** — это и есть записанный
-   случай: `_source_language` (`jobs.py:955-979`) доверяет полю yt-dlp и только
-   потом зовёт определитель, а YouTube помечает сербские каналы как `en`. Строка
-   журнала, которая вскрыла бы расхождение (`jobs.py:669`), структурно мертва:
-   в пакетном режиме `info.language` равен тому, что мы передали, поэтому
-   «определённое» всегда равно «переданному».
-5. **Ошибка определения становится вечной.** В ключ кэша идёт
-   `self._config.asr.language`, то есть буквальная строка `"auto"`, а не язык,
-   которым на самом деле распознали (`jobs.py:462`, `1318`). Плюс `_serve_cached`
-   выполняется до распознавания. Второго шанса нет: в записанном случае около 80%
-   `src` закэшированной дорожки остались английскими.
-6. **Код языка нигде не проверяется.** faster-whisper принимает ровно 100 кодов
-   и падает на остальных; `sh`, `me`, `cnr` и пустая строка — падают, причём
-   `sh`/`me`/`cnr` лежат в собственных наборах BCMS этого репозитория. Наружу
-   уходит хвост трассировки в 500 символов, почти целиком состоящий из списка
-   допустимых кодов, помеченный как повторяемый, — значит опрос пересоздаёт
-   задание каждые 60 секунд, перекачивая звук под пропуском на карту. Тот же
-   рисунок, что дал 43 загрузки за 90 минут и затем 403.
-7. **Нарезка настроена на два языка.** В `SENTENCE_END` нет списка сокращений:
-   «Today we test the U.S. market, e.g. tech stocks.» распадается на четыре
-   реплики, и именно обрывок уходит в переводчик. А `CONJUNCTIONS`
-   (`segment.py:36-40`) содержит только сербские и русские служебные слова, так
-   что английские строки переносятся с висящим «but» в конце.
-8. **Дешёвый путь закрыт одной регуляркой.** `usable_manual_track`
-   (`ytdlp.py:321-336`) берёт дорожку только если её язык подходит под
-   `^(sr|hr|bs|sh)`, поэтому английский ролик с настоящими авторскими субтитрами
-   каждый раз уходит на полное распознавание: допуск на карту, качка под
-   пропуском, полторы-две минуты, артефакты нарезки и эхо затравки — вместо
-   одного анонимного вызова yt-dlp. Поле `has_automatic_captions` собирается и не
-   читается никем.
-9. **`targetLang` декоративен.** Он доходит до `Job.target_lang` и до ключа кэша
-   и дальше не идёт: в `translate.py` его нет вовсе. Клиент, запросивший
-   `targetLang: "sr"`, получит русские субтитры под отдельным отпечатком кэша,
-   то есть тот же ролик будет распознан и переведён дважды ради того же
-   результата.
-10. **Удачная вторая строка выбрасывается, если не удалась первая.** Поля
-    присваиваются независимо (`jobs.py:1069-1085`), а отрисовка подавляет вторую
-    строку по признаку `failed`.
+1. **Cues shift, and nobody notices.** `alignment_shifted`
+   (`translate.py:350-397`) — the only protection against the nastiest failure —
+   works on the coincidence of four-letter stems between the source and the output, and
+   the code says directly that it relies on their closeness. For English
+   source with Serbian or Russian output there is no common vocabulary: coverage is about
+   zero at every position, the threshold never fires, the function returns
+   “no shift” on any batch. On screen: the fifth cue shows the text
+   of the tenth, coherently phrased, and neither the daemon nor the log sees it.
+   **This is what must decide the fate of the design** — not translation quality.
+2. **The Montenegrin checker certifies English.** `score()` returns
+   `ratio = 1.0` when not a single marker matched (`montenegrin.py:137`), so a
+   batch without a single Montenegrin feature gets a perfect score, and
+   `check()` is silent.
+3. **The recognition prompt is unconditionally Serbian**, and the proper-name collection drives
+   English titles through Serbian transliteration: verified, from English
+   Title Case it catches “Copyright”, “All”, “Rights”, “Reserved”,
+   “Subscribe”. And all the hallucination guards that the worker sets, in the batched
+   mode of faster-whisper 1.2.1 are documented no-ops
+   (`transcribe.py:351-369`), and the prompt is re-fed to every chunk. On screen
+   in the middle of an English video — a Serbian service phrase as a cue, carried
+   further into the translator.
+4. **The language is taken from metadata before the detector** — this is the recorded
+   case: `_source_language` (`jobs.py:955-979`) trusts the yt-dlp field and only
+   then calls the detector, and YouTube marks Serbian channels as `en`. The log
+   line that would reveal the mismatch (`jobs.py:669`) is structurally dead:
+   in batched mode `info.language` equals what we passed, so
+   “detected” is always equal to “passed”.
+5. **A detection error becomes permanent.** The cache key includes
+   `self._config.asr.language`, that is, the literal string `"auto"`, not the language
+   with which recognition actually ran (`jobs.py:462`, `1318`). Plus `_serve_cached`
+   runs before recognition. There is no second chance: in the recorded case about 80%
+   of the `src` of the cached track remained English.
+6. **The language code is not checked anywhere.** faster-whisper accepts exactly 100 codes
+   and fails on the rest; `sh`, `me`, `cnr` and the empty string fail, and
+   `sh`/`me`/`cnr` lie in the repository's own BCMS sets. Outward
+   goes a traceback tail of 500 characters, almost entirely the list of
+   allowed codes, marked as retryable — so the poll recreates the
+   job every 60 seconds, re-downloading audio under the GPU pass. The same
+   pattern that gave 43 downloads in 90 minutes and then a 403.
+7. **Segmentation is tuned for two languages.** `SENTENCE_END` has no list of abbreviations:
+   “Today we test the U.S. market, e.g. tech stocks.” falls apart into four
+   cues, and it is the fragment that goes to the translator. And `CONJUNCTIONS`
+   (`segment.py:36-40`) contains only Serbian and Russian function words, so
+   English lines are wrapped with a dangling “but” at the end.
+8. **The cheap path is closed by one regex.** `usable_manual_track`
+   (`ytdlp.py:321-336`) takes a track only if its language matches
+   `^(sr|hr|bs|sh)`, so an English video with real author subtitles
+   goes to full recognition every time: a place for the GPU, download under
+   the pass, one and a half to two minutes, segmentation artifacts and prompt echo — instead of
+   one anonymous yt-dlp call. The `has_automatic_captions` field is collected and read by
+   nobody.
+9. **`targetLang` is decorative.** It reaches `Job.target_lang` and the cache key
+   and goes no further: in `translate.py` it is absent entirely. A client that requested
+   `targetLang: "sr"` will get Russian subtitles under a separate cache fingerprint,
+   that is, the same video will be recognized and translated twice for the same
+   result.
+10. **A successful second line is thrown away if the first failed.** The fields
+    are assigned independently (`jobs.py:1069-1085`), and the rendering suppresses the second
+    line by the `failed` sign.
 
-**Как построено** (ветка `source-language`, 2026-11-04). Пункт 3 закрыт: затравка
-есть только у сербского семейства, имена берутся из заголовка и тегов, сегменты
-отсеиваются по `no_speech_prob`, `avg_logprob` и `compression_ratio` (у «повтора» —
-только зациклившиеся предложения), эхо затравки в реплики не попадает, а пустые в
-пакетном режиме заградители из вызова убраны. Пункт 4 закрыт: раннего возврата на
-метаданных нет, расхождение пишется в журнал предупреждением и уходит на провод.
-Пункт 5 закрыт частично и иначе, чем предлагалось, — см. «Решения». Пункт 6 закрыт:
-коды проверяются, `""` до Whisper не доходит. Пункт 7 закрыт наполовину: сокращения
-(«U.S. market, e.g.», «5. maja») реплику больше не рвут, а `CONJUNCTIONS` не тронуты —
-перенос строк до провода не доходит (`_to_job_cues` берёт только текст). Пункт 8 закрыт наполовину: метки сербского
-семейства годятся в любой записи, другие языки отложены. Пункт 9 закрыт:
-`targetLang` вышел из ключа кэша, в снимке остался. Пункты 1, 2 и 10 — работа
-«Проверка перевода».
+**How it is built** (branch `source-language`, 2026-11-04). Item 3 is closed: the prompt
+exists only for the Serbian family, names are taken from the title and tags, segments
+are filtered by `no_speech_prob`, `avg_logprob` and `compression_ratio` (for “repetition” —
+only looped sentences), the prompt echo does not get into cues, and the empty
+guards in batched mode are removed from the call. Item 4 is closed: there is no early return on
+metadata, the mismatch is written to the log as a warning and goes onto the wire.
+Item 5 is closed partially and differently from what was proposed — see “Decisions”. Item 6 is closed:
+codes are checked, `""` does not reach Whisper. Item 7 is half closed: abbreviations
+(“U.S. market, e.g.”, “5. maja”) no longer break a cue, but `CONJUNCTIONS` is untouched —
+line wrapping does not reach the wire (`_to_job_cues` takes only the text). Item 8 is half closed: labels of the Serbian
+family are suitable in any script, other languages are deferred. Item 9 is closed:
+`targetLang` left the cache key, remained in the snapshot. Items 1, 2 and 10 — the work
+“Translation check”.
 
-### Решения
+### Decisions
 
-- **Язык источника — свойство сохранённой ссылки**, с переопределением на
-  ролик. Определитель запускается **всегда**, но как сверка, а не как запасной
-  путь: ранний возврат на метаданных убирается, объявленный код уходит в воркер
-  как подсказка, а воркер возвращает объявленное, определённое и уверенность.
-  Расхождение не разрешается молча — оно уходит на провод и на экран словами.
-- **В ключ кэша идёт действующий язык**, не строка конфига. Поиск по
-  объявленному, запись под действующим; `PROMPT_VERSION` поднимается, иначе
-  испорченные дорожки переживут правку.
-- **Коды языков проверяются** по списку faster-whisper до запуска воркера, с
-  таблицей замен (`sh`/`me`/`cnr` → `sr`), и отказ выдаётся как
-  `PermanentJobError` человеческой фразой, а не трассировкой. Пустой результат
-  определителя означает `None`, а не `""`.
-- **Затравка становится функцией действующего языка**, а где фразы нет — её нет
-  вовсе; `to_latin` ограничивается тем же тестом BCMS, что уже стоит в
-  `script.py:76`; сегменты фильтруются по полям, которые библиотека и так
-  возвращает (`no_speech_prob`, `avg_logprob`, `compression_ratio`), и реплика,
-  совпадающая с затравкой, не попадает ни в одну строку.
-- **Авторская дорожка открывается для любого языка**: условие становится «язык
-  дорожки равен действующему языку источника», `skip=translated_subs`
-  сохраняется, а метка сверяется с определителем на одном тридцатисекундном
-  зонде. Для английской части плейлистов это снимает и карту, и риск
-  определения.
-- **Вторая строка становится типизированной**: `{text, lang, kind}`, где `kind`
-  — один из `source` (текст источника), `source_script` (он же другим
-  алфавитом), `dialect` (нынешний черногорский), `gloss`. Поле `study`
-  сохраняется как устаревший синоним, чтобы расширение осталось нетронутым.
-  Каждая выводимая строка получает свой `lang` — тогда реплика, у которой не
-  удался перевод, описывает себя сама, а не выводится из безымянного признака.
-- **Проверяльщики получают приговор, который вызывающий соблюдает**: при отказе
-  выше порога батч идёт в существующую лестницу половинок, и если не помогло —
-  реплики помечаются непроверенными, а не молча проходят. Вне пары sr/cnr
-  `montenegrin.check` не зовётся вовсе, а детектор утечки никогда не наводится на
-  поле сербского семейства — об этом прямо предупреждает докстрока
-  `validate_dual` (`translate.py:402-409`).
-- **Замена защиты от съезда реплик — отдельная работа и условие готовности.**
-  Нынешняя опирается на общую лексику и вне близких языков слепа. Нужна
-  языконезависимая: соответствие по числу реплик, по длительностям и по
-  отношению длин, а не по основам слов. Пока её нет, не сербские ролики идут с
-  честной пометкой «выравнивание не проверено».
-- **Одна модель на все направления.** Все пары обслуживает одна резидентная
-  модель, и допуск пропускает требование по памяти, когда она уже в карте
-  (`gpulease.py:217`), так что два плейлиста в двух направлениях не стоят ничего
-  дополнительно. Вторая модель на пару в карту не влезет (17800×2 против 24564
-  МиБ) и будет опознана сторожем как чужая, вытеснив собственное задание демона.
+- **The source language is a property of the saved link**, with an override per
+  video. The detector runs **always**, but as a check, not as a fallback
+  path: the early return on metadata is removed, the declared code goes to the worker
+  as a hint, and the worker returns the declared, the detected and the confidence.
+  A mismatch is not resolved silently — it goes onto the wire and to the screen in words.
+- **The effective language goes into the cache key**, not the config string. Lookup by
+  the declared, write under the effective; `PROMPT_VERSION` is raised, otherwise
+  corrupted tracks would survive the fix.
+- **Language codes are checked** against the faster-whisper list before the worker starts, with a
+  replacement table (`sh`/`me`/`cnr` → `sr`), and the refusal is given as
+  `PermanentJobError` with a human phrase, not a traceback. An empty detector
+  result means `None`, not `""`.
+- **The prompt becomes a function of the effective language**, and where there is no phrase — there is none
+  at all; `to_latin` is limited by the same BCMS test that is already in
+  `script.py:76`; segments are filtered by the fields that the library already
+  returns (`no_speech_prob`, `avg_logprob`, `compression_ratio`), and a cue
+  coinciding with the prompt does not get into either line.
+- **The author's track opens for any language**: the condition becomes “the track's language
+  equals the effective source language”, `skip=translated_subs`
+  is preserved, and the label is checked against the detector on one thirty-second
+  probe. For the English part of playlists this removes both the GPU and the detection
+  risk.
+- **The second line becomes typed**: `{text, lang, kind}`, where `kind`
+  is one of `source` (source text), `source_script` (the same in another
+  alphabet), `dialect` (the current Montenegrin), `gloss`. The `study` field
+  is kept as a deprecated synonym, so that the extension stays untouched.
+  Every output line gets its own `lang` — then a cue whose translation
+  failed describes itself, instead of being derived from a nameless sign.
+- **The checkers get a verdict that the caller obeys**: on a refusal
+  above the threshold the batch goes into the existing halves ladder, and if that did not help —
+  the cues are marked unverified, not silently passed. Outside the sr/cnr pair
+  `montenegrin.check` is not called at all, and the leak detector is never aimed at a
+  Serbian-family field — the `validate_dual` docstring warns of this directly
+  (`translate.py:402-409`).
+- **Replacing the protection against cue shift is separate work and a readiness condition.**
+  The current one relies on shared vocabulary and is blind outside close languages. A
+  language-independent one is needed: matching by the number of cues, by durations and by the
+  ratio of lengths, not by word stems. While it is missing, non-Serbian videos go with an
+  honest mark “alignment not verified”.
+- **One model for all directions.** One resident model serves all pairs, and the
+  admission passes the memory requirement when it is already in the GPU
+  (`gpulease.py:217`), so two playlists in two directions cost nothing
+  extra. A second model per pair will not fit into the GPU (17800×2 versus 24564
+  MiB) and will be identified by the watchdog as foreign, evicting the daemon's own job.
 
-**Как построено** (ветка `source-language`, 2026-11-04), по решениям:
+**How it is built** (branch `source-language`, 2026-11-04), by decisions:
 
-- **Определитель всегда.** Воркер слушает до восьми окон по 30 секунд, разложенных
-  по 10–90 % длины (запись не длиннее окна — одно окно). Окно, где речи по VAD меньше
-  трёх секунд, в модель не идёт и не голосует; окно, на котором модель упала, тоже.
-  Доли bs/hr/sr складываются в одну семью, победитель — наибольшая средняя доля по
-  голосовавшим окнам. Если победил не сербский язык и не славянский сосед (mk, bg,
-  sl, ru, uk, be, cs, sk, pl), а сербская доля не ниже 0.2, решение — сербский
-  (`reason: "floor"`): так Whisper проигрывал сербскую речь английскому
-  (3XJLfTSZy6I: en 0.55 против 0.44). Не проголосовало ни одно окно — один проход по
-  первым 30 секундам речи всего ролика; и там пусто — метка YouTube, а без неё
-  сербский (`fallback`, `detected: null`). Метаданные решают только тогда; при
-  голосах окон они лишь помечают расхождение (Juske: YouTube en, речь sr → sr,
-  «YouTube указал en, по речи sr»). Закреп решает токен декодера как задан (hr и bs
-  сохраняются), определитель работает и при нём. Всё — в том же запуске воркера и
-  под тем же пропуском на карту: ни второй модели, ни второй загрузки. Константы — в
-  `helper/language.py`, и любая их правка требует поднять `PROMPT_VERSION`.
-- **На проводе** — объект `language` в снимке и событие `{"type": "language"}`; оно
-  приходит раньше `segmented` и `cues` на каждом пути: распознавание, дорожка автора,
-  кэш, восстановление. Поля: `effective`, `declared`, `declaredBy`, `detected`,
-  `confidence` (два знака), `reason`, `source`, `track`, `verified`, `mismatch`,
-  `note`. `note` — готовая фраза не длиннее 60 знаков: «YouTube указал en, по речи
-  sr», «в настройках sr, по речи en», «речи почти нет, язык принят за sr». Задание,
-  возобновлённое после паузы, решение сохраняет. Расширение его не показывает — оно
-  заморожено; до экрана решение дойдёт со страницей для планшета, а пока видно в
-  снимке и в журнале (`docs/running.md`, «Какой язык решил демон»).
-- **Ключ кэша — отступление от «поиска по объявленному, записи под действующим».**
-  В ключе объявление человека (закреп; `""`, если его нет), а не действующий язык:
-  кэш обязан ответить до любой работы карты, а действующий язык появляется только
-  внутри воркера. Где человек объявил, действующий язык с объявленным совпадает, и
-  формула выполняется; где нет — решение лежит в записи и приезжает на провод при
-  каждом просмотре из кэша. `targetLang` из ключа вышел (`Job.target_lang` и
-  `targetLang` в снимке остались). `PROMPT_VERSION` и `SCHEMA_VERSION` подняты до 2:
-  прежние записи не находятся, с диска не удалены (около 18 МБ на 2026-11-01; удалять
-  ли — решает хозяин). Результат без единой реплики в кэш не пишется, а такую старую
-  запись не отдают ни конвейер, ни восстановление. Восстановление пересчитывает
-  ключ из сохранённого отпечатка по нынешнему закрепу и моделям, а при нескольких
-  записях дорожки автора берёт самую свежую по `created_at`; версиям и моделям из
-  файла не верит. Решение с низкой уверенностью кэшируется: повтор стоил бы карты
-  на каждом просмотре, а средство от ошибки —
-  пометка на проводе и закреп.
-- **Коды.** Сто кодов faster-whisper 1.2.1 вписаны в `helper/language.py` и сверяются
-  тестом с установленным пакетом. Замены: sh, me, cnr → sr; iw → he, jv → jw, fil →
-  tl, nb → no, in → id. Неверный закреп не роняет демон: при запуске — `log.error`, а
-  каждому заданию — отказ до запроса к YouTube фразой «неизвестный язык «…»: [asr]
-  language в config.toml», без повтора. Метка YouTube, которой нет в списке, просто
-  не подсказывает.
-- **Затравка** — функция действующего языка: фраза есть только у сербского семейства,
-  у остальных затравки нет вовсе. Имена — из заголовка и тегов, не из описания (эхо в
-  поле шло из его шаблонных строк), латиницей; имя, оставшееся кириллицей,
-  выбрасывается. Сегменты отсеиваются: «тишина» (`no_speech_prob` > 0.6 при
-  `avg_logprob` < −1.0) выбрасывает сегмент целиком, а «повтор»
-  (`compression_ratio` > 2.4) только помечает его: сегмент пакетного режима — кусок
-  речи до 30 с, и из него уходят одни зациклившиеся предложения — со своей степенью
-  сжатия выше 2.4 или повторяющие уже сказанное в этом сегменте; диалог перед петлёй
-  остаётся. Каждый отсев пишется в журнал. Эхо — отступление от «совпадающая с
-  затравкой»: точного совпадения нет ни в одной из 66 620 реплик кэша, поэтому эхом
-  считается предложение хотя бы из двух разных слов, все слова которого есть в
-  затравке, хотя бы одно не из служебных (ovo, je, video, na, se, srpskom, jeziku), и
-  среди них есть необиходное слово фразы или вводки имён (transkript, snimka, pominju)
-  либо два разных имени не из служебных: одно имя заголовка в обиходной фразе
-  («Šta je ovo?») — речь.
-- **Дорожка автора на любом языке — отложено.** Сверять метку с речью без карты нечем:
-  определителя меньше large-v3 и turbo на диске нет, зонд на карте отнял бы у пути
-  дорожки его смысл, а брать чужую дорожку без сверки значит вернуть случай Juske
-  (метка en на сербской речи). Условия возврата — в плане, раздел «Отложено». Сделано
-  меньшее: метки сербского семейства годятся в любой записи (sr-Latn, sr-Cyrl, SR, sh,
-  cnr) и латинизируются, `live_chat` не годится никогда, закреп вне семейства
-  дорожку не берёт. Решение по дорожке: `source: "manual"`, `reason: "track"`,
-  `detected` и `verified` — `null`.
-- **Не сделано здесь** (работа «Проверка перевода»): типизированная вторая строка,
-  приговор проверяльщиков, языконезависимая защита от съезда реплик и видимые пометки
-  «выравнивание не проверено» и «вторая строка не удостоверена». «Одна модель на все
-  направления» верна без правок.
+- **Detector always.** The worker listens to up to eight windows of 30 seconds, spread
+  over 10–90% of the length (a recording no longer than a window — one window). A window where speech by VAD is less than
+  three seconds does not go into the model and does not vote; a window on which the model failed, either.
+  The shares of bs/hr/sr add up into one family, the winner is the largest average share over
+  the voting windows. If the winner is not Serbian and not a Slavic neighbour (mk, bg,
+  sl, ru, uk, be, cs, sk, pl), and the Serbian share is not below 0.2, the decision is Serbian
+  (`reason: "floor"`): that is how Whisper lost Serbian speech to English
+  (3XJLfTSZy6I: en 0.55 versus 0.44). No window voted — one pass over
+  the first 30 seconds of speech of the whole video; and empty there too — the YouTube label, and without it
+  Serbian (`fallback`, `detected: null`). Metadata decides only then; with
+  window votes they only mark the mismatch (Juske: YouTube en, speech sr → sr,
+  “YouTube indicated en, by speech sr”). A pin decides the decoder token as set (hr and bs
+  are preserved), the detector works under it too. All — in the same worker run and
+  under the same GPU pass: neither a second model nor a second download. Constants are in
+  `helper/language.py`, and any change to them requires raising `PROMPT_VERSION`.
+- **On the wire** — a `language` object in the snapshot and the event `{"type": "language"}`; it
+  comes before `segmented` and `cues` on every path: recognition, author's track,
+  cache, restore. Fields: `effective`, `declared`, `declaredBy`, `detected`,
+  `confidence` (two digits), `reason`, `source`, `track`, `verified`, `mismatch`,
+  `note`. `note` is a ready phrase no longer than 60 characters: “YouTube indicated en, by speech
+  sr”, “in settings sr, by speech en”, “almost no speech, language taken as sr”. A job
+  resumed after a pause keeps the decision. The extension does not show it — it is
+  frozen; the decision will reach the screen with the tablet page, and for now it is visible in the
+  snapshot and in the log (`docs/running.md`, “What language the daemon decided”).
+- **The cache key is a deviation from “lookup by declared, write under effective”.**
+  The key holds the person's declaration (the pin; `""` if there is none), not the effective language:
+  the cache must answer before any GPU work, and the effective language appears only
+  inside the worker. Where the person declared, the effective language equals the declared, and
+  the formula holds; where not — the decision lies in the record and arrives on the wire on
+  every viewing from the cache. `targetLang` has left the key (`Job.target_lang` and
+  `targetLang` in the snapshot remained). `PROMPT_VERSION` and `SCHEMA_VERSION` are raised to 2:
+  previous records are not found, not deleted from disk (about 18 MB as of 2026-11-01; whether to delete
+  is the owner's decision). A result without a single cue is not written to the cache, and such an old
+  record is not served by either the pipeline or restore. Restore recomputes the
+  key from the saved fingerprint by the current pin and models, and with several
+  author's track records takes the freshest by `created_at`; it does not believe
+  the versions and models from the file. A low-confidence decision is cached: a repeat would cost the GPU
+  on every viewing, and the remedy for the error is
+  a mark on the wire and a pin.
+- **Codes.** The one hundred codes of faster-whisper 1.2.1 are written into `helper/language.py` and checked
+  by a test against the installed package. Replacements: sh, me, cnr → sr; iw → he, jv → jw, fil →
+  tl, nb → no, in → id. An invalid pin does not crash the daemon: at startup — `log.error`, and
+  for each job — a refusal before the YouTube request with the phrase “unknown language “…”: [asr]
+  language in config.toml”, without a retry. A YouTube label not in the list simply
+  does not hint.
+- **The prompt** is a function of the effective language: the phrase exists only for the Serbian family,
+  for the rest there is no prompt at all. Names — from the title and tags, not from the description (echo into the
+  field came from its template lines), in Latin script; a name that remains Cyrillic
+  is thrown out. Segments are filtered: “silence” (`no_speech_prob` > 0.6 with
+  `avg_logprob` < −1.0) throws the segment out entirely, and “repetition”
+  (`compression_ratio` > 2.4) only marks it: a batched-mode segment is a piece of
+  speech up to 30 s, and only looped sentences leave it — with their own degree of
+  compression above 2.4 or repeating what was already said in this segment; the dialogue before
+  the loop remains. Every filtering is written to the log. Echo is a deviation from “coinciding with the
+  prompt”: there is no exact match in any of the 66 620 cues of the cache, so echo is
+  considered a sentence of at least two different words, all of whose words are in the
+  prompt, at least one not a function word (ovo, je, video, na, se, srpskom, jeziku), and
+  among them there is an uncommon word of the phrase or of the name introduction (transkript, snimka, pominju)
+  or two different names not function words: one title name in a common phrase
+  (“Šta je ovo?”) — speech.
+- **The author's track in any language — deferred.** There is nothing to check the label against the speech without the GPU:
+  there is no detector smaller than large-v3 and turbo on disk, a probe on the GPU would take away from the path of
+  the track its meaning, and taking a foreign track without checking means returning the Juske case
+  (label en on Serbian speech). Return conditions — in the plan, section “Deferred”. Less was done:
+  labels of the Serbian family are suitable in any script (sr-Latn, sr-Cyrl, SR, sh,
+  cnr) and are latinized, `live_chat` is never suitable, a pin outside the family does not take the
+  track. Decision on the track: `source: "manual"`, `reason: "track"`,
+  `detected` and `verified` — `null`.
+- **Not done here** (the work “Translation check”): the typed second line,
+  the checkers' verdict, language-independent protection against cue shift and visible marks
+  “alignment not verified” and “second line not certified”. “One model for all
+  directions” is true without edits.
 
-### Что надо поправить прямо сейчас, вне связи с планшетом
+### What must be fixed right now, regardless of the tablet
 
-`config.example.toml:24` до сих пор отдаёт `language = "sr"` с комментарием,
-что автоопределение не используется, тогда как `helper/config.py:72` уже
-умолчанием ставит `"auto"` и объясняет, почему жёстко закреплённый язык на не
-сербском звуке оставляет декодер в неопределённости. Умолчание `"auto"` пришло
-в c96cc58, а строку в примере не тронули. Кто настроится по примеру — воспроизведёт
-записанный случай с пятью роликами на английском материале. Это одна строка.
+`config.example.toml:24` still gives `language = "sr"` with a comment
+that auto-detection is not used, whereas `helper/config.py:72` already sets `"auto"` as the default
+and explains why a hard-pinned language on non-Serbian audio leaves the decoder in
+uncertainty. The default `"auto"` came in c96cc58, and the line in the example was not touched. Whoever configures by the example will reproduce the
+recorded case with five videos on English material. It is one line.
 
-**Как построено** (ветка `source-language`, 2026-11-04): в `config.example.toml`
-стоит `language = "auto"` и объяснение, что определитель работает всегда, а код
-закрепляет язык каждого ролика и годится, только когда язык у всех один; sh, me и
-cnr принимаются как sr.
+**How it is built** (branch `source-language`, 2026-11-04): in `config.example.toml`
+there is `language = "auto"` and an explanation that the detector runs always, and the code
+pins the language of each video and is suitable only when the language is the same for all; sh, me and
+cnr are accepted as sr.
 
-### ~~Открытый вопрос к хозяину~~ — отвечен 2026-10-31
+### ~~Open question to the owner~~ — answered 2026-10-31
 
-Ответ и его последствия в разделе «Вторая строка: решение хозяина» ниже.
-Короткий итог: черногорская строка остаётся, рекомендация заменить её
-текстом источника отклонена. Текст вопроса сохранён ниже как контекст.
+The answer and its consequences are in the section “The second line: the owner's decision” below.
+The short summary: the Montenegrin line remains, the recommendation to replace it with the
+source text is rejected. The text of the question is kept below as context.
 
-**Чем должна быть вторая строка?** Исследование утверждает, что для обеих твоих
-задач полезнее и дешевле всего текст источника — он бесплатен, а черногорский
-пересказ, наоборот, уводит от тех самых слов, которые ты слышишь: учащийся
-читает не то, что произнесено. Но черногорскую строку ты делал намеренно, и это
-твоё решение, а не моё. Варианты: оставить как есть; заменить на текст
-источника; показывать обе и выбирать на устройстве. Типизированное поле выше
-поддерживает любой из трёх, так что ответ не блокирует остальную работу.
+**What should the second line be?** The research claims that for both of your
+tasks the most useful and cheapest is the source text — it is free, and a Montenegrin
+retelling, on the contrary, leads away from those very words that you hear: the learner
+reads not what was spoken. But you made the Montenegrin line deliberately, and this is
+your decision, not mine. Options: leave as is; replace with the source
+text; show both and choose on the device. The typed field above
+supports any of the three, so the answer does not block the rest of the work.
 
-## Вторая строка: решение хозяина, 2026-10-31
+## The second line: the owner's decision, 2026-10-31
 
-Формулировка: видеть черногорские варианты фраз и слышать сербские оригиналы,
-чтобы учить оба языка и заодно видеть разницу — где какие слова используются.
+Wording: to see Montenegrin variants of phrases and hear Serbian originals,
+in order to learn both languages and at the same time see the difference — where which words are used.
 
-**Черногорская строка остаётся.** Довод исследования против неё («пересказ
-уводит от тех самых слов, которые слышишь») был верен по факту и неверен по
-смыслу: именно это расхождение и есть содержание упражнения. Рекомендацию
-заменить вторую строку текстом источника считать отклонённой.
+**The Montenegrin line remains.** The research's argument against it (“the retelling
+leads away from those very words that you hear”) was right in fact and wrong in
+meaning: it is exactly this divergence that is the content of the exercise. Consider the recommendation
+to replace the second line with the source text rejected.
 
-### Следствие, которое перевешивает всё остальное в этом разделе
+### A consequence that outweighs everything else in this section
 
-**Желаемая возможность и известная поломка выглядят на экране одинаково.**
+**A desired capability and a known breakage look the same on the screen.**
 
-- Законное лексическое расхождение сербского и черногорского
-  (`bezbednost` против `sigurnost`) — это то, что хозяин хочет видеть.
-- Артефакт ошибки определения языка — Whisper распознал речь как английскую,
-  и «черногорская» строка получена из английского — выглядит точно так же:
-  строка расходится с речью.
+- A legitimate lexical divergence of Serbian and Montenegrin
+  (`bezbednost` versus `sigurnost`) — this is what the owner wants to see.
+- An artifact of a language detection error — Whisper recognized the speech as English,
+  and the “Montenegrin” line was obtained from English — looks exactly the same:
+  the line diverges from the speech.
 
-Записанный в памяти случай описан буквально той же парой слов. Значит признак
-«черногорская строка не совпадает с речью», которым до сих пор ловили поломку,
-перестаёт быть признаком поломки: теперь это норма.
+The case recorded in memory is described by literally the same pair of words. So the sign
+“the Montenegrin line does not match the speech”, by which the breakage has been caught until now,
+stops being a sign of breakage: now it is the norm.
 
-Из этого вытекает переоценка приоритетов, сделанная выше в документе:
+From this follows a reassessment of priorities, made above in the document:
 
-1. **Показ объявленного и определённого языка с уверенностью — больше не
-   удобство, а единственный способ различить эти два случая.** Поднимается из
-   «решений» в условия готовности.
-2. **Защита от съезда реплик становится строже по смыслу.** Съехавшая реплика в
-   обучающем сценарии не просто мешает смотреть — она учит неверному
-   соответствию слов. Языконезависимая замена `alignment_shifted` обязательна до
-   того, как на планшете появится не сербский материал.
-3. **Непроверенные реплики обязаны быть видимы.** Пометка «выравнивание не
-   проверено» и «вторая строка не удостоверена» (`montenegrin.check` вне пары
-   sr/cnr не зовётся) должна доходить до экрана, а не оставаться в журнале.
+1. **Showing the declared and detected language with confidence is no longer
+   a convenience but the only way to distinguish these two cases.** It is raised from
+   “decisions” to readiness conditions.
+2. **Protection against cue shift becomes stricter in meaning.** A shifted cue in the
+   learning scenario does not simply interfere with watching — it teaches a wrong
+   correspondence of words. A language-independent replacement for `alignment_shifted` is mandatory before
+   non-Serbian material appears on the tablet.
+3. **Unverified cues must be visible.** The mark “alignment not
+   verified” and “second line not certified” (`montenegrin.check` is not called outside the sr/cnr pair)
+   must reach the screen, not remain in the log.
 
-### Слышать оригинал — требование к склейке, а не пожелание
+### Hearing the original is a requirement on muxing, not a wish
 
-«Слышать сербские оригиналы» означает, что в склеенном файле обязана быть
-**оригинальная** звуковая дорожка, а не автодубляж. В конвейере распознавания это
-уже учтено: `audio_pcm` сортирует `-S lang,+size`, и комментарий на
-`helper/sources/ytdlp.py:529-531` объясняет, что без `lang` впереди на роликах с
-автодубляжом выберется самая маленькая дорожка, то есть чужой язык.
+“Hear the Serbian originals” means that the muxed file must contain the
+**original** audio track, not auto-dubbing. In the recognition pipeline this is
+already accounted for: `audio_pcm` sorts by `-S lang,+size`, and the comment on
+`helper/sources/ytdlp.py:529-531` explains that without `lang` in front, on videos with
+auto-dubbing the smallest track will be chosen, that is, a foreign language.
 
-Склейка видео — **новый код**, и он обязан выбирать дорожку той же сортировкой.
-Иначе зритель слышит дубляж, а читает субтитры, сделанные по оригиналу: тихий
-отказ, при котором всё работает, а упражнение бессмысленно. Проверка на
-готовность: язык дорожки в склеенном файле совпадает с действующим языком
-источника задания.
+Video muxing is **new code**, and it must choose the track by the same sorting.
+Otherwise the viewer hears dubbing and reads subtitles made from the original: a silent
+failure, where everything works and the exercise is meaningless. Readiness check: the language of the track in the muxed file matches the effective source language
+of the job.
 
-### ~~Раскладка: три строки, с размеченной разницей~~ — ОТМЕНЕНО 2026-10-31
+### ~~Layout: three lines, with the difference marked up~~ — CANCELLED 2026-10-31
 
-Отменено решением хозяина в тот же день. Читать раздел «Раскладка: ровно
-две строки» в конце документа; всё до конца этого подраздела и подраздел
-«Не сербский источник: что сравнивать» недействительны.
+Cancelled by the owner's decision on the same day. Read the section “Layout: exactly
+two lines” at the end of the document; everything to the end of this subsection and the subsection
+“Non-Serbian source: what to compare” is invalid.
 
 <details>
-<summary>Отменённый вариант, сохранён как контекст</summary>
+<summary>Cancelled variant, kept as context</summary>
 
 
-«Видеть разницу, где какие слова используются» — это не следствие показа двух
-строк, а отдельная возможность. Сербский и черногорский тексты почти совпадают,
-поэтому различие считается послов­но и размечается прямо в репликах. Дёшево:
-обе строки короткие и в одной языковой семье, никакой модели не нужно.
+“See the difference, where which words are used” is not a consequence of showing two
+lines, but a separate capability. Serbian and Montenegrin texts almost coincide,
+so the difference is counted word by word and marked up right in the cues. Cheap:
+both lines are short and in the same language family, no model is needed.
 
-| Строка | Содержимое | `kind` | Зачем |
+| Line | Content | `kind` | Why |
 |---|---|---|---|
-| первая | русский перевод | `target` | понимать |
-| вторая | черногорский вариант | `dialect` | то, что учишься читать |
-| третья | текст источника | `source` | то, что слышишь, для сравнения |
+| first | Russian translation | `target` | to understand |
+| second | Montenegrin variant | `dialect` | what you are learning to read |
+| third | source text | `source` | what you hear, for comparison |
 
-Расхождения между второй и третьей размечаются. Показ третьей строки — настройка
-устройства, как `showOriginal` в расширении (`extension/content.js:21`,
-умолчание выключено); здесь умолчание **включено**, потому что в этом и смысл.
+Divergences between the second and the third are marked up. Showing the third line is a device
+setting, like `showOriginal` in the extension (`extension/content.js:21`,
+default off); here the default is **on**, because that is the point.
 
-Гашение второй строки по признаку `failed` (`extension/content.js:405`) в новой
-странице не воспроизводится: правило «скрывать, только если язык совпадает с
-первой строкой», уже заложенное типизированным полем, здесь обязательно — иначе
-неудача перевода отнимает ровно ту строку, ради которой всё делается.
+Suppressing the second line by the `failed` sign (`extension/content.js:405`) is not reproduced in the new
+page: the rule “hide only if the language matches the
+first line”, already laid down by the typed field, is mandatory here — otherwise
+a translation failure takes away exactly the line for which everything is done.
 
-### Не сербский источник: что сравнивать
+### Non-Serbian source: what to compare
 
-На английском ролике сравнивать не с чем — слышно английское, и пары
-«слышу сербское / читаю черногорское» не существует. Моё решение: для не сербского
-источника модель просит **три поля** — русский, сербский, черногорский. Тогда
-разметка различий сохраняет смысл (видно, где языки расходятся), а сравнение
-переезжает со «слышу против читаю» на «два варианта перевода рядом». Это один и
-тот же вызов, не второй: поля добавляются в ту же грамматику. Платим только
-выводимыми токенами.
+On an English video there is nothing to compare with — English is heard, and the pair
+“I hear Serbian / I read Montenegrin” does not exist. My decision: for a non-Serbian
+source the model is asked for **three fields** — Russian, Serbian, Montenegrin. Then the
+marking of differences keeps its meaning (one can see where the languages diverge), and the comparison
+moves from “I hear versus I read” to “two translation variants side by side”. This is one and
+the same call, not a second one: the fields are added to the same grammar. We pay only in
+emitted tokens.
 
-Если это окажется лишним — поле `kind` позволяет выключить третий вариант
-настройкой, не переделывая ни протокол, ни страницу.
+If this turns out superfluous — the `kind` field allows turning off the third variant
+by a setting, without reworking either the protocol or the page.
 
 </details>
 
-## Раскладка: ровно две строки
+## Layout: exactly two lines
 
-Уточнение хозяина 2026-10-31, отменяющее трёхстрочный вариант выше: сербский
-титр убрать. Ролик смотрится на языке оригинала, сербский он или любой другой.
-На экране ровно две строки:
+The owner's clarification of 2026-10-31, cancelling the three-line variant above: remove the Serbian
+caption. The video is watched in the original language, be it Serbian or any other.
+On the screen exactly two lines:
 
-| Строка | Содержимое | `kind` |
+| Line | Content | `kind` |
 |---|---|---|
-| первая | русский перевод оригинала | `target` |
-| вторая | черногорский перевод распознанного текста | `dialect` |
+| first | Russian translation of the original | `target` |
+| second | Montenegrin translation of the recognized text | `dialect` |
 
-**Это и есть нынешнее поведение демона**, расширенное на произвольный язык
-источника: `translate_dual` уже выдаёт оба поля, `crnogorski` и `ruski`, одним
-вызовом с ограниченным декодированием. Никакой третьей строки, никакой разметки
-различий, никакого третьего поля в грамматике для английских роликов.
+**This is the current behaviour of the daemon**, extended to an arbitrary source
+language: `translate_dual` already emits both fields, `crnogorski` and `ruski`, in one
+call with constrained decoding. No third line, no markup of
+differences, no third field in the grammar for English videos.
 
-Что это убирает из работы: послов­ное сравнение двух текстов, настройку показа
-источника на устройстве, расширение схемы ответа и связанную с ним прибавку
-выводимых токенов. Чего не убирает — ничего из условий готовности ниже.
+What this removes from the work: word-by-word comparison of two texts, the setting for showing the
+source on the device, the extension of the response schema and the associated increase in
+emitted tokens. What it does not remove — nothing from the readiness conditions below.
 
-### Читать «оригинал» как исходный текст реплики
+### Reading “original” as the source text of the cue
 
-Хозяин назвал строки по-разному: черногорская — перевод **распознанного текста**,
-русская — перевод **оригинала**. Второго источника у демона нет и не появится:
-на обе строки идёт один и тот же исходный текст реплики. Где у ролика есть
-авторская дорожка субтитров, этот текст — она (и он действительно ближе к
-оригиналу, чем распознавание); где нет — вывод Whisper. Выбор между ними уже
-сделан в конвейере и не меняется.
+The owner named the lines differently: the Montenegrin one is a translation of the **recognized text**,
+the Russian one is a translation of the **original**. The daemon has no second source and will not have one:
+both lines use the same source text of the cue. Where the video has an
+author subtitle track, that text is it (and it is indeed closer to the
+original than recognition); where not — Whisper's output. The choice between them has already been
+made in the pipeline and does not change.
 
-### Что из предыдущего решения остаётся в силе
+### What of the previous decision remains in force
 
-Три вещи, и ни одна не ослабла.
+Three things, and none has weakened.
 
-**Оригинальная звуковая дорожка — требование.** «Смотрим на языке оригинала»
-означает, что в склеенном файле обязана быть оригинальная дорожка, а не
-автодубляж. Распознавание это уже учитывает (`-S lang,+size`,
-`helper/sources/ytdlp.py:529-531`); склейка — новый код и обязана сортировать
-так же.
+**The original audio track is a requirement.** “We watch in the original language”
+means that the muxed file must contain the original track, not
+auto-dubbing. Recognition already accounts for this (`-S lang,+size`,
+`helper/sources/ytdlp.py:529-531`); muxing is new code and must sort
+the same way.
 
-**Различение возможности и поломки стало только острее.** Убрав строку
-источника с экрана, мы убрали и единственный письменный ориентир: теперь
-черногорская строка сверяется зрителем **только со слухом**. Законное
-расхождение сербского с черногорским и артефакт ошибки определения языка
-по-прежнему выглядят одинаково, но сопоставить их теперь не с чем. Поэтому показ
-объявленного и определённого языка с уверенностью, языконезависимая защита от
-съезда реплик и видимая пометка непроверенных реплик остаются условиями
-готовности, а не удобствами.
+**Distinguishing capability and breakage has only become sharper.** By removing the source
+line from the screen, we also removed the only written reference point: now the
+Montenegrin line is checked by the viewer **by hearing alone**. The legitimate
+divergence of Serbian and Montenegrin and the artifact of a language detection error
+still look the same, but there is now nothing to compare them with. Therefore showing
+the declared and detected language with confidence, language-independent protection against
+cue shift and a visible mark of unverified cues remain readiness conditions, not conveniences.
 
-**Правило скрытия второй строки.** В расширении она гасится, когда у реплики не
-удался перевод (`extension/content.js:405`). В новой странице этого не
-воспроизводить: скрывать вторую строку только если её язык совпадает с первой.
-Иначе неудача русского перевода отнимает черногорскую строку, то есть ровно то,
-ради чего всё затеяно.
+**The rule for hiding the second line.** In the extension it is suppressed when a cue's
+translation failed (`extension/content.js:405`). Do not reproduce this in the new
+page: hide the second line only if its language matches the first.
+Otherwise a Russian translation failure takes away the Montenegrin line, that is, exactly what
+everything is done for.
 
-## Язык источника: внутренняя величина, а не настройка
+## Source language: an internal value, not a setting
 
-Вопрос хозяина 2026-10-31: выходит, язык оригинала нам вообще не важен, главное
-распознать или взять авторские титры, перевести на черногорский и русский и
-показать?
+The owner's question of 2026-10-31: so the original language is not important to us at all, the main thing is
+to recognize or take the author's captions, translate into Montenegrin and Russian and
+show?
 
-**На уровне продукта — да, и это настоящее упрощение.** Выбирать зрителю нечего:
-выход всегда один и тот же, две строки, независимо от того, что звучит. Отсюда
-вычёркивается всё, что раньше казалось нужным: переключателя языка нет ни на
-странице, ни в ссылке, ни в настройках демона как продуктового выбора; цель
-перевода не бывает другой; `targetLang` на проводе остаётся декоративным и в
-новом клиенте не выставляется вовсе (а его нынешняя декоративность — отдельный
-баг, см. выше); третьей строки и сравнения текстов нет.
+**At the product level — yes, and this is a real simplification.** There is nothing for the viewer to
+choose: the output is always the same, two lines, regardless of what is heard. From this
+everything that previously seemed necessary is crossed out: there is no language switch either on the
+page, or in the link, or in the daemon settings as a product choice; the translation
+target is never different; `targetLang` on the wire remains decorative and is not set in
+the new client at all (and its current decorativeness is a separate
+bug, see above); there is no third line and no comparison of texts.
 
-**На уровне конвейера — нет.** Язык источника перестаёт быть *решением* и
-остаётся *величиной, которую конвейер обязан определить верно*. Все найденные
-поломки сохраняются целиком, потому что они не про выбор зрителя, а про то, как
-эта величина добывается и используется:
+**At the pipeline level — no.** The source language stops being a *decision* and
+remains *a value that the pipeline must determine correctly*. All the found
+breakages remain in full, because they are not about the viewer's choice but about how
+this value is obtained and used:
 
-| Где язык всё ещё нужен | Что видит зритель, если он неверен |
+| Where the language is still needed | What the viewer sees if it is wrong |
 |---|---|
-| Токен языка в декодере Whisper | Записанный случай: сербская речь выходит английским текстом, переведённым дальше. Складно и неверно |
-| Затравка распознавания | Сербская служебная фраза как реплика посреди английского ролика |
-| Выбор авторской дорожки | Берётся не та дорожка: перевод вместо оригинала, то есть перевод перевода |
-| Нарезка на реплики | Обрывки вроде «market, e.g.» уходят в переводчик как самостоятельные фразы |
-| Подсказка переводчику | Промпт утверждает «с сербского на русский» о английской речи, а глоссарий ложных друзей подмешивается как шум |
-| Ключ кэша | Неверное распознавание закрепляется навсегда и приезжает на все устройства |
-| Защита от съезда реплик | Реплики съезжают молча, и зритель учит неверное соответствие слов |
+| Whisper decoder language token | The recorded case: Serbian speech comes out as English text, translated further. Coherent and wrong |
+| Recognition prompt | A Serbian service phrase as a cue in the middle of an English video |
+| Choosing the author's track | The wrong track is taken: a translation instead of the original, that is, a translation of a translation |
+| Segmentation into cues | Fragments like “market, e.g.” go to the translator as independent phrases |
+| Hint to the translator | The prompt asserts “from Serbian to Russian” about English speech, and the false-friends glossary is mixed in as noise |
+| Cache key | A wrong recognition is fixed forever and arrives on all devices |
+| Protection against cue shift | Cues shift silently, and the viewer learns a wrong correspondence of words |
 
-То есть прежняя запись «язык источника — свойство сохранённой ссылки» остаётся в
-силе, но её обоснование меняется, и это важно для того, кто будет строить: это
-**не настройка для зрителя, а защита от неверного угадывания** на канале, язык
-которого хозяин и так знает. Поле необязательное; пустое означает «определяй
-сам».
+That is, the earlier entry “the source language is a property of the saved link” remains in
+force, but its justification changes, and this is important for whoever will build: it is
+**not a setting for the viewer, but protection from wrong guessing** on a channel whose language
+the owner already knows. The field is optional; empty means “determine
+yourself”.
 
-### Что из этого следует уточнить
+### What follows to clarify
 
-**Определение запускается всегда, метаданные — только подсказка.** Раньше это
-было одним из решений; теперь это единственный разумный путь, потому что в петле
-не осталось человека, который поправил бы ошибку. Ранний возврат на значении
-yt-dlp (`helper/jobs.py:973-976`) убирается: YouTube помечает сербские каналы как
-`en`, и именно это дало записанный случай.
+**Detection runs always, metadata is only a hint.** Before, this was
+one of the decisions; now it is the only reasonable path, because there is no person left in the loop
+who would correct the error. The early return on the yt-dlp value
+(`helper/jobs.py:973-976`) is removed: YouTube marks Serbian channels as
+`en`, and this is exactly what gave the recorded case.
 
-**У авторских титров определённого языка нет вообще.** Если дорожка взята, Whisper
-не запускался, и всё, что у нас есть, — метка языка от YouTube, то есть ровно тот
-источник, который однажды уже соврал. Поэтому путь авторской дорожки получает
-свою сверку: один тридцатисекундный зонд определителем против метки. Несовпадение
-— не выбор одного из двух молча, а пометка на экране.
+**Author captions have no detected language at all.** If the track was taken, Whisper
+was not run, and all we have is the language label from YouTube, that is, exactly the
+source that once already lied. Therefore the author's track path gets
+its own check: one thirty-second probe with the detector against the label. A mismatch
+— not a silent choice of one of the two, but a mark on the screen.
 
-**Как построено** (ветка `source-language`, 2026-11-04). Первое сделано, см. «Решения».
-Зонда для дорожки автора нет: он отложен вместе с дорожками на других языках (там
-же). Пока дорожки берутся только сербского семейства, и решение по ним честно
-говорит, что речь не слушали: `detected` и `verified` — `null`, а расхождение
-считается между объявлением и меткой дорожки («YouTube указал en, дорожка автора
-sr»).
+**How it is built** (branch `source-language`, 2026-11-04). The first is done, see “Decisions”.
+There is no probe for the author's track: it is deferred together with tracks in other languages (in the
+same place). While tracks are taken only for the Serbian family, and the decision on them honestly
+says that the speech was not listened to: `detected` and `verified` — `null`, and the mismatch
+is counted between the declaration and the track label (“YouTube indicated en, author's track
+sr”).
 
-**Случай «источник уже русский или черногорский».** Тогда одна из двух строк
-вырождается в перевод в тот же язык. `helper/montenegrin.py:110-117` это
-предусматривает ветками для sr/cnr и для ru, так что конвейер к такому готов, но
-страница обязана не показывать две одинаковые строки: правило скрытия по
-совпадению языков, уже записанное выше, закрывает и этот случай.
+**The case “the source is already Russian or Montenegrin”.** Then one of the two lines
+degenerates into a translation into the same language. `helper/montenegrin.py:110-117` provides for this
+with branches for sr/cnr and for ru, so the pipeline is ready for it, but
+the page must not show two identical lines: the rule of hiding by language
+match, already written above, covers this case too.

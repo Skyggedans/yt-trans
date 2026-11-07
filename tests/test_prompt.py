@@ -1,4 +1,4 @@
-"""Затравка распознавания и отсев его мусора: чистые функции helper.asr.prompt."""
+"""Recognition priming and screening of its garbage: the pure functions of helper.asr.prompt."""
 
 import pytest
 
@@ -109,12 +109,12 @@ def test_field_echoes_of_the_prompt_are_recognised(prompt, sentence):
     (SERIES, "Ćao, Andrija."),
     (SERIES, "Andrija, Andrija."),
     (None, "Ovo je transkript video snimka na srpskom jeziku."),
-    # Одно имя из заголовка в обиходной фразе — речь: в кэше «Šta je ovo?» есть в 17
-    # роликах из 160, а заголовок «ŠTA SE KRILO U TITOVOM PLAVOM VOZU?» даёт имя ŠTA.
+    # One name from the title in an everyday phrase is speech: in the cache "Šta je ovo?" appears in 17
+    # of 160 videos, and the title "ŠTA SE KRILO U TITOVOM PLAVOM VOZU?" yields the name ŠTA.
     (initial_prompt("sr", ["ŠTA", "VOZU", "Prava", "Istina"]), "Šta je ovo?"),
     (initial_prompt("sr", ["Beograd"]), "Ovo je Beograd."),
-    # Обиходное слово фразы, ставшее именем, второго имени не даёт: заголовок
-    # «OVO JE NAJGORI AUTO NA SVETU» даёт имена OVO и AUTO.
+    # An everyday word of the phrase that became a name does not yield a second name: the title
+    # "OVO JE NAJGORI AUTO NA SVETU" yields the names OVO and AUTO.
     (initial_prompt("sr", ["OVO", "AUTO"]), "Ovo je auto."),
 ])
 def test_speech_that_shares_words_with_the_prompt_is_kept(prompt, sentence):
@@ -138,7 +138,7 @@ def test_segment_verdict_drops_only_silence_and_repetition(metrics, verdict):
 
 
 def test_compression_ratio_is_the_one_faster_whisper_uses():
-    import helper.env  # noqa: F401 — HF_HOME во временный кэш до faster_whisper, как в воркере
+    import helper.env  # noqa: F401 — HF_HOME to a temporary cache before faster_whisper, as in the worker
 
     from faster_whisper.transcribe import get_compression_ratio
 

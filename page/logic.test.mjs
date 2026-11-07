@@ -32,15 +32,15 @@ test("a gap is where the translation has not arrived yet", () => {
 });
 
 test("each stage has its own words, and a done job says nothing", () => {
-  assert.equal(stageText("queued", { waiting: "gpu" }), "ждём видеокарту: её занимает другая работа");
-  assert.equal(stageText("queued", {}), "в очереди…");
-  assert.equal(stageText("probing", {}), "читаю ролик…");
-  assert.equal(stageText("fetching", {}), "качаю звук…");
-  assert.equal(stageText("asr", {}), "распознаю речь…");
-  assert.equal(stageText("translating", { total: 10, translated: 3 }), "перевожу… 3 из 10");
-  assert.equal(stageText("paused", {}), "пауза: не хватило видеопамяти");
+  assert.equal(stageText("queued", { waiting: "gpu" }), "waiting for the GPU: another job is using it");
+  assert.equal(stageText("queued", {}), "queued…");
+  assert.equal(stageText("probing", {}), "reading the video…");
+  assert.equal(stageText("fetching", {}), "downloading the audio…");
+  assert.equal(stageText("asr", {}), "recognizing speech…");
+  assert.equal(stageText("translating", { total: 10, translated: 3 }), "translating… 3 of 10");
+  assert.equal(stageText("paused", {}), "paused: not enough video memory");
   assert.equal(stageText("done", {}), "");
-  assert.equal(stageText("error", { error: "нет связи", retryable: true }), "нет связи — можно повторить");
+  assert.equal(stageText("error", { error: "нет связи", retryable: true }), "нет связи — you can retry");
   assert.equal(stageText("error", { error: "нет связи", retryable: false }), "нет связи");
 });
 
@@ -51,18 +51,18 @@ test("the language line names the verdict and repeats the daemon's note", () => 
       effective: "sr", reason: "detector", confidence: 0.97,
       note: "YouTube указал en, по речи sr",
     }),
-    "язык речи: sr; по речи, 97%; YouTube указал en, по речи sr",
+    "speech language: sr; by speech, 97%; YouTube указал en, по речи sr",
   );
   assert.equal(
     languageText({ effective: "en", reason: "hint", confidence: null, note: null }),
-    "язык речи: en",
+    "speech language: en",
   );
   assert.equal(
     languageText({
       effective: "sr", reason: "track", track: "sr",
       note: "YouTube указал en, дорожка автора sr",
     }),
-    "язык речи: sr; дорожка автора sr; YouTube указал en, дорожка автора sr",
+    "speech language: sr; author's track sr; YouTube указал en, дорожка автора sr",
   );
 });
 
@@ -73,12 +73,12 @@ test("a cue gives two lines, and no study line without a translation", () => {
     cueLines({ lines: ["A", "B"], study: "", failed: true }),
     { target: "A\nB", secondary: "", failed: true },
   );
-  // Непереведённая реплика: study без перевода на экран не идёт.
+  // An untranslated cue: study without a translation does not go on screen.
   assert.deepEqual(
     cueLines({ lines: [], study: "Jedan", failed: false }),
     { target: "", secondary: "", failed: false },
   );
-  // Вторая строка совпала с первой — её не показываем.
+  // The second line matched the first — we do not show it.
   assert.deepEqual(
     cueLines({ lines: ["Jedan"], study: "Jedan", failed: false }),
     { target: "Jedan", secondary: "", failed: false },
@@ -86,9 +86,9 @@ test("a cue gives two lines, and no study line without a translation", () => {
 });
 
 test("a failed Russian line does not take the Montenegrin line away", () => {
-  // Правило спеки: вторая строка гаснет только когда её язык совпал с первой,
-  // а не когда не удался перевод. Иначе неудача русского отнимает ровно то,
-  // ради чего всё затеяно.
+  // The spec rule: the second line goes dark only when its language matched
+  // the first, not when the translation failed. Otherwise a Russian failure
+  // takes away exactly what all this was started for.
   assert.deepEqual(
     cueLines({ lines: ["Zdravo svima."], study: "Zdravo svima, narode.", failed: true }),
     { target: "Zdravo svima.", secondary: "Zdravo svima, narode.", failed: true },
@@ -102,9 +102,9 @@ test("time is read the way a player shows it", () => {
 });
 
 test("an event about another video is not this video's event", () => {
-  // У сокета нет поля videoId в событиях задания: он подписан на всё, что
-  // смотрит. Пока страница не отписалась от прежнего эпизода, его реплики
-  // приходят сюда же — и по номерам совпадают с новыми.
+  // The socket has no videoId in job events: it is subscribed to everything
+  // the page watches. Until the page unsubscribes from the previous episode,
+  // its cues arrive here too — and match the new ones by number.
   assert.equal(isForVideo({ type: "cues" }, "abc"), true);
   assert.equal(isForVideo({ type: "snapshot", videoId: "abc" }, "abc"), true);
   assert.equal(isForVideo({ type: "cues", videoId: "xyz" }, "abc"), false);
@@ -126,7 +126,7 @@ test("subscribing lets go of the previous episode before taking the next", () =>
     { op: "watch", videoId: "xyz", targetLang: "ru", authorTrack: true },
     { op: "playhead", videoId: "xyz", t: 40, clientId: "client-1" },
   ]);
-  // Тот же ролик заново — отписываться не от чего.
+  // The same video again — nothing to unsubscribe from.
   assert.equal(watchMessages("abc", 0, "c", "abc").length, 2);
   assert.deepEqual(unwatchMessage("abc"), { op: "unwatch", videoId: "abc" });
 });
@@ -257,8 +257,8 @@ test("a link without a title does not break the search", () => {
 });
 
 test("the search reaches the names of the videos under a link", () => {
-  // Название плейлиста ничего не говорит о том, что внутри, а ищут обычно
-  // ролик: ссылка с совпавшим роликом должна остаться в списке.
+  // The playlist title says nothing about what is inside, and people usually
+  // search for a video: a link with a matching video must stay in the list.
   const videos = {
     3: [
       { videoId: "v1", title: "Kako se kalio čelik" },
@@ -269,7 +269,7 @@ test("the search reaches the names of the videos under a link", () => {
 
   assert.deepEqual(filterLinks(LINKS, "kalio", named).map((link) => link.id), ["3"]);
   assert.deepEqual(filterLinks(LINKS, "balkan", named).map((link) => link.id), ["3"]);
-  // Совпадение по имени ролика не заменяет поиск по названию самой ссылки.
+  // A match on a video name does not replace the search by the link's own title.
   assert.deepEqual(filterLinks(LINKS, "RAKI", named).map((link) => link.id), ["1"]);
 });
 
@@ -284,7 +284,7 @@ test("the subtitle size is remembered, and rubbish means the usual one", () => {
   assert.equal(readFontSize("tiny"), "tiny");
   assert.equal(readFontSize("small"), "small");
   assert.equal(readFontSize("large"), "large");
-  // «Огромный» убран: сохранённый им размер сводится к обычному.
+  // "huge" was removed: a size saved as it falls back to the usual one.
   assert.equal(readFontSize("huge"), "normal");
   assert.equal(readFontSize(null), "normal");
   assert.equal(readFontSize(""), "normal");
@@ -292,7 +292,7 @@ test("the subtitle size is remembered, and rubbish means the usual one", () => {
   assert.equal(readFontSize("[large]"), "normal");
 });
 
-// --- Кеш роликов на устройстве -----------------------------------------
+// --- Video cache on the device -----------------------------------------
 
 import {
   cacheLabel, copyState, copyVerdict, formatBytes, linkTitle, mergeCues,
@@ -300,13 +300,13 @@ import {
 } from "./logic.js";
 
 test("bytes are shown the way a person reads them", () => {
-  assert.equal(formatBytes(0), "0 Б");
-  assert.equal(formatBytes(999), "999 Б");
-  assert.equal(formatBytes(1024), "1 КБ");
-  assert.equal(formatBytes(1536), "1.5 КБ");
-  assert.equal(formatBytes(419430400), "400 МБ");
-  assert.equal(formatBytes(1288490188), "1.2 ГБ");
-  // Мусор и отрицательные — не «-1 Б» и не «NaN МБ».
+  assert.equal(formatBytes(0), "0 B");
+  assert.equal(formatBytes(999), "999 B");
+  assert.equal(formatBytes(1024), "1 KB");
+  assert.equal(formatBytes(1536), "1.5 KB");
+  assert.equal(formatBytes(419430400), "400 MB");
+  assert.equal(formatBytes(1288490188), "1.2 GB");
+  // Garbage and negative values — not "-1 B" and not "NaN MB".
   assert.equal(formatBytes(-1), "—");
   assert.equal(formatBytes(null), "—");
   assert.equal(formatBytes("400"), "—");
@@ -325,57 +325,61 @@ test("a copy is refused only when the space is really short", () => {
   const gib = 1073741824;
 
   assert.equal(copyVerdict(fourHundred, gib), "ok");
-  // 500 МиБ минус запас в 200 МиБ — меньше 400 МиБ: запись кончилась бы на половине.
+  // 500 MiB minus the 200 MiB reserve is less than 400 MiB: the write would
+  // stop halfway.
   assert.equal(copyVerdict(fourHundred, 524288000), "tight");
-  // Размер не спросили или места не знают: судить не о чем, но и запрещать нечем.
+  // The size was not asked for or the space is unknown: nothing to judge by,
+  // but nothing to forbid with either.
   assert.equal(copyVerdict(0, gib), "unknown");
   assert.equal(copyVerdict(fourHundred, 0), "unknown");
   assert.equal(copyVerdict(fourHundred, 524288000, 0), "ok");
 });
 
 test("the cache switch says what it is doing", () => {
-  // Кнопка стала иконкой: слово «кеш» ушло в неё, на кнопке остаётся только
-  // то, что меняется, — проценты, ожидание и отказ. Размер готовой копии не
-  // пишется: дискета уже сказала, что ролик на устройстве.
+  // The button became an icon: the word "cache" went into it, and only what
+  // changes stays on the button — percentages, waiting and failure. The size
+  // of a finished copy is not written: the floppy has already said that the
+  // video is on the device.
   assert.equal(copyState({}), "");
-  assert.equal(copyState({ waiting: true }), "ждёт");
+  assert.equal(copyState({ waiting: true }), "waiting");
   assert.equal(copyState({ active: true, percent: 37 }), "37%");
   assert.equal(copyState({ size: 419430400 }), "");
-  assert.equal(copyState({ failed: true }), "ошибка");
-  // Идёт копирование — проценты важнее старого размера; ошибка важнее всего.
+  assert.equal(copyState({ failed: true }), "error");
+  // Copying is in progress — percentages matter more than the old size; an
+  // error matters most of all.
   assert.equal(copyState({ active: true, percent: 5, size: 1000 }), "5%");
-  assert.equal(copyState({ failed: true, size: 1000 }), "ошибка");
+  assert.equal(copyState({ failed: true, size: 1000 }), "error");
 });
 
 test("a saved episode is marked with its size", () => {
-  assert.equal(cacheLabel(419430400), "на устройстве · 400 МБ");
-  assert.equal(cacheLabel(0), "на устройстве");
+  assert.equal(cacheLabel(419430400), "on the device · 400 MB");
+  assert.equal(cacheLabel(0), "on the device");
 });
 
 test("a link row carries the length of its only copy", () => {
-  // Метраж единственной копии — это метраж ролика, и стоять он должен рядом с
-  // названием, а не отдельной строкой.
+  // The length of the only copy is the video's length, and it must stand next
+  // to the title, not as a separate row.
   assert.equal(linkTitle({ title: "Ролик" }, { duration: 960 }), "Ролик · 16:00");
-  // Копии нет — строка остаётся одной, без выдуманного метража.
+  // No copy — the row stays one, without an invented length.
   assert.equal(linkTitle({ title: "Ролик" }), "Ролик");
   assert.equal(linkTitle({ title: "Ролик" }, { duration: 0 }), "Ролик");
-  // Название не пришло — показываем адрес, а не пустую строку.
+  // The title did not arrive — show the address, not an empty string.
   assert.equal(linkTitle({ url: "https://youtu.be/x" }), "https://youtu.be/x");
 });
 
 test("a link row carries the length the daemon remembered", () => {
-  // Демон запоминает метраж при добавлении ссылки: без копии на устройстве
-  // строка раньше молчала о длительности.
+  // The daemon remembers the length when a link is added: without a copy on
+  // the device the row used to say nothing about the duration.
   assert.equal(linkTitle({ title: "Ролик", duration: 960 }), "Ролик · 16:00");
-  // Копия без метража не должна стирать серверный.
+  // A copy without a length must not erase the server one.
   assert.equal(linkTitle({ title: "Ролик", duration: 960 }, { duration: 0 }), "Ролик · 16:00");
-  // Сервер метража не знает — и выдумывать нечего.
+  // The server does not know the length — nothing to invent.
   assert.equal(linkTitle({ title: "Ролик", duration: null }), "Ролик");
 });
 
 test("cards are toggled one at a time and nothing is open at start", () => {
-  // Раскрытие живёт только до перезагрузки: список открывается свёрнутым,
-  // а раскрывают карточку пальцем и по одному месту.
+  // Expansion lives only until a reload: the list opens collapsed, and a card
+  // is expanded with a finger, one place at a time.
   assert.deepEqual(toggleExpanded([], "link:a"), ["link:a"]);
   assert.deepEqual(toggleExpanded(["link:a"], "link:b"), ["link:a", "link:b"]);
   assert.deepEqual(toggleExpanded(["link:a", "link:b"], "link:a"), ["link:b"]);

@@ -1,9 +1,9 @@
 {
   "id": "/",
-  "name": "yt-trans — субтитры",
+  "name": "yt-trans — subtitles",
   "short_name": "yt-trans",
-  "description": "Две строки субтитров поверх ролика YouTube: русский перевод и черногорский текст",
-  "lang": "ru",
+  "description": "Two subtitle lines over a YouTube video: the Russian translation and the Montenegrin text",
+  "lang": "en",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -1,13 +1,13 @@
-"""Спайк 3: как часто у сербских роликов вообще есть ручная дорожка субтитров.
+"""Spike 3: how often Serbian videos have a manual subtitle track at all.
 
-Это hit-rate тира T0 и ответ на вопрос, стоит ли его строить. Публичной статистики
-по доступности субтитров в разрезе языков не существует — её надо мерить на своём
-корпусе, а не искать.
+This is the hit rate of tier T0 and the answer to whether it is worth building. There is no
+public statistics on subtitle availability by language — it must be measured on one's own
+corpus, not looked up.
 
-Заодно проверяет документальное утверждение, на котором стоит весь план: у BCMS-роликов
-не бывает автосубтитров, потому что сербского, хорватского и боснийского нет в списке
-языков распознавания YouTube. Если в колонке `auto` вдруг окажется непусто — план
-надо пересматривать, а не радоваться.
+It also checks the documentary claim on which the whole plan rests: BCMS videos
+never have auto-captions, because Serbian, Croatian and Bosnian are not in YouTube's
+recognition language list. If the `auto` column suddenly turns out non-empty — the plan
+must be revised, not celebrated.
 
   python spikes/caption_prevalence.py --channel https://www.youtube.com/@somechannel
   python spikes/caption_prevalence.py --ids dQw4w9WgXcQ jNQXAC9IVRw
@@ -39,44 +39,44 @@ def channel_video_ids(url: str, limit: int) -> list[str]:
     )
 
     if proc.returncode != 0:
-        raise YtDlpError((proc.stderr or "").strip() or f"не удалось прочитать {url}")
+        raise YtDlpError((proc.stderr or "").strip() or f"could not read {url}")
 
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--channel", action="append", default=[], help="можно повторять")
+    parser.add_argument("--channel", action="append", default=[], help="can be repeated")
     parser.add_argument("--ids", nargs="*", default=[])
-    parser.add_argument("--limit", type=int, default=25, help="роликов с канала")
+    parser.add_argument("--limit", type=int, default=25, help="videos from the channel")
     parser.add_argument("--out", type=Path, default=Path("spikes/caption_prevalence.json"))
     args = parser.parse_args()
 
     video_ids = list(args.ids)
 
     for channel in args.channel:
-        print(f"перечисляю {channel} …")
+        print(f"listing {channel} …")
         try:
             found = channel_video_ids(channel, args.limit)
         except YtDlpError as exc:
-            print(f"  ошибка: {exc}")
+            print(f"  error: {exc}")
             continue
 
-        print(f"  {len(found)} роликов")
+        print(f"  {len(found)} videos")
         video_ids += found
 
     if not video_ids:
-        parser.error("нужен --channel и/или --ids")
+        parser.error("need --channel and/or --ids")
 
     rows, langs, errors = [], Counter(), 0
-    print(f"\n{'video':13s} {'BCMS':5s} {'ручные':28s} {'auto':5s} {'дл':>6s}  язык")
+    print(f"\n{'video':13s} {'BCMS':5s} {'manual':28s} {'auto':5s} {'dur':>6s}  language")
 
     for video_id in video_ids:
         try:
             info = probe(video_id)
         except YtDlpError as exc:
             errors += 1
-            print(f"{video_id:13s} ОШИБКА {str(exc).splitlines()[0][:60]}")
+            print(f"{video_id:13s} ERROR {str(exc).splitlines()[0][:60]}")
             continue
 
         track = usable_manual_track(info)
@@ -97,8 +97,8 @@ def main() -> int:
         )
 
         print(
-            f"{info.video_id:13s} {'ДА' if track else '—':5s} {manual[:28]:28s} "
-            f"{'ДА' if info.has_automatic_captions else '—':5s} "
+            f"{info.video_id:13s} {'YES' if track else '—':5s} {manual[:28]:28s} "
+            f"{'YES' if info.has_automatic_captions else '—':5s} "
             f"{int(info.duration or 0):6d}  {info.audio_language or '?'}"
         )
 
@@ -109,19 +109,19 @@ def main() -> int:
     auto = sum(r["has_automatic"] for r in rows)
 
     print(f"\n{'—' * 60}")
-    print(f"роликов опрошено:            {total}   (ошибок: {errors})")
-    print(f"ручная BCMS-дорожка (тир T0): {bcms}  = {bcms / total:.1%}" if total else "")
-    print(f"есть автосубтитры:            {auto}  = {auto / total:.1%}" if total else "")
+    print(f"videos queried:            {total}   (errors: {errors})")
+    print(f"manual BCMS track (tier T0): {bcms}  = {bcms / total:.1%}" if total else "")
+    print(f"has auto-captions:            {auto}  = {auto / total:.1%}" if total else "")
 
     if auto:
-        print("\n  ВНИМАНИЕ: автосубтитры найдены. План исходит из того, что для BCMS")
-        print("  их не существует. Проверь languageCode — вероятна ошибочная автодетекция")
-        print("  языка на стороне YouTube (mk/bg/ru — соседи сербского и ASR-языки).")
+        print("\n  WARNING: auto-captions found. The plan assumes that for BCMS")
+        print("  they do not exist. Check languageCode — a wrong automatic detection")
+        print("  of the language on YouTube's side is likely (mk/bg/ru — neighbours of Serbian and ASR languages).")
 
     if langs:
-        print(f"\nязыки ручных дорожек: {dict(langs.most_common())}")
+        print(f"\nmanual track languages: {dict(langs.most_common())}")
 
-    print(f"\nзаписано в {args.out}")
+    print(f"\nwritten to {args.out}")
 
     return 0
 

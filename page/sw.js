@@ -1,8 +1,9 @@
-// Оболочка страницы без демона. Пока компьютер включён, страница приходит от
-// него и обновляется сразу; когда выключен — из этого кеша.
+// The page shell without the daemon. While the computer is on, the page comes
+// from it and updates at once; when it is off — from this cache.
 //
-// Имя версии меняется вместе с набором файлов: старый кеш тогда удаляется на
-// активации, и на планшете не остаётся смеси из двух выпусков.
+// The version name changes together with the set of files: the old cache is
+// then deleted on activation, and no mixture of two releases is left on the
+// tablet.
 const VERSION = "yt-trans-1";
 const SHELL = [
   "/", "/app.js", "/logic.js", "/cache.js", "/style.css",
@@ -32,8 +33,9 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
 
-  // Живые данные демона и сертификат — не оболочка: их нельзя отдавать
-  // из кеша, иначе страница показывала бы вчерашние титры.
+  // The daemon's live data and the certificate are not the shell: they must
+  // not be served from the cache, otherwise the page would show yesterday's
+  // subtitles.
   if (request.method !== "GET") {
     return;
   }
@@ -44,8 +46,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Сеть первой: страница должна обновляться сразу, кеш — только замена
-  // на случай, когда демона нет.
+  // Network first: the page must update at once, and the cache is only a
+  // substitute for when the daemon is not there.
   event.respondWith((async () => {
     try {
       const response = await fetch(request);

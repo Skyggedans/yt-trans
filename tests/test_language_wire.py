@@ -1,4 +1,4 @@
-"""Решение о языке на проводе: поле language в снимке и событие language раньше реплик."""
+"""The language decision on the wire: the language field in the snapshot and the language event before the cues."""
 
 import logging
 
@@ -10,33 +10,33 @@ from helper.jobs import Stage, refusal_snapshot
 from helper.language import LanguageVerdict
 from helper.sources.ytdlp import CaptionTrack
 
-# Одиннадцать знаков, как у настоящего ролика.
+# Eleven characters, like a real video.
 VIDEO = "langwire001"
 
-# Сербская речь на канале, который YouTube пометил английским (Juske, Q2QcYOBk0Jo):
-# определитель уверен в сербском, объявление с речью расходится.
+# Serbian speech on a channel YouTube marked English (Juske, Q2QcYOBk0Jo):
+# the detector is sure of Serbian, the declaration disagrees with the speech.
 JUSKE = LanguageVerdict(
     effective="sr", declared="en", declared_by="metadata",
     detected="sr", confidence=0.97, reason="detector",
 )
-# Английский ролик без метаданных: расходиться не с чем, сказать нечего.
+# An English video without metadata: there is nothing to disagree with, nothing to say.
 ENGLISH = LanguageVerdict(
     effective="en", declared=None, declared_by=None,
     detected="en", confidence=0.99, reason="detector",
 )
-# Ни одно окно не проголосовало, и язык взят у YouTube.
+# No window voted, and the language was taken from YouTube.
 HINTED = LanguageVerdict(
     effective="en", declared="en", declared_by="metadata",
     detected=None, confidence=None, reason="hint",
 )
 CUES = [{"start": 0.0, "end": 1.5, "text": "Dobar dan.", "words": []}]
 TRACK = [{"start": 1.0, "end": 3.0, "text": "Zdravo svima."}]
-# Ключи снимка до этого плана. Новое поле одно, и его имя расширение не читает.
+# The snapshot keys before this plan. There is one new field, and the extension does not read its name.
 OLD_SNAPSHOT_KEYS = {
     "type", "videoId", "authorTrack", "targetLang", "generation", "stage", "error",
     "retryable", "waiting", "title", "total", "translated", "cues",
 }
-# Типы событий, на которые расширение отвечает действием (content.js, background.js).
+# Event types the extension responds to with an action (content.js, background.js).
 EXTENSION_TYPES = {"state", "snapshot", "cues", "helper", "restored", "gone"}
 
 
@@ -45,7 +45,7 @@ def author_track(lang):
 
 
 def answer(verdict, windows=(), cues=CUES):
-    """Ответ воркера по протоколу задачи 5: решение, окна определителя, реплики."""
+    """The worker's answer according to the task 5 protocol: the decision, the detector windows, the cues."""
     return {
         "language": verdict.effective,
         "verdict": verdict.wire(),
@@ -62,11 +62,11 @@ def answer(verdict, windows=(), cues=CUES):
 
 
 def language_lines(caplog):
-    """Строки журнала о решении по языку этого ролика: уровень и текст."""
+    """Log lines about the language decision for this video: level and text."""
     return [
         (record.levelno, record.getMessage())
         for record in caplog.records
-        if record.name == "helper.jobs" and record.getMessage().startswith(f"язык {VIDEO}:")
+        if record.name == "helper.jobs" and record.getMessage().startswith(f"language {VIDEO}:")
     ]
 
 
@@ -87,7 +87,7 @@ def test_the_language_event_lands_in_the_journal_and_the_snapshot(manager):
     assert job.language is JUSKE
     assert job.events[-1] == {"type": "language", "language": JUSKE.wire(), "videoId": VIDEO}
     assert job.snapshot()["language"] == JUSKE.wire()
-    # Не через _set_stage: стадия и ожидание карты остаются, надпись бейджа та же.
+    # Not through _set_stage: the stage and the card wait remain, the badge label is the same.
     assert job.stage is Stage.QUEUED
     assert job.waiting == "gpu"
 
@@ -100,9 +100,9 @@ def test_the_language_reuses_no_name_the_extension_reads(manager):
 
     assert event.keys() == {"type", "language", "videoId"}
     assert event["type"] not in EXTENSION_TYPES
-    # Ключи снимка до плана о языке. pending и translatedThrough добавил план страницы
-    # для планшета; расширение не читает ни одного из трёх, поэтому любой четвёртый
-    # новый ключ — ошибка.
+    # The snapshot keys before the language plan. pending and translatedThrough were added by the
+    # tablet page plan; the extension reads none of the three, so any fourth
+    # new key is an error.
     assert snapshot.keys() - OLD_SNAPSHOT_KEYS == {"language", "pending", "translatedThrough"}
     assert snapshot.keys() >= OLD_SNAPSHOT_KEYS
 
@@ -122,11 +122,11 @@ async def test_the_socket_hears_the_language_before_segmented_after_asr(
     at = types.index("language")
 
     assert at < types.index("segmented")
-    # Решение приходит сразу за распознаванием: его выносит воркер.
+    # The decision arrives right after recognition: the worker makes it.
     assert heard[at - 1]["stage"] == "asr"
     assert heard[at] == {"type": "language", "language": JUSKE.wire(), "videoId": VIDEO}
     assert heard[at]["language"]["mismatch"] is True
-    assert heard[at]["language"]["note"] == "YouTube указал en, по речи sr"
+    assert heard[at]["language"]["note"] == "YouTube indicated en, by speech sr"
     assert heard[-1]["stage"] == "done"
 
 
@@ -170,15 +170,15 @@ async def test_the_socket_hears_the_language_before_segmented_on_the_author_trac
     assert heard[types.index("language")] == {
         "type": "language", "language": expected.wire(), "videoId": VIDEO,
     }
-    assert expected.wire()["note"] == "YouTube указал en, дорожка автора sr"
+    assert expected.wire()["note"] == "YouTube indicated en, the author's track sr"
     assert not pipeline.workers
     assert language_lines(caplog) == [
         (
             logging.INFO,
-            f"язык {VIDEO}: sr (track), объявлен en (metadata), по речи —, "
-            "уверенность —, окна: —",
+            f"language {VIDEO}: sr (track), declared en (metadata), by speech —, "
+            "confidence —, windows: —",
         ),
-        (logging.WARNING, f"язык {VIDEO}: YouTube указал en, дорожка автора sr"),
+        (logging.WARNING, f"language {VIDEO}: YouTube indicated en, the author's track sr"),
     ]
 
 
@@ -209,7 +209,7 @@ async def test_a_pin_is_the_declaration_of_an_author_track(manager, pipeline):
         effective="sr", declared="hr", declared_by="config", detected=None,
         confidence=None, reason="track", source="manual", track="sr", verified=None,
     )
-    # hr и sr — один язык с тремя токенами: расхождения нет.
+    # hr and sr are one language with three tokens: no mismatch.
     assert job.language.mismatch is False
 
 
@@ -254,9 +254,9 @@ async def test_an_answer_in_an_unknown_language_fails_the_job(manager, pipeline)
     await pipeline.run(job)
 
     assert job.stage is Stage.ERROR
-    # Окончательно: повтор снова занял бы карту распознаванием ради того же ответа.
+    # Permanent: a retry would take the card for recognition again for the same answer.
     assert job.retryable is False
-    assert job.error == "распознаватель вернул неизвестный язык «xx»"
+    assert job.error == 'the recognizer returned an unknown language "xx"'
     assert job.language is None
     assert job.cues == []
 
@@ -270,8 +270,8 @@ async def test_the_decision_is_one_info_line_with_the_windows(manager, pipeline,
     assert language_lines(caplog) == [
         (
             logging.INFO,
-            f"язык {VIDEO}: en (detector), объявлен —, по речи en, "
-            "уверенность 0.99, окна: en 0.99/30с",
+            f"language {VIDEO}: en (detector), declared —, by speech en, "
+            "confidence 0.99, windows: en 0.99/30s",
         ),
     ]
 
@@ -285,19 +285,19 @@ async def test_a_mismatch_is_a_warning_in_words(manager, pipeline, caplog):
     assert language_lines(caplog) == [
         (
             logging.INFO,
-            f"язык {VIDEO}: sr (detector), объявлен en (metadata), по речи sr, "
-            "уверенность 0.97, окна: sr 0.97/28с, — 0.00/1с",
+            f"language {VIDEO}: sr (detector), declared en (metadata), by speech sr, "
+            "confidence 0.97, windows: sr 0.97/28s, — 0.00/1s",
         ),
-        (logging.WARNING, f"язык {VIDEO}: YouTube указал en, по речи sr"),
+        (logging.WARNING, f"language {VIDEO}: YouTube indicated en, by speech sr"),
     ]
-    # Мёртвая строка «язык речи … определитель дал» ушла: её место заняли две выше.
-    assert not [r for r in caplog.records if "определитель дал" in r.getMessage()]
+    # The dead line "speech language … the detector gave" is gone: the two above took its place.
+    assert not [r for r in caplog.records if "detector gave" in r.getMessage()]
 
 
 async def test_a_detector_that_never_answered_is_a_warning(manager, pipeline, caplog):
     caplog.set_level(logging.INFO, logger="helper.jobs")
-    # Речь в окне есть, а ответа определителя нет: голосов ноль, решила метка YouTube —
-    # тот же путь, которым сербская речь под меткой en ушла бы в английский декодер.
+    # There is speech in the window but no detector answer: zero votes, the YouTube label decided —
+    # the same path by which Serbian speech under an en label would go to the English decoder.
     pipeline.asr_result = answer(HINTED, windows=[(None, 0.0, 25.0)])
 
     await pipeline.run(jobs.Job(VIDEO))
@@ -305,8 +305,8 @@ async def test_a_detector_that_never_answered_is_a_warning(manager, pipeline, ca
     assert language_lines(caplog) == [
         (
             logging.INFO,
-            f"язык {VIDEO}: en (hint), объявлен en (metadata), по речи —, "
-            "уверенность —, окна: — 0.00/25с",
+            f"language {VIDEO}: en (hint), declared en (metadata), by speech —, "
+            "confidence —, windows: — 0.00/25s",
         ),
-        (logging.WARNING, f"язык {VIDEO}: определитель не ответил, окон с речью без ответа: 1"),
+        (logging.WARNING, f"language {VIDEO}: detector did not answer, speech windows without an answer: 1"),
     ]

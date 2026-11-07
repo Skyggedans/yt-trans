@@ -1,6 +1,6 @@
-/* Страница планшета: тёмная, без отвлекающих рамок, видео на весь экран.
-   Слой субтитров повторяет extension/content.js, чтобы обе линии выглядели
-   одинаково и на компьютере, и на планшете. */
+/* Tablet page: dark, without distracting frames, video full screen.
+   The subtitle layer mirrors extension/content.js so both lines look the same
+   on the computer and on the tablet. */
 
 :root {
   --font: 22px;
@@ -9,8 +9,8 @@
   --bg: #0d0d0f;
   --panel: #17171b;
   --accent: #4c8dff;
-  /* Цвета пометок в списке: готово — зелёное, удаление и ролик YouTube —
-     красное, копия на устройстве — голубая. Плейлист остаётся тихим серым. */
+  /* Mark colours in the list: ready — green, deletion and a YouTube video —
+     red, a copy on the device — blue. The playlist stays quiet grey. */
   --ok: #5fcf80;
   --alert: #ff6b6b;
   --copy: #6fb8ff;
@@ -62,7 +62,7 @@ input {
   min-width: 0;
 }
 
-/* --- Дом: сохранённые ссылки и эпизоды ----------------------------------- */
+/* --- Home: saved links and episodes -------------------------------------- */
 
 #home {
   max-width: 720px;
@@ -71,8 +71,9 @@ input {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  /* Экран ограничен его высотой: прокрутка живёт внутри #library, а не в
-     странице, иначе поле ссылки и поиск уезжали бы вместе со списком. */
+  /* The screen is limited by its height: scrolling lives inside #library, not
+     in the page, otherwise the link field and search would ride away with the
+     list. */
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -85,7 +86,7 @@ input {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  /* Прокрутка не должна обрывать тень/рамку последнего пункта о край. */
+  /* Scrolling must not cut the shadow/frame of the last item against the edge. */
   padding-bottom: 4px;
 }
 
@@ -102,7 +103,7 @@ input {
   flex: 1;
 }
 
-/* Поле поиска — во всю ширину списка, как и поле ссылки над ним. */
+/* The search field is the full width of the list, like the link field above it. */
 #links-filter {
   width: 100%;
 }
@@ -121,8 +122,9 @@ input {
   gap: 8px;
 }
 
-/* Ссылка и всё, что под ней лежит, — одна карточка. Дети стоят с отступом,
-   и по нему видно, что ролик лежит внутри плейлиста, а копия — внутри ролика. */
+/* A link and everything that lies under it are one card. The children stand
+   indented, and by that it is visible that a video lies inside a playlist and
+   a copy inside a video. */
 #links li.card {
   flex-direction: column;
   gap: 0;
@@ -140,7 +142,8 @@ input {
   align-items: center;
 }
 
-/* Внутри карточки кнопки не рисуют своих рамок и фона: рамка одна — у карточки. */
+/* Inside the card the buttons draw no frames or background of their own:
+   there is one frame — the card's. */
 #links .link-line button,
 #links .video-line button,
 #links .saved-line button {
@@ -156,8 +159,8 @@ input {
   text-align: left;
 }
 
-/* Иконка типа стоит в строку с названием: отдельной колонкой она отнимала бы
-   ширину, а под названием — высоту. */
+/* The type icon stands in line with the title: as a separate column it would
+   take width, and under the title — height. */
 #links .link-line > button:first-child,
 #links .video-line > button:first-child {
   display: flex;
@@ -165,15 +168,16 @@ input {
   gap: 8px;
 }
 
-/* Тип говорит о себе тихо: иконка подсказывает, но не спорит с названием. */
+/* The type speaks about itself quietly: the icon hints, but does not argue
+   with the title. */
 #links .title-icon {
   display: inline-flex;
   flex: none;
   color: var(--muted);
 }
 
-/* Ролик — красный, как у самого YouTube; плейлист остаётся тихим серым:
-   значок отвечает «что это», не отнимая места у названия. */
+/* A video is red, like on YouTube itself; the playlist stays quiet grey: the
+   icon answers "what this is" without taking room from the title. */
 #links .title-icon.is-video {
   color: var(--alert);
 }
@@ -182,8 +186,8 @@ input {
   color: var(--muted);
 }
 
-/* Готовность — тем же тихим голосом, что и тип: галочка отвечает на вопрос
-   «что можно смотреть сразу», не отнимая места у названия. */
+/* Readiness — in the same quiet voice as the type: the check answers "what
+   can be watched right away" without taking room from the title. */
 #links .state-mark,
 #links .state-word {
   flex: none;
@@ -194,8 +198,8 @@ input {
   display: inline-flex;
 }
 
-/* Галка — готовый перевод, дискета — копия на устройстве: цвет отвечает
-   раньше, чем читается подсказка. Спиннер остаётся тихим. */
+/* The check is a finished translation, the floppy a copy on the device: colour
+   answers before the hint is read. The spinner stays quiet. */
 #links .state-mark.is-check {
   color: var(--ok);
 }
@@ -204,8 +208,9 @@ input {
   color: var(--copy);
 }
 
-/* Спиннер — единственная движущаяся пометка: пока картинка качается, движение
-   и есть ответ, а слово «готовится» пришлось бы читать в каждой строке. */
+/* The spinner is the only moving mark: while the picture is downloading,
+   motion is the answer, and the word "preparing" would have to be read in
+   every row. */
 #links .state-mark.spin .icon {
   animation: spin 1s linear infinite;
 }
@@ -216,8 +221,9 @@ input {
   }
 }
 
-/* «new» — пометка свежей строки, по которой ещё ничего не делали. Она тише
-   названия: это не состояние ролика, а подсказка, что с ним не работали. */
+/* "new" — the mark of a fresh row that nothing has been done to. It is
+   quieter than the title: it is not a video state but a hint that no work was
+   done on it. */
 #links .new-mark {
   flex: none;
   padding: 0 6px;
@@ -232,19 +238,20 @@ input {
   font-size: 14px;
 }
 
-/* Корзина тише открывающей кнопки: она рядом, но не главная, и нажимают её
-   реже — промах по ней не должен стоить ссылки. */
+/* The trash is quieter than the opening button: it is nearby but not the main
+   one, and it is pressed less often — a miss on it must not cost a link. */
 #links .icon-only {
   color: var(--muted);
 }
 
-/* Корзина — единственная красная кнопка строки: промах по ней стоит записи,
-   и цвет говорит это раньше, чем палец коснётся. */
+/* The trash is the only red button in a row: a miss on it costs a record, and
+   the colour says that before the finger touches it. */
 #links .icon-only.trash {
   color: var(--alert);
 }
 
-/* Блок детей: отступ и черта отделяют его от заголовка, не разрывая карточку. */
+/* The block of children: indentation and a line separate it from the header
+   without tearing the card apart. */
 #links .children {
   display: flex;
   flex-direction: column;
@@ -264,8 +271,8 @@ input {
   padding-bottom: 4px;
 }
 
-/* Шеврон показывает, куда смотреть: вниз — есть что раскрыть, вверх — уже
-   раскрыто. Движение то же, что у пальца. */
+/* The chevron shows where to look: down — there is something to expand, up —
+   it is already expanded. The motion is the same as the finger's. */
 #links .chevron .icon {
   transition: transform .15s;
 }
@@ -278,7 +285,7 @@ input {
   color: var(--muted);
 }
 
-/* --- Сцена: видео и слой субтитров --------------------------------------- */
+/* --- Stage: video and subtitle layer -------------------------------------- */
 
 #stage {
   position: fixed;
@@ -300,9 +307,9 @@ input {
   background: #000;
 }
 
-/* Слой рисуется в shadow root на #overlay. Позиция и вид — как в content.js:
-   снизу, не шире 88%, на полупрозрачной плашке; --lift поднимает его над
-   элементами управления, когда они видны. */
+/* The layer is drawn in a shadow root on #overlay. Position and look — as in
+   content.js: at the bottom, no wider than 88%, on a semi-transparent plate;
+   --lift raises it above the controls when they are visible. */
 #overlay {
   position: absolute;
   left: 0;
@@ -343,9 +350,9 @@ input {
   display: none;
 }
 
-/* Статус живёт в верхней полосе рядом с кнопками одной строкой: поверх кадра
-   он спорил с субтитрами, а отдельные строки занимали больше места, чем
-   говорили. Точки между сообщениями ставит render(). */
+/* The status lives in the top bar next to the buttons, on one line: over the
+   frame it argued with the subtitles, and separate lines took more room than
+   they said. render() puts the dots between messages. */
 #status {
   min-width: 0;
   overflow: hidden;
@@ -361,9 +368,9 @@ input {
   display: none;
 }
 
-/* Название — в верхней полосе, одной строкой по центру свободного места
-   между кнопками. Снизу оно висело над кадром как раз там, где идут
-   субтитры. */
+/* The title is in the top bar, on one line in the middle of the free space
+   between the buttons. Below it hung over the frame exactly where the
+   subtitles run. */
 #title {
   flex: 1;
   min-width: 0;
@@ -376,8 +383,8 @@ input {
   pointer-events: none;
 }
 
-/* Два выключателя строк — в правом верхнем углу: снизу их перекрывают
-   собственные контролы плеера. */
+/* The two line switches — in the top right corner: below they are covered by
+   the player's own controls. */
 #lines {
   position: absolute;
   top: calc(12px + env(safe-area-inset-top, 0px));
@@ -386,7 +393,8 @@ input {
   gap: 8px;
 }
 
-/* Верхняя полоса не должна съедать кадр: здесь кнопки мельче общих. */
+/* The top bar must not eat the frame: here the buttons are smaller than the
+   common ones. */
 #lines button,
 #lines select {
   padding: 7px 10px;
@@ -398,8 +406,8 @@ input {
   background: rgba(20, 20, 24, .82);
 }
 
-/* Выключенная строка гаснет, но остаётся на месте: иначе кнопка прыгала бы
-   под палец. */
+/* A switched-off line dims but stays in place: otherwise the button would
+   jump under the finger. */
 #lines button[aria-pressed="false"] {
   opacity: .45;
 }
@@ -412,8 +420,9 @@ input {
   border-radius: 10px;
 }
 
-/* Выбранный размер умножает обычный, а не заменяет его: на широком экране
-   обычный уже крупнее, и «мелкий» там не должен стать меньше, чем на телефоне. */
+/* The chosen size multiplies the usual one instead of replacing it: on a wide
+   screen the usual one is already larger, and "small" there must not become
+   smaller than on a phone. */
 #stage[data-font="tiny"] {
   --overlay-scale: .65;
 }
@@ -430,9 +439,9 @@ input {
   --overlay-scale: 1.3;
 }
 
-/* Полоса слева сверху: возврат, ⛶, кеш и статус. Правее — выключатели строк,
-   поэтому полоса до них не доходит: длинный статус обрезается, а не залезает
-   под кнопки. */
+/* The bar on the left top: back, ⛶, cache and status. To the right — the line
+   switches, so the bar does not reach them: a long status is cut off rather
+   than creeping under the buttons. */
 #stage-bar {
   position: absolute;
   left: 12px;
@@ -454,9 +463,9 @@ input {
   flex: none;
 }
 
-/* Полоса со статусом и название гаснут вместе с родными контролами плеера:
-   через те же 2,5 секунды покоя, пока ролик идёт. Кадр без прикосновений
-   остаётся чистым, а касание возвращает надписи. */
+/* The bar with the status and the title fade together with the player's own
+   controls: after the same 2.5 seconds of rest while the video is playing. The
+   frame without touches stays clean, and a touch brings the captions back. */
 #stage-bar,
 #title {
   transition: opacity .2s ease;
@@ -468,16 +477,16 @@ input {
   pointer-events: none;
 }
 
-/* Иконки рисуются контуром и наследуют цвет кнопки: на тёмном кадре они
-   должны читаться, а не зависеть от набора эмодзи в системе. */
+/* The icons are drawn with a stroke and inherit the button's colour: on a dark
+   frame they must read, and not depend on the emoji set in the system. */
 .icon {
   width: 20px;
   height: 20px;
   flex: none;
 }
 
-/* Кнопка без подписи: квадратная, чтобы палец попадал в неё так же, как в
-   соседние с текстом. */
+/* A button without a caption: square, so the finger hits it the same way as
+   the neighbouring ones with text. */
 #links .icon-only,
 #stage-bar button.icon-only {
   padding: 8px;

@@ -1,271 +1,269 @@
-# Офлайн-кеш роликов на планшете
+# Offline video cache on the tablet
 
-Замысел. 2026-11-04.
+Design. 2026-11-04.
 
-## Зачем
+## Why
 
-Демон живёт на компьютере и работает, пока компьютер включён. Планшет лежит в
-другой комнате, и хозяин хочет смотреть уже переведённые ролики тогда, когда
-компьютер выключен — вечером, в дороге, когда угодно. Сегодня это невозможно:
-страницу раздаёт демон, а титры приходят по сокету от него же. Нет демона — нет
-даже страницы.
+The daemon lives on the computer and works while the computer is on. The tablet lies in
+another room, and the owner wants to watch already translated videos when the
+computer is off — in the evening, on the road, whenever. Today this is impossible:
+the page is served by the daemon, and the subtitles come over a socket from it as well. No daemon — no
+page either.
 
-Значит у планшета должна появиться своя копия: и страница, и ролик, и обе
-строки титров. Компьютер остаётся движком перевода; планшет — ещё и хранилищем
-того, что уже переведено.
+So the tablet must get its own copy: the page, the video and both
+subtitle lines. The computer remains the translation engine; the tablet is also a store
+of what has already been translated.
 
-## Сцена
+## Scene
 
-Хозяин жмёт «Поделиться» в приложении YouTube, открывается наша страница,
-демон начинает переводить. На сцене есть переключатель «кеш», по умолчанию
-выключенный. Хозяин включает его — ролик начинает копироваться на планшет.
-Копирование не ждёт конца перевода: готовый mp4 появляется задолго до последней
-переведённой фразы, поэтому качается он, а титры дописываются по мере прихода.
-К концу перевода на устройстве лежат и картинка, и титры. Дальше ролик играет
-уже из копии.
+The owner presses “Share” in the YouTube app, our page opens,
+the daemon starts translating. On the scene there is a “cache” toggle, off by default. The owner turns it on — the video starts copying to the tablet.
+Copying does not wait for the translation to end: the finished mp4 appears long before the last
+translated phrase, so it is the mp4 that is downloaded, and the subtitles are appended as they arrive.
+By the end of the translation the device holds both the picture and the subtitles. From then on the video plays
+from the copy.
 
-Вечером компьютер выключен. Хозяин открывает приложение на планшете — видит
-тот же список, у сохранённых роликов пометка «на устройстве». Нажимает —
-смотрит с титрами. Если нажмёт на ролик, которого нет на устройстве, — увидит
-честное сообщение, что демона нет и этот ролик не сохранён.
+In the evening the computer is off. The owner opens the app on the tablet — sees
+the same list, with saved videos marked “on device”. Presses —
+watches with subtitles. If he presses a video that is not on the device, he
+sees an honest message that there is no daemon and this video is not saved.
 
-## Решения хозяина
+## Owner's decisions
 
-1. Кеширование включается вручную: переключатель «кеш» на сцене, по умолчанию
-   выключен. Без явного разрешения на устройстве ничего не оседает.
-2. Копирование начинается, как только готов mp4, не дожидаясь конца перевода.
-3. Ничего не удаляется автоматически. Не влезает — копирование не начинается, а
-   на экране цифра: сколько нужно освободить. Удаление сохранённого — вручную.
-4. Офлайн-список — тот же список, что онлайн, только с пометками у сохранённых.
-5. Нажатие на несохранённый ролик офлайн — проверка и сообщение, что его нет на
-   устройстве и демон недоступен.
-6. Кеш — про текущий ролик, а не общая настройка.
+1. Caching is enabled manually: a “cache” toggle on the scene, off by default.
+   Without explicit permission nothing settles on the device.
+2. Copying starts as soon as the mp4 is ready, without waiting for the end of the translation.
+3. Nothing is deleted automatically. Doesn't fit — copying does not start, and
+   the screen shows a number: how much must be freed. Deleting a saved one is manual.
+4. The offline list is the same list as online, only with marks on the saved ones.
+5. Pressing a non-saved video offline — a check and a message that it is not
+   on the device and the daemon is unavailable.
+6. The cache is about the current video, not a global setting.
 
-## Мои решения (проверить при чтении)
+## My decisions (to be checked on reading)
 
-- Переключатель «кеш» стоит слева сверху рядом с ⛶ и сам показывает состояние:
-  «кеш» (выкл), «кеш 37%» (копирую), «кеш ✓ · 400 МБ» (сохранён). Повторное
-  нажатие во время копирования отменяет его и убирает недокачанное.
-- Полная копия — предпочтительный источник воспроизведения всегда, не только
-  офлайн: если она есть, ролик играет с планшета, и обрыв связи с демоном на
-  просмотр больше не влияет.
-- Когда копирование завершилось во время просмотра, плеер переключается на
-  копию без потери места, паузы и строк.
-- Титры сохраняются по мере прихода, а не в конце. Значит офлайн покажет то, что
-  успело перевестись; дальше строк нет — и это честно написано в статусе.
-- Пока переключатель выключен, не сохраняется ничего, включая титры: кеш титров
-  без спроса — тот же кеш. Включил посреди ролика — сохраняется всё, что к этому
-  моменту пришло в браузер.
-- Пометка в списке: «на устройстве» и размер («на устройстве · 400 МБ») рядом с
-  существующей пометкой «готово/готовится»; у сохранённого ролика есть кнопка
-  «удалить».
-- Свободное место спрашивается у браузера (`navigator.storage.estimate()`) перед
-  началом копирования, с запасом 200 МБ — иначе квота кончится посреди записи.
-- При первом копировании приложение просит у браузера постоянное хранилище
-  (`navigator.storage.persist()`), чтобы кеш не вытеснялся при нехватке места на
-  планшете.
-- Повторное копирование ролика заменяет прежнюю копию.
-- Копирование живёт в открытой странице: ушёл со сцены к списку — оно
-  продолжается; закрыл приложение или уснул экран — встало, и при следующем
-  заходе с живым демоном начнётся заново. Фоновой загрузки после закрытия в этом
-  замысле нет.
-- Размер до начала копирования узнаём у самого файла коротким HEAD-запросом:
-  `/v1/videos/{id}` отдаёт только состояние и сообщение, а лезть в демон за новым
-  полем ради одной цифры незачем. Тело при HEAD не передаётся, так что обещание
-  «не влезает — не начинаем» держится.
-- Включённый «кеш» не запоминается: после закрытия приложения ролик сам не
-  докачивается, нажать нужно снова. Иначе 400 МБ уходили бы без свежего спроса.
-- Пока копирование идёт, ролик остаётся подписанным на реплики, даже если
-  зритель ушёл к списку: иначе сохранённые титры обрывались бы на моменте ухода.
-  Подписка снимается вместе с окончанием копирования.
-- Нажатие на «кеш ✓» ничего не делает: удаление сохранённого — только кнопкой в
-  списке, чтобы дорогой файл нельзя было снести одним неверным касанием.
-- Офлайн-главная не ждёт молча: если сохранённый список есть, он рисуется сразу,
-  а запрос к демону идёт с коротким сроком (около трёх секунд) и заменяет список,
-  когда ответит; не ответил — показываем офлайн-состояние.
+- The “cache” toggle sits top left next to ⛶ and shows the state itself:
+  “cache” (off), “cache 37%” (copying), “cache ✓ · 400 MB” (saved). Pressing again
+  during copying cancels it and removes the partially downloaded data.
+- A full copy is the preferred playback source always, not only
+  offline: if it exists, the video plays from the tablet, and a connection drop with the daemon no longer affects
+  viewing.
+- When copying finishes during viewing, the player switches to
+  the copy without losing position, pause or lines.
+- Subtitles are saved as they arrive, not at the end. So offline will show what
+  managed to get translated; beyond that there are no lines — and this is stated honestly in the status.
+- While the toggle is off, nothing is saved, including subtitles: a subtitle cache
+  without asking is the same cache. Turned on mid-video — everything that has arrived in the browser by that
+  moment is saved.
+- Mark in the list: “on device” and the size (“on device · 400 MB”) next to
+  the existing “ready/preparing” mark; a saved video has a “delete” button.
+- Free space is asked of the browser (`navigator.storage.estimate()`) before
+  copying starts, with a 200 MB margin — otherwise the quota would run out mid-write.
+- On the first copy the app asks the browser for persistent storage
+  (`navigator.storage.persist()`), so that the cache is not evicted when the tablet runs short of space.
+- Re-copying a video replaces the previous copy.
+- Copying lives in the open page: went from the scene to the list — it
+  continues; closed the app or the screen slept — it stopped, and on the next
+  visit with a live daemon it will start over. There is no background download after closing in this
+  design.
+- The size before copying starts is learned from the file itself with a short HEAD request:
+  `/v1/videos/{id}` returns only state and a message, and going into the daemon for a new
+  field for the sake of one number is pointless. The body is not sent on HEAD, so the promise
+  “doesn't fit — we don't start” holds.
+- An enabled “cache” is not remembered: after the app is closed the video is not
+  resumed by itself, it must be pressed again. Otherwise 400 MB would go without a fresh
+  request.
+- While copying is running, the video stays subscribed to cues, even if
+  the viewer went to the list: otherwise the saved subtitles would break off at the moment of leaving.
+  The subscription is removed together with the end of copying.
+- Pressing “cache ✓” does nothing: deleting a saved one is only by the button in
+  the list, so that an expensive file cannot be wiped with one wrong touch.
+- The offline home doesn't wait silently: if a saved list exists, it is drawn immediately,
+  and the request to the daemon goes with a short timeout (about three seconds) and replaces the list
+  when it answers; if it didn't answer — we show the offline state.
 
-## Не-цели
+## Non-goals
 
-- Перевод офлайн. Он требует модели и карты — это движок компьютера.
-- Добавление ссылок и скачивание новых роликов офлайн.
-- Синхронизация кешей между устройствами или браузерами.
-- Автоматическое удаление, лимиты и вытеснение по возрасту.
-- Докачка недокачанного mp4 после закрытия приложения.
-- Кеширование частичного mp4: на устройство попадает только целый файл.
+- Translating offline. It requires a model and a GPU — that is the computer's engine.
+- Adding links and downloading new videos offline.
+- Syncing caches between devices or browsers.
+- Automatic deletion, limits and eviction by age.
+- Resuming a partially downloaded mp4 after the app is closed.
+- Caching a partial mp4: only a whole file lands on the device.
 
-## Ограничения
+## Constraints
 
-- Страница сейчас целиком приходит от демона (`StaticFiles` на `/`). Офлайн без
-  сервис-воркера невозможен — это не оптимизация, а условие задачи.
-- Сервис-воркер требует https; он уже есть, с установленным на планшет своим CA.
-- 26 минут ролика — около 400 МБ. Квота хранилища у Chromium — доля свободного
-  диска; браузер вправе вытеснить данные при нехватке места, `persist()` лишь
-  снижает эту вероятность.
-- Кеш принадлежит конкретному браузеру на конкретном планшете: очистка данных
-  сайта его уничтожает.
-- Проект без сборки: ES-модули, чистая логика в `page/logic.js` (проверяется
-  `node --test`), DOM и сеть в `page/app.js`, проводка проверяется pytest.
-- Демон раздаёт `/v1/*` только с токеном; `page/*` — публично. Сервис-воркер
-  лежит рядом со страницей и отдаётся тем же `StaticFiles`.
+- The page currently comes entirely from the daemon (`StaticFiles` on `/`). Offline without
+  a service worker is impossible — it is not an optimization but a condition of the task.
+- A service worker requires https; it already exists, with its own CA installed on the tablet.
+- 26 minutes of video is about 400 MB. The storage quota in Chromium is a share of free
+  disk; the browser may evict data when space runs short, `persist()` only
+  lowers that probability.
+- The cache belongs to a specific browser on a specific tablet: clearing site
+  data destroys it.
+- A project without a build: ES modules, pure logic in `page/logic.js` (checked
+  by `node --test`), DOM and network in `page/app.js`, the wiring is checked by pytest.
+- The daemon serves `/v1/*` only with a token; `page/*` is public. The service worker
+  lies next to the page and is served by the same `StaticFiles`.
 
-## Устройство
+## Device
 
-### Сервис-воркер: страница без демона
+### Service worker: a page without the daemon
 
-Новый `page/sw.js`, регистрируется из `app.js`. При установке кладёт в
-Cache Storage оболочку: `/`, `/app.js`, `/logic.js`, `/style.css`,
-`/manifest.json`, `/icon-192.png`, `/icon-512.png`. Запросы к `/v1/*` идут
-мимо него — это живые данные, их кеширует не он.
+A new `page/sw.js`, registered from `app.js`. On install it puts the shell into
+Cache Storage: `/`, `/app.js`, `/logic.js`, `/style.css`,
+`/manifest.json`, `/icon-192.png`, `/icon-512.png`. Requests to `/v1/*` bypass
+it — these are live data, it doesn't cache them.
 
-Правило отдачи — сеть, а при неудаче кеш (network-first): пока демон жив,
-страница обновляется сразу после выкладки; без демона отдаётся последняя
-сохранённая оболочка. Обновление оболочки — при каждом успешном ответе сети.
+The serving rule is network, and on failure cache (network-first): while the daemon is alive,
+the page updates right after deployment; without the daemon the last
+saved shell is served. The shell is updated on every successful network response.
 
-Версия кеша — константа в `sw.js`; при изменении набора файлов она меняется, и
-старый кеш удаляется на активации.
+The cache version is a constant in `sw.js`; when the file set changes it changes, and
+the old cache is deleted on activation.
 
-### Хранилище: IndexedDB
+### Storage: IndexedDB
 
-База `yt-trans`, две таблицы:
+Database `yt-trans`, two tables:
 
-- `videos` — ключ `videoId`, поля: `videoId`, `linkId`, `linkTitle`, `title`,
-  `duration`, `size`, `savedAt`, `blob` (сам mp4), `cues` (массив реплик в том
-  виде, в каком их присылает демон), `language`.
-- `meta` — ключ `links`: последний известный ответ `/v1/links`; ключ `episodes`
-  — списки роликов ссылок, которые открывали онлайн (`linkId` → `{title,
-  videos}`). Этого хватает, чтобы офлайн-главная выглядела как онлайн.
+- `videos` — key `videoId`, fields: `videoId`, `linkId`, `linkTitle`, `title`,
+  `duration`, `size`, `savedAt`, `blob` (the mp4 itself), `cues` (array of cues in the
+  form in which the daemon sends them), `language`.
+- `meta` — key `links`: the last known response of `/v1/links`; key `episodes`
+  — video lists of links that were opened online (`linkId` → `{title,
+  videos}`). This is enough for the offline home to look like the online one.
 
-Копия кладётся в базу только целиком: пока mp4 качается, он живёт как Blob в
-памяти/дисковом хранилище blob'ов Chromium и в базу попадает одним действием в
-конце. Прерванное копирование не оставляет в базе ничего.
+The copy is put into the database only whole: while the mp4 is downloading, it lives as a Blob in
+memory/Chromium's disk blob storage and enters the database in one action at
+the end. An interrupted copy leaves nothing in the database.
 
-Крупные Blob'ы Chromium держит на диске, память не растёт; `Blob.slice` дешёв,
-поэтому воспроизведение из копии не требует ни сервис-воркера, ни обработки
-Range.
+Chromium keeps large Blobs on disk, memory does not grow; `Blob.slice` is cheap,
+so playback from a copy requires neither a service worker nor Range
+handling.
 
-### Копирование
+### Copying
 
-1. Перед стартом: `navigator.storage.persist()` (один раз за жизнь страницы),
-   HEAD-запрос к `/v1/videos/{id}/file` за `Content-Length` и `estimate()`. Если
-   свободного места меньше размера файла плюс запас — отказ с цифрой; тело не
-   качается.
-2. `fetch('/v1/videos/{id}/file?token=…')`. Размер сверяется с `Content-Length`
-   ответа; поток оборачивается счётчиком байт, который двигает проценты на
-   кнопке.
-3. `new Response(счётчик).blob()` → запись в `videos` вместе с накопленными
-   титрами. Если во время копирования пришли новые титры, в базу попадает
-   актуальный набор.
-4. Ошибка сети, отмена переключателем, уход страницы — частичное отбрасывается,
-   кнопка возвращается в «выкл» (или в «ошибка», если причина — сеть).
+1. Before start: `navigator.storage.persist()` (once per page lifetime),
+   a HEAD request to `/v1/videos/{id}/file` for `Content-Length` and `estimate()`. If
+   free space is less than the file size plus the margin — refusal with a number; the body is not
+   downloaded.
+2. `fetch('/v1/videos/{id}/file?token=…')`. The size is checked against the `Content-Length`
+   of the response; the stream is wrapped in a byte counter that moves the percentages on the
+   button.
+3. `new Response(counter).blob()` → write to `videos` together with the accumulated
+   subtitles. If new subtitles arrived during copying, the current set goes into
+   the database.
+4. Network error, cancellation by the toggle, page leaving — the partial is discarded,
+   the button returns to “off” (or to “error”, if the cause is the network).
 
-### Воспроизведение
+### Playback
 
-- Копия есть → играем из неё: `URL.createObjectURL(blob)` в `src`, адрес
-  отзывается при уходе со сцены или смене ролика.
-- Копии нет → как сегодня, `src` на демон; офлайн — сообщение.
-- Копирование завершилось во время просмотра → `src` меняется на копию,
-  `currentTime` и состояние «пауза/играет» восстанавливаются по
+- A copy exists → play from it: `URL.createObjectURL(blob)` in `src`, the address
+  is revoked when leaving the scene or changing the video.
+- No copy → as today, `src` to the daemon; offline — a message.
+- Copying finished during viewing → `src` changes to the copy,
+  `currentTime` and the “paused/playing” state are restored on
   `loadedmetadata`.
 
-### Титры
+### Subtitles
 
-- Каждое событие `snapshot`/`cues` для ролика с включённым кешем дописывается в
-  `videos.cues` (слияние по `i` уже делает `takeCues`).
-- Открытие ролика: если есть копия, титры берутся из базы сразу — они не зависят
-  от сокета; когда демон жив, поверх ложатся живые события (они полнее).
-- Офлайн с копией: рисуем сохранённое, в статусе «демона нет — титры из
-  сохранённого».
-- Офлайн без копии: сообщение, сцена не открывается.
+- Each `snapshot`/`cues` event for a video with caching enabled is appended to
+  `videos.cues` (`takeCues` already merges by `i`).
+- Opening a video: if a copy exists, the subtitles are taken from the database immediately — they do not depend
+  on the socket; when the daemon is alive, live events are laid over them (they are more complete).
+- Offline with a copy: we draw the saved one, in the status “no daemon — subtitles from the
+  saved copy”.
+- Offline without a copy: a message, the scene does not open.
 
-### Офлайн-главная
+### Offline home
 
-- `loadLinks()` упал — берём `meta.links` из базы и рисуем тот же список ссылок.
-- Ссылки, чьи ролики сохранены, раскрыты сразу: под строкой ссылки видны
-  сохранённые эпизоды, помеченные `на устройстве` и размером, с кнопкой
-  `удалить`. Нажимать ссылку, чтобы их увидеть, не нужно — офлайн она всё равно
-  ответить не может.
-- Ссылки без сохранённого остаются в списке; нажатие на них даёт сообщение, что
-  демона нет и роликов этой ссылки на устройстве нет.
-- Если `meta.links` нет, но сохранённые ролики есть (например, базу не успели
-  наполнить списком), показываем их плоским списком «на устройстве».
-- Нет и роликов — «демона нет, на устройстве ничего не сохранено».
+- `loadLinks()` failed — we take `meta.links` from the database and draw the same list of links.
+- Links whose videos are saved are expanded immediately: under the link row the
+  saved episodes are visible, marked `on device` and with a size, with a `delete`
+  button. There is no need to press the link to see them — offline it cannot
+  answer anyway.
+- Links without a saved one remain in the list; pressing them gives a message that there is
+  no daemon and no videos of this link on the device.
+- If there is no `meta.links` but there are saved videos (for example, the database did not have time
+  to be filled with the list), we show them as a flat “on device” list.
+- No videos either — “no daemon, nothing saved on the device”.
 
-### Как понимаем, что демона нет
+### How we know there is no daemon
 
-Не `navigator.onLine`: интернет может быть, а демон — нет, и наоборот. Признак —
-последний запрос к демону не удался (fetch бросил, сокет не открылся); снимается
-следующим успешным ответом. Офлайн-режим — это UI-состояние, а не сетевой факт.
+Not `navigator.onLine`: there may be internet and no daemon, and vice versa. The sign is
+that the last request to the daemon failed (fetch threw, the socket did not open); it is cleared
+by the next successful response. Offline mode is a UI state, not a network fact.
 
-## Что видит хозяин
+## What the owner sees
 
-- Кнопка «кеш»: «кеш» / «кеш 37%» / «кеш ✓ · 400 МБ».
-- Строка списка: «Название · 26:00 · готово · на устройстве · 400 МБ» и
-  «удалить» у сохранённого. Офлайн вместо «готово» — «сохранено, демона нет».
-- Статус на сцене: «копирую на устройство… 37%», «сохранено на устройстве»,
-  «не хватает места: нужно ещё 1.2 ГБ, свободно 300 МБ».
-- Офлайн: «демона нет — играю сохранённое», «демона нет, этого ролика на
-  устройстве нет».
+- The “cache” button: “cache” / “cache 37%” / “cache ✓ · 400 MB”.
+- List row: “Title · 26:00 · ready · on device · 400 MB” and
+  “delete” on a saved one. Offline, instead of “ready” — “saved, no daemon”.
+- Status on the scene: “copying to device… 37%”, “saved on device”,
+  “not enough space: 1.2 GB more needed, 300 MB free”.
+- Offline: “no daemon — playing the saved copy”, “no daemon, this video is not
+  on the device”.
 
-## Отказы и крайние случаи
+## Failures and edge cases
 
-- Место кончилось до старта — отказ с цифрой, ничего не создаётся.
-- Место кончилось в процессе (файл вырос или квоту подвинули) — копирование
-  останавливается, часть отбрасывается, сообщение.
-- Приложение закрыли посреди копирования — в базе ничего нет; при следующем
-  заходе копирование само не возобновляется: «кеш» снова выключен, нужно нажать.
-- Демон умер посреди просмотра некэшированного ролика — плеер играет из буфера,
-  пока может; офлайн-режим включается, копии нет, дальше — как решил браузер.
-- Сервис-воркер не зарегистрировался (http, старый браузер) — онлайн работает
-  как раньше; офлайн недоступен, об этом сказано один раз.
-- Браузер вытеснил копию — при открытии её не находится, строка чистится, ролик
-  играет с демона, если он жив.
-- Тот же ролик копируется повторно — старая копия заменяется.
-- Кеш включили, когда перевод уже частично пришёл — сохраняется всё, что есть в
-  памяти страницы на этот момент.
+- Space ran out before the start — refusal with a number, nothing is created.
+- Space ran out during the process (the file grew or the quota was shifted) — copying
+  stops, the partial is discarded, a message.
+- The app was closed mid-copy — nothing is in the database; on the next
+  visit copying does not resume by itself: “cache” is off again, it must be pressed.
+- The daemon died during viewing of a non-cached video — the player plays from the buffer
+  while it can; offline mode turns on, there is no copy, further — as the browser decided.
+- The service worker did not register (http, old browser) — online works
+  as before; offline is unavailable, this is said once.
+- The browser evicted the copy — on opening it is not found, the row is cleaned, the video
+  plays from the daemon if it is alive.
+- The same video copied again — the old copy is replaced.
+- The cache was turned on when the translation had already partly arrived — everything in the page's
+  memory at that moment is saved.
 
-## Проверка
+## Verification
 
-Чистые функции в `page/logic.js`, `node --test page/logic.test.mjs`:
+Pure functions in `page/logic.js`, `node --test page/logic.test.mjs`:
 
-- `formatBytes` — байты в «400 МБ» / «1.2 ГБ», округление и разделитель.
-- `copyState` — состояние копирования по (включено, прогресс, размер, ошибка).
-- `copyVerdict` — можно ли начинать по (нужно, свободно, запас).
-- `cacheLabel` — пометка строки списка.
-- `mergeCues` — слияние сохранённых и пришедших реплик по `i`.
-- `playSource` — копия / демон / отказ по (есть копия, демон жив).
-- `percent` — проценты без деления на ноль и с потолком 100.
+- `formatBytes` — bytes to “400 MB” / “1.2 GB”, rounding and separator.
+- `copyState` — copying state by (enabled, progress, size, error).
+- `copyVerdict` — whether it can start by (needed, free, margin).
+- `cacheLabel` — the list row mark.
+- `mergeCues` — merging saved and incoming cues by `i`.
+- `playSource` — copy / daemon / refusal by (copy exists, daemon alive).
+- `percent` — percentages without division by zero and capped at 100.
 
-Проводка, `tests/test_page_wiring.py`:
+Wiring, `tests/test_page_wiring.py`:
 
-- кнопка «кеш» есть в разметке сцены, `app.js` её ищет и вешает обработчик;
-- `index.html` подключает регистрацию сервис-воркера (или `app.js` её зовёт);
-- `page/sw.js` существует, перечисляет оболочку и не перехватывает `/v1/`;
-- имена базы и таблиц встречаются и в `app.js`, и в тесте — в одном месте.
+- the “cache” button is in the scene markup, `app.js` looks it up and attaches a handler;
+- `index.html` includes the service worker registration (or `app.js` calls it);
+- `page/sw.js` exists, lists the shell and does not intercept `/v1/`;
+- the database and table names occur both in `app.js` and in the test — in one place.
 
-Отдача, `tests/test_page_serving.py`:
+Serving, `tests/test_page_serving.py`:
 
-- `/sw.js` отдаётся без токена с типом JavaScript и пригоден для регистрации на
-  корне (`Service-Worker-Allowed` не нужен, файл лежит в корне области).
+- `/sw.js` is served without a token with the JavaScript type and is suitable for registration at
+  the root (`Service-Worker-Allowed` is not needed, the file lies in the root of the scope).
 
-Ручная проверка в Chromium через Playwright:
+Manual check in Chromium via Playwright:
 
-- локальный mp4 раздаётся статикой, приложение копирует его, копия появляется в
+- a local mp4 is served as static, the app copies it, the copy appears in
   IndexedDB;
-- сервер гасится, страница перезагружается и открывается из сервис-воркера;
-- сохранённый ролик играет, перемотка работает, титры рисуются;
-- несохранённый ролик даёт сообщение.
+- the server is killed, the page reloads and opens from the service worker;
+- the saved video plays, seeking works, subtitles are drawn;
+- a non-saved video gives a message.
 
-Не покрывается автотестами и признаётся риском: поведение сервис-воркера при
-закрытии вкладки, реальное вытеснение браузером, память и время на файле в
-400 МБ, поведение Android при сне экрана.
+Not covered by automated tests and acknowledged as a risk: service worker behaviour when the tab is
+closed, real eviction by the browser, memory and time on a 400 MB file,
+Android behaviour when the screen sleeps.
 
-## Что осталось строителю
+## What is left to the builder
 
-- Точные имена функций и модулей, раскладка IndexedDB по файлам, версия схемы
-  базы.
-- Текст сообщений и подписей — в духе существующих, короткий.
-- Как именно устроен счётчик байт и какие события шлют проценты (частота
-  перерисовки).
-- Порядок переключения `src` без мигания.
-- Формат хранения титров: как есть (`i`, `start`, `end`, `lines`, `study`,
-  `failed`) или только показываемые поля.
+- Exact names of functions and modules, the IndexedDB layout by files, the database schema
+  version.
+- The text of messages and labels — in the spirit of the existing ones, short.
+- How exactly the byte counter is arranged and which events send percentages (redraw
+  frequency).
+- The order of switching `src` without flicker.
+- The subtitle storage format: as is (`i`, `start`, `end`, `lines`, `study`,
+  `failed`) or only the displayed fields.

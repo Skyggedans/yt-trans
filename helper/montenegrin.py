@@ -1,29 +1,29 @@
-"""Черногорский: как его просить и как проверить, что получил именно его.
+"""Montenegrin: how to ask for it and how to verify that it's exactly what you got.
 
-Черногорский от сербского отличает прежде всего рефлекс ятя: иекавский
-(mlijeko, vrijeme, djevojka) против екавского (mleko, vreme, devojka). Лексика
-и синтаксис при этом сербские, а не хорватские — hljeb, а не kruh; prodavnica;
-конструкция «da + настоящее время» вместо инфинитива.
+What distinguishes Montenegrin from Serbian is above all the reflex of yat: ijekavian
+(mlijeko, vrijeme, djevojka) versus ekavian (mleko, vreme, devojka). The lexis and
+syntax are meanwhile Serbian, not Croatian — hljeb, not kruh; prodavnica; the
+construction "da + present" instead of the infinitive.
 
-Замерено на локальных моделях: достаточно назвать цель «crnogorski jezik», и
-обе выдают настоящую иекавицу, тогда как на «сербский» на том же входе выдают
-чистую екавицу. Описывать признаками не обязательно, но с ними слабее модель
-ошибается реже.
+Measured on local models: it's enough to name the goal "crnogorski jezik", and both
+produce genuine ijekavica, whereas for "Serbian" on the same input they produce pure
+ekavica. Describing it with features isn't mandatory, but with them a weaker model errs
+less often.
 
-Буквы ś и ź в стандарт входят, но в живом тексте не используются: ноль вхождений
-в полутора мегабайтах текста черногорских изданий и ноль в корпусе субтитров на
-65 тысяч строк. Требовать их — уводить модель с распределения ради того, чего
-читатель всё равно не ждёт.
+The letters ś and ź are part of the standard but aren't used in living text: zero
+occurrences in a megabyte and a half of text from Montenegrin publications and zero in
+a subtitle corpus of 65 thousand lines. Requiring them is steering the model away from
+the distribution for the sake of something the reader doesn't expect anyway.
 """
 
 from __future__ import annotations
 
 import re
 
-# Пары маркеров: иекавская форма против екавской. Формы точные, не основы —
-# у слова vrijeme косвенные падежи выглядят «екавскими» (vremena, vremenu,
-# vremenom) и остаются при этом совершенно правильными. Проверка по основе
-# ложно срабатывала бы на каждом из них.
+# Marker pairs: ijekavian form versus ekavian. The forms are exact, not stems —
+# for the word vrijeme the oblique cases look "ekavian" (vremena, vremenu,
+# vremenom) and remain perfectly correct. Checking by stem would falsely trigger on
+# every one of them.
 MARKERS: tuple[tuple[str, str], ...] = (
     (r"mlijek\w*", r"mlek\w*"),
     (r"vrijeme|vrijemena", r"vreme\b|vremena\b"),
@@ -55,32 +55,32 @@ MARKERS: tuple[tuple[str, str], ...] = (
     (r"vjer\w*", r"ver\w*"),
 )
 
-# Маркеры, которые пришлось отбросить, чтобы не возвращаться к ним:
-#   svet   — совпадает со значением «святой» (sveti, sveta, svetog);
-#   let    — «полёт» сталкивается с ekavskim leto «лето»;
-#   pre    — голое совпадает с любой приставкой (predsjednik, preko, prestani);
-#   vremen — правильные косвенные падежи от vrijeme выглядят екавскими.
+# Markers that had to be discarded so as not to come back to them:
+#   svet   — coincides with the meaning "holy" (sveti, sveta, svetog);
+#   let    — "flight" collides with ekavian leto "summer";
+#   pre    — bare coincides with any prefix (predsjednik, preko, prestani);
+#   vremen — the correct oblique cases of vrijeme look ekavian.
 
-# Хорватская лексика. Иекавица сама по себе черногорского не доказывает —
-# хорватский тоже иекавский, и отличается он именно словарём и инфинитивом.
+# Croatian lexis. Ijekavica by itself doesn't prove Montenegrin —
+# Croatian is ijekavian too, and it differs precisely in vocabulary and the infinitive.
 CROATIAN = re.compile(
     r"\b(kruh\w*|tjedan\w*|tisuć\w*|vlak\w*|glazb\w*|općin\w*|vjerojatno|"
     r"puha\w*|tvrtk\w*|zrakoplov\w*|nogomet\w*|kolodvor\w*|"
-    # histori- (босния и хорватия) против черногорского istorij-; kemij- против
-    # hemij-; točk- против tačk-; uvjet против uslov. Замечено на живом выводе:
-    # модель выдала «ući u historiju», и это единственная протечка на 270 репликах.
+    # histori- (Bosnia and Croatia) versus Montenegrin istorij-; kemij- versus
+    # hemij-; točk- versus tačk-; uvjet versus uslov. Noticed on live output:
+    # the model produced "ući u historiju", and it was the only leak in 270 utterances.
     r"histori\w*|kemij\w*|točk\w*|uvjet\w*)\b",
     re.IGNORECASE,
 )
 
-# Буквы, которых в живом черногорском тексте не бывает.
+# Letters that don't occur in living Montenegrin text.
 FORBIDDEN_LETTERS = re.compile(r"[śźŚŹ]")
 
 _IJEKAVIAN = [re.compile(rf"\b(?:{ij})\b", re.IGNORECASE) for ij, _ in MARKERS]
 _EKAVIAN = [re.compile(rf"\b(?:{ek})\b", re.IGNORECASE) for _, ek in MARKERS]
 
-# Что подсказать модели, если она всё-таки сбивается на екавицу. Пары идут
-# в промпт как обычный глоссарий и заметно вычищают остаточные срывы.
+# What to hint to the model if it does slip into ekavian. The pairs go
+# into the prompt as an ordinary glossary and noticeably clean up residual slips.
 IJEKAVIAN_HINTS: dict[str, str] = {
     "mleko": "mlijeko",
     "hleb": "hljeb",
@@ -124,7 +124,7 @@ namjeru iz konteksta, ne izmišljaj činjenice."""
 
 
 def score(text: str) -> dict:
-    """Посчитать признаки в тексте: иекавские, екавские, хорватские, запрещённые буквы."""
+    """Count features in the text: ijekavian, ekavian, Croatian, forbidden letters."""
     ijekavian = sum(len(rx.findall(text)) for rx in _IJEKAVIAN)
     ekavian = sum(len(rx.findall(text)) for rx in _EKAVIAN)
     total = ijekavian + ekavian
@@ -138,31 +138,31 @@ def score(text: str) -> dict:
     }
 
 
-# Порог взят от живого корпуса, а не с потолка: настоящие черногорские субтитры
-# дают 93.7% чистоты по этому же набору маркеров. Требовать 100% значит
-# обречь себя на бесконечные повторы там, где и человек пишет иначе.
+# The threshold is taken from a live corpus, not from thin air: real Montenegrin
+# subtitles give 93.7% purity by this same set of markers. Demanding 100% means dooming
+# yourself to endless retries where even a human writes differently.
 MIN_RATIO = 0.85
 MAX_EKAVIAN = 2
 
 
 def check(text: str) -> str | None:
-    """Что не так с текстом как с черногорским. None — всё в порядке.
+    """What's wrong with the text as Montenegrin. None — everything is fine.
 
-    Проверяется батч целиком, а не отдельная реплика: в короткой фразе может
-    не оказаться ни одного слова с ятем, и оценивать её по отдельности бессмысленно.
+    The batch is checked as a whole, not an individual utterance: a short phrase may
+    contain no word with yat, and evaluating it separately is meaningless.
     """
     result = score(text)
 
     if result["forbidden"]:
-        return f"буквы ś/ź: {result['forbidden']}"
+        return f"letters ś/ź: {result['forbidden']}"
 
     if result["croatian"]:
-        return f"хорватская лексика: {result['croatian']}"
+        return f"Croatian lexis: {result['croatian']}"
 
     if result["ekavian"] >= MAX_EKAVIAN and result["ratio"] < MIN_RATIO:
         return (
-            f"екавица: {result['ekavian']} против {result['ijekavian']} иекавских "
-            f"({result['ratio']:.0%} при пороге {MIN_RATIO:.0%})"
+            f"ekavica: {result['ekavian']} versus {result['ijekavian']} ijekavian "
+            f"({result['ratio']:.0%} at a threshold of {MIN_RATIO:.0%})"
         )
 
     return None

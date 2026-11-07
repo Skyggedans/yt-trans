@@ -1,9 +1,10 @@
-"""Коды языков, правило определителя и решение о языке, общие для демона и воркера распознавания.
+"""Language codes, the detector rule and the language decision, shared by the daemon and the recognition worker.
 
-Только стандартная библиотека. Модуль грузят и демон, и воркер, а faster_whisper
-тянет ctranslate2, av и tokenizers, которым в процессе демона делать нечего: список
-кодов Whisper поэтому скопирован сюда, а не импортирован. Что сторонних импортов тут
-не появится, сторожит test_language_module_imports_only_the_standard_library.
+Standard library only. The module is loaded by both the daemon and the worker, and
+faster_whisper pulls in ctranslate2, av and tokenizers, which have no business in the
+daemon process: the list of Whisper codes is therefore copied here rather than imported.
+test_language_module_imports_only_the_standard_library watches that no third-party
+imports appear here.
 """
 
 from __future__ import annotations
@@ -12,9 +13,9 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-# Ровно сто кодов faster-whisper 1.2.1 (faster_whisper.tokenizer._LANGUAGE_CODES).
-# Копия, а не импорт: имя закрытое, а импорт втянул бы в демон весь faster_whisper.
-# Разойдётся с установленной версией — упадёт тест.
+# Exactly one hundred codes of faster-whisper 1.2.1 (faster_whisper.tokenizer._LANGUAGE_CODES).
+# A copy, not an import: the name is private, and an import would drag all of
+# faster_whisper into the daemon. If it diverges from the installed version — the test will fail.
 WHISPER_CODES: frozenset[str] = frozenset({
     "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs",
     "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu",
@@ -26,24 +27,24 @@ WHISPER_CODES: frozenset[str] = frozenset({
     "yue", "zh",
 })
 
-# Написания, которых Whisper не знает, но которые значат его код. sh, me и cnr —
-# сербский под другими именами; остальные — старые или альтернативные коды ISO,
-# которыми пользуются YouTube и таблицы языков.
+# Spellings Whisper doesn't know but that mean its code. sh, me and cnr —
+# Serbian under other names; the rest are old or alternative ISO codes
+# used by YouTube and language tables.
 SUBSTITUTES: dict[str, str] = {
     "sh": "sr", "me": "sr", "cnr": "sr",
     "iw": "he", "jv": "jw", "fil": "tl", "nb": "no", "in": "id",
 }
 
-# «Языка нет»: пусто и auto в config.toml, und, zxx, mul и mis из ISO 639.
+# "No language": empty and auto in config.toml, und, zxx, mul and mis from ISO 639.
 NO_LANGUAGE: frozenset[str] = frozenset({"", "auto", "und", "zxx", "mul", "mis"})
 
-# Три токена Whisper для одного языка. bs, hr и sr попали в его обучение из VoxLingua107
-# по недосмотру, и выбор между ними произволен; family() сводит их к sr.
+# Three Whisper tokens for one language. bs, hr and sr got into its training from VoxLingua107
+# by oversight, and the choice between them is arbitrary; family() folds them to sr.
 BCMS: frozenset[str] = frozenset({"sr", "hr", "bs"})
 
 
 class UnknownLanguage(ValueError):
-    """Код, которого Whisper не знает и который не сводится ни к одному его коду."""
+    """A code that Whisper doesn't know and that doesn't reduce to any of its codes."""
 
     def __init__(self, raw: str) -> None:
         super().__init__(raw)
@@ -51,15 +52,15 @@ class UnknownLanguage(ValueError):
 
 
 def normalize(raw: str | None) -> str | None:
-    """Код Whisper для написания языка; None — «языка нет» (пусто, auto, und и подобные).
+    """The Whisper code for a language spelling; None — "no language" (empty, auto, und and the like).
 
-    Регион, письменность и пометки дорожек отбрасываются: «SR», «sr_RS» и «sr-Latn» —
-    это sr, «en-orig» — en. yt-dlp склеивает языки дорожек через «+»: такое значение
-    годится, только если все части сводятся к одному коду. hr и bs остаются собой —
-    это настоящие коды Whisper, а свести их к sr умеет лишь family().
+    Region, script and track annotations are discarded: "SR", "sr_RS" and "sr-Latn" are
+    sr, "en-orig" — en. yt-dlp glues track languages with "+": such a value is valid
+    only if all parts reduce to one code. hr and bs remain themselves — they're real
+    Whisper codes, and only family() can fold them to sr.
 
-    Незнакомое написание — UnknownLanguage с ИСХОДНОЙ строкой: отказ должен назвать то,
-    что написал человек, а не то, во что мы его превратили.
+    An unfamiliar spelling — UnknownLanguage with the ORIGINAL string: the refusal must
+    name what the person wrote, not what we turned it into.
     """
     if raw is None:
         return None
@@ -87,10 +88,10 @@ def normalize(raw: str | None) -> str | None:
 
 
 def hint(raw: str | None) -> str | None:
-    """normalize(), но незнакомое написание — None, а не исключение.
+    """normalize(), but an unfamiliar spelling — None, not an exception.
 
-    Для меток YouTube: незнакомое значение там значит просто «не знаем», и задание
-    из-за него падать не должно.
+    For YouTube labels: an unfamiliar value there simply means "we don't know", and a job
+    mustn't fail because of it.
     """
     try:
         return normalize(raw)
@@ -99,10 +100,10 @@ def hint(raw: str | None) -> str | None:
 
 
 def family(code: str | None) -> str | None:
-    """hint(), где hr и bs сведены к sr: для сравнения языков, не для декодера.
+    """hint(), where hr and bs are folded to sr: for comparing languages, not for the decoder.
 
-    Три токена Whisper — один язык, и «hr против sr» расхождением не считается.
-    Декодеру же отдают код как есть (normalize), а не семью.
+    Three Whisper tokens — one language, and "hr versus sr" isn't considered a discrepancy.
+    The decoder, however, is given the code as is (normalize), not the family.
     """
     resolved = hint(code)
 
@@ -110,40 +111,40 @@ def family(code: str | None) -> str | None:
 
 
 def is_bcms(code: str | None) -> bool:
-    """Это сербский, хорватский или боснийский — под любым из написаний."""
+    """Whether this is Serbian, Croatian or Bosnian — under any of the spellings."""
     return family(code) == "sr"
 
 
 def refusal(raw: str) -> str:
-    """Фраза отказа для негодного кода: что не так — первым, где исправить — следом.
+    """The refusal phrase for an invalid code: what's wrong — first, where to fix — after.
 
-    Шаблон закреплён тестом, и резать его не надо. С «serbian» фраза занимает 56 знаков
-    и умещается на бейдж; значение длиннее 11 знаков выводит её за 60 («serbo-croatian» —
-    63): бейдж обрежет хвост многоточием, полная фраза останется в подсказке, а главное,
-    «неизвестный язык «…»», стоит первым.
+    The template is pinned by a test, and it mustn't be cut. With "serbian" the phrase
+    takes 56 characters and fits on a badge; a value longer than 11 characters pushes it
+    past 60 ("serbo-croatian" — 63): the badge will cut the tail with an ellipsis, the full
+    phrase will remain in the tooltip, and most importantly, "unknown language "…"" comes first.
     """
-    return f"неизвестный язык «{raw}»: [asr] language в config.toml"
+    return f'unknown language "{raw}": [asr] language in config.toml'
 
 
-# ── Определитель: окна, правило, решение ─────────────────────────────────────────
+# ── Detector: windows, rule, decision ─────────────────────────────────────────
 
-# Константы определителя. Любая из них меняет распознавание уже закэшированных
-# роликов, поэтому правка требует поднять helper.cache.PROMPT_VERSION.
+# Detector constants. Any of them changes the recognition of already cached
+# videos, so an edit requires bumping helper.cache.PROMPT_VERSION.
 
-# Окно, в котором речи меньше, не голосует: тишина, музыка и заставка дают
-# распределение по набивке, и такое окно голосовало бы наравне с речью.
+# A window with less speech doesn't vote: silence, music and an intro produce
+# a distribution on padding, and such a window would vote on par with speech.
 MIN_SPEECH_SECONDS = 3.0
 
-# Доля сербского семейства, с которой определитель решает «сербский», даже если
-# сверху другой язык. На сербской речи Whisper тянет к английскому: 3XJLfTSZy6I
-# дал en 0.55 против 0.44 у семьи; на английском ролике семьи ноль в каждом окне.
+# The share of the Serbian family at which the detector decides "Serbian", even if
+# another language is on top. On Serbian speech Whisper pulls toward English: 3XJLfTSZy6I
+# gave en 0.55 versus 0.44 for the family; on an English video the family is zero in every window.
 BCMS_FLOOR = 0.2
 
-# Соседи, у которых сербского семейства бывает много по родству: порог их не
-# перебивает, иначе македонская или русская речь распознавалась бы сербской.
+# Neighbours whose Serbian family is often large by kinship: the threshold doesn't
+# override them, otherwise Macedonian or Russian speech would be recognized as Serbian.
 SLAVIC_NEIGHBOURS = frozenset({"mk", "bg", "sl", "ru", "uk", "be", "cs", "sk", "pl"})
 
-# Whisper слушает 16 кГц mono, окнами по тридцать секунд.
+# Whisper listens to 16 kHz mono, in windows of thirty seconds.
 SAMPLE_RATE = 16000
 WINDOW_SAMPLES = 30 * SAMPLE_RATE
 
@@ -155,17 +156,17 @@ def probe_offsets(
     span: tuple[float, float] = (0.10, 0.90),
     window: int = WINDOW_SAMPLES,
 ) -> list[int]:
-    """Начала окон определителя в записи из n_samples отсчётов, по возрастанию.
+    """Starts of the detector windows in a recording of n_samples samples, ascending.
 
-    Окна лежат внутри span длины: первое начинается на 10%, последнее кончается на 90%,
-    остальные — поровну между ними. С начала брать нельзя — там заставка, музыка или
-    реклама спонсора, и язык определился бы по ним. Замерено на этом корпусе: у
-    KCR-dkZIhxY первая реплика начинается на 21-й секунде, то есть первое
-    тридцатисекундное окно на две трети состояло бы из заставки.
+    The windows lie within a span of length: the first starts at 10%, the last ends at 90%,
+    the rest — evenly between them. Taking from the start isn't allowed — there's the intro,
+    music or a sponsor's ad, and the language would be determined from them. Measured on this
+    corpus: for KCR-dkZIhxY the first utterance starts at the 21st second, i.e. the first
+    thirty-second window would be two-thirds intro.
 
-    Начала прижаты к [0, n_samples - window]: на записи от 30 до 37,5 с окна выходят
-    целыми и перекрываются, а не уходят в минус, и совпавшие начала сливаются в одно.
-    Запись не длиннее окна — одно окно с начала.
+    The starts are clamped to [0, n_samples - window]: on a recording of 30 to 37.5 s the
+    windows come out whole and overlap rather than go negative, and coinciding starts merge
+    into one. A recording no longer than a window — one window from the start.
     """
     if n_samples <= window:
         return [0]
@@ -184,12 +185,12 @@ def probe_offsets(
 
 @dataclass(frozen=True)
 class Detection:
-    """Что определитель услышал в окнах записи и какой язык из этого следует.
+    """What the detector heard in the recording's windows and which language follows from that.
 
-    language — победившая семья (hr и bs сведены к sr) или None, если не проголосовало
-    ни одно окно; confidence — её средняя доля по голосующим окнам; bcms_share — средняя
-    доля сербского семейства; floor — сербский взят порогом BCMS_FLOOR, а не первым
-    местом; votes — сколько окон голосовало; probed — сколько окон слушали всего.
+    language — the winning family (hr and bs folded to sr) or None if no window voted;
+    confidence — its average share over the voting windows; bcms_share — the average share
+    of the Serbian family; floor — Serbian was taken by the BCMS_FLOOR threshold rather than
+    first place; votes — how many windows voted; probed — how many windows were listened to in all.
     """
 
     language: str | None
@@ -198,19 +199,19 @@ class Detection:
     floor: bool
     votes: int
     probed: int
-    # По окну: верхняя семья или None (окно не голосовало), её доля, секунды речи.
+    # Per window: the top family or None (the window didn't vote), its share, seconds of speech.
     windows: tuple[tuple[str | None, float, float], ...]
 
 
 def summarize(windows: Sequence[tuple[float, Sequence[tuple[str, float]]]]) -> Detection:
-    """Правило определителя: окна (секунды речи, распределение Whisper) → Detection.
+    """The detector rule: windows (seconds of speech, Whisper distribution) → Detection.
 
-    Распределение окна сводится по семье: доли bs, hr и sr складываются под sr, код,
-    которого Whisper не знает, пропускается. Голосует окно, где речи не меньше
-    MIN_SPEECH_SECONDS и есть ответ определителя. Доли семей усредняются по голосующим
-    окнам — распределения, а не голоса top-1: жёсткое голосование разрывало бы сербский
-    на три метки. Побеждает наибольшее среднее; сербское семейство со средней долей от
-    BCMS_FLOOR берёт верх и не будучи первым, кроме как над соседями из SLAVIC_NEIGHBOURS.
+    A window's distribution is reduced by family: the shares of bs, hr and sr are summed
+    under sr, a code Whisper doesn't know is skipped. A window votes where there's at least
+    MIN_SPEECH_SECONDS of speech and the detector gave an answer. Family shares are averaged
+    over the voting windows — distributions, not top-1 votes: hard voting would split Serbian
+    into three labels. The largest mean wins; the Serbian family with an average share from
+    BCMS_FLOOR takes the top even without being first, except over neighbours from SLAVIC_NEIGHBOURS.
     """
     records: list[tuple[str | None, float, float]] = []
     voting: list[dict[str, float]] = []
@@ -224,7 +225,7 @@ def summarize(windows: Sequence[tuple[float, Sequence[tuple[str, float]]]]) -> D
             if folded is not None:
                 shares[folded] = shares.get(folded, 0.0) + share
 
-        # Пустое распределение — определитель на окне упал или его не звали.
+        # An empty distribution — the detector crashed on the window or wasn't called.
         if speech < MIN_SPEECH_SECONDS or not shares:
             records.append((None, 0.0, speech))
 
@@ -253,7 +254,7 @@ def summarize(windows: Sequence[tuple[float, Sequence[tuple[str, float]]]]) -> D
 
     return Detection(
         language=winner,
-        # При пороге это и есть bcms_share.
+        # At the threshold this is bcms_share.
         confidence=means[winner],
         bcms_share=bcms_share,
         floor=floor,
@@ -265,15 +266,15 @@ def summarize(windows: Sequence[tuple[float, Sequence[tuple[str, float]]]]) -> D
 
 @dataclass(frozen=True)
 class LanguageVerdict:
-    """Решение о языке источника: на каком языке реплики и откуда это известно.
+    """The source language decision: which language the utterances are in and where that's known from.
 
-    effective — код Whisper, с которым распознавали (у дорожки автора — язык её метки);
-    declared — что объявлено до звука, declared_by — кем: "config" (закрепление хозяина),
-    "metadata" (метка YouTube) или None; detected и confidence — что услышал определитель
-    (None — речи не нашлось или её не слушали); reason — откуда effective: "pin",
-    "detector", "floor", "hint", "fallback", у дорожки автора — "track"; source — "asr"
-    или "manual" (дорожка автора), track — её метка; verified — сверена ли дорожка
-    с речью (None — не сверяли).
+    effective — the Whisper code with which recognition was done (for the author's track —
+    the language of its label); declared — what was declared before the audio, declared_by —
+    by whom: "config" (the owner's pin), "metadata" (the YouTube label) or None; detected and
+    confidence — what the detector heard (None — no speech was found or it wasn't listened to);
+    reason — where effective comes from: "pin", "detector", "floor", "hint", "fallback", for the
+    author's track — "track"; source — "asr" or "manual" (the author's track), track — its label;
+    verified — whether the track was checked against the speech (None — not checked).
     """
 
     effective: str
@@ -288,10 +289,10 @@ class LanguageVerdict:
 
     @property
     def mismatch(self) -> bool:
-        """Объявленное разошлось с услышанным, а у дорожки автора — с её языком.
+        """The declared diverged from the heard, and for the author's track — from its language.
 
-        Сравниваются семьи: hr против sr — не расхождение. Неизвестное с любой стороны
-        (не объявлено, речи не нашлось) — тоже.
+        Families are compared: hr versus sr — not a discrepancy. Unknown on either side
+        (not declared, no speech found) — also not.
         """
         declared = family(self.declared)
         heard = family(self.effective if self.source == "manual" else self.detected)
@@ -299,29 +300,29 @@ class LanguageVerdict:
         return declared is not None and heard is not None and declared != heard
 
     def note(self) -> str | None:
-        """Фраза для зрителя и журнала, до 60 знаков; None — сказать нечего."""
+        """A phrase for the viewer and the log, up to 60 characters; None — nothing to say."""
         if self.mismatch and self.declared_by == "metadata":
             if self.source == "manual":
-                return f"YouTube указал {self.declared}, дорожка автора {self.effective}"
+                return f"YouTube indicated {self.declared}, the author's track {self.effective}"
 
-            return f"YouTube указал {self.declared}, по речи {self.detected}"
+            return f"YouTube indicated {self.declared}, by speech {self.detected}"
 
         if self.mismatch and self.declared_by == "config":
             if self.source == "manual":
-                return f"в настройках {self.declared}, дорожка автора {self.effective}"
+                return f"in the settings {self.declared}, the author's track {self.effective}"
 
-            return f"в настройках {self.declared}, по речи {self.detected}"
+            return f"in the settings {self.declared}, by speech {self.detected}"
 
         if self.reason == "hint":
-            return f"речи почти нет, язык взят у YouTube: {self.effective}"
+            return f"almost no speech, the language came from YouTube: {self.effective}"
 
         if self.reason == "fallback":
-            return f"речи почти нет, язык принят за {self.effective}"
+            return f"almost no speech, the language was assumed to be {self.effective}"
 
         return None
 
     def wire(self) -> dict:
-        """Решение для ответа воркера, снимка и кэша: mismatch и note — вычисленные."""
+        """The decision for the worker's response, the snapshot and the cache: mismatch and note — computed."""
         return {
             "effective": self.effective,
             "declared": self.declared,
@@ -338,12 +339,13 @@ class LanguageVerdict:
 
     @classmethod
     def from_wire(cls, data: object) -> LanguageVerdict | None:
-        """Решение из wire(); None — это не решение. Никогда не бросает.
+        """A decision from wire(); None — this is not a decision. Never raises.
 
-        Читает и ответ воркера, и запись кэша, сделанную, может быть, прежней версией.
-        Без годного effective решения нет: код сверяется как есть, без приведения
-        («SR» и «sh» — не решение). Остальное терпимо — негодное поле становится
-        умолчанием. mismatch и note не читаются: их всегда вычисляют заново.
+        Reads both the worker's response and a cache record made, perhaps, by a previous
+        version. Without a valid effective there's no decision: the code is checked as is,
+        without normalization ("SR" and "sh" are not a decision). The rest is tolerated — an
+        invalid field becomes the default. mismatch and note aren't read: they're always
+        recomputed.
         """
         if not isinstance(data, dict):
             return None
@@ -361,15 +363,15 @@ class LanguageVerdict:
         raw = data.get("confidence")
         confidence = None
 
-        # bool — подкласс int, но не доля.
+        # bool is a subclass of int, but not a share.
         if isinstance(raw, int | float) and not isinstance(raw, bool):
             try:
                 value = float(raw)
             except OverflowError:
-                pass  # целое больше любого float: доли такой не бывает
+                pass  # an integer larger than any float: no such share exists
             else:
-                # NaN и бесконечность в JSON не годятся: JSONResponse на проводе падал
-                # бы на каждом ответе этого ролика, а запись кэша их несёт.
+                # NaN and infinity aren't valid in JSON: JSONResponse on the wire would
+                # fail on every response of this video, and the cache record carries them.
                 confidence = value if math.isfinite(value) else None
 
         reason = data.get("reason")
@@ -391,13 +393,14 @@ class LanguageVerdict:
 def decide(
     pin: str | None, hint: str | None, detection: Detection, *, fallback: str = "sr"
 ) -> LanguageVerdict:
-    """Язык распознавания: закрепление хозяина, иначе речь, иначе метка YouTube, иначе fallback.
+    """The recognition language: the owner's pin, else the speech, else the YouTube label, else fallback.
 
-    pin и hint — уже коды Whisper: их приводят вызывающие (normalize и hint). Закрепление
-    решает всегда, и определитель его только проверяет. Без закрепления решает речь, если
-    проголосовало хоть одно окно: подсказка голосующие окна не перевешивает (Juske — метка
-    en, речь сербская). Метка решает, только когда речи почти нет. Пустым и None язык не
-    бывает никогда: с ним Whisper определял бы язык сам, по первым тридцати секундам.
+    pin and hint — already Whisper codes: the callers bring them (normalize and hint). The pin
+    always decides, and the detector only checks it. Without a pin the speech decides, if at
+    least one window voted: the hint doesn't outweigh the voting windows (Juske — label en,
+    speech Serbian). The label decides only when there's almost no speech. The language is
+    never empty or None: with that Whisper would determine the language itself, by the first
+    thirty seconds.
     """
     if pin:
         effective, reason = pin, "pin"

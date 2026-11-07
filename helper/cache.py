@@ -1,14 +1,14 @@
-"""Кэш готовых дорожек субтитров.
+"""Cache of ready subtitle tracks.
 
-Живёт на стороне демона, а не расширения: он переживает переустановку расширения,
-не упирается в квоту браузера и лежит там, где производились вычисления. Повторный
-просмотр ролика не должен трогать GPU вообще.
+It lives on the daemon side, not the extension's: it survives an extension reinstall,
+doesn't hit the browser quota, and lies where the computations were performed. A repeat
+viewing of a video must not touch the GPU at all.
 
-Ключ содержательный, а не временной. Срок годности здесь не нужен: если поменялась
-модель, промпт или схема — поменяется ключ, и старая запись просто перестанет
-находиться. С диска она сама не уходит: вытеснение по давности чтения идёт только
-внутри put и только когда записи переросли бюджет, так что осиротевшие лежат, пока
-его хватает. Удалять их — решение хозяина.
+The key is content-based, not time-based. A shelf life isn't needed here: if the model,
+prompt or schema changed — the key changes, and the old record simply stops being found.
+It doesn't leave the disk by itself: eviction by last-read age happens only inside put
+and only when the records have outgrown the budget, so orphans lie there as long as it
+lasts. Deleting them is the owner's decision.
 """
 
 from __future__ import annotations
@@ -23,18 +23,19 @@ from pathlib import Path
 
 from helper.env import CACHE_DIR, TRACKS_DIR
 
-# Версия всего, что делает дорожку из звука или из дорожки автора, кроме самих
-# моделей (они в ключе отдельно): правила выбора языка распознавания вместе с
-# константами helper/language.py, затравки и фильтров распознавания, нарезки на
-# реплики и промпта переводчика. Поднимать при любой их правке: версия входит в
-# ключ, и прежние записи перестают находиться. С диска они при этом не уходят:
-# вытеснение срабатывает, только когда кэш перерастёт бюджет.
-# 2 — «Язык источника»: определитель всегда, затравка по языку, фильтры тишины,
-# повторов и эха, сокращения в нарезке.
+# Version of everything that makes a track from audio or from the author's track,
+# except the models themselves (they're in the key separately): the rules of choosing
+# the recognition language together with the constants of helper/language.py, the seeds
+# and filters of recognition, the cutting into utterances and the translator prompt.
+# Bump on any edit of them: the version is part of the key, and previous records stop
+# being found. They don't leave the disk for that, though: eviction triggers only when
+# the cache outgrows the budget.
+# 2 — "Source language": the detector always, seeding by language, silence filters,
+# repeats and echo, abbreviations in the cutting.
 PROMPT_VERSION = 2
 
-# Формат записи на диске: поднимать, когда меняется то, что пишет put.
-# 2 — запись несёт language и pin вместо source_lang и target_lang.
+# On-disk record format: bump when what put writes changes.
+# 2 — the record carries language and pin instead of source_lang and target_lang.
 SCHEMA_VERSION = 2
 
 DEFAULT_BUDGET_MIB = 2048
@@ -43,17 +44,17 @@ DEFAULT_BUDGET_MIB = 2048
 @dataclass(frozen=True)
 class CacheKey:
     video_id: str
-    # Язык, закреплённый человеком в [asr] language, нормализованный; "" — не закреплён.
-    # Ни "auto", ни метаданных YouTube тут не бывает: действующий язык и решение
-    # определителя лежат в самой записи, в поле language.
+    # The language pinned by a human in [asr] language, normalized; "" — not pinned.
+    # Neither "auto" nor YouTube metadata appears here: the effective language and the
+    # detector's decision live in the record itself, in the language field.
     pin: str
     asr_model: str
     translator_model: str
-    # Учебный язык второй строки. В ключе обязателен: без него переключение
-    # режима отдавало бы старую дорожку, где второй строки просто нет.
+    # The study language of the second line. Mandatory in the key: without it, switching
+    # the mode would return an old track where the second line simply isn't there.
     study_lang: str = ""
-    # Отпечаток исходной дорожки: для пути ASR это модель и её параметры, для ручной
-    # дорожки — её язык и происхождение. Меняется он — меняется и ключ.
+    # Fingerprint of the source track: for the ASR path it's the model and its parameters,
+    # for a manual track — its language and origin. When it changes, the key changes too.
     track_fingerprint: str = "asr"
 
     def digest(self) -> str:
@@ -97,14 +98,14 @@ class TrackCache:
         return self._root / key.video_id[:2] / key.video_id / f"{digest}.json"
 
     def variants(self, video_id: str) -> list[dict]:
-        """Все сохранённые дорожки этого ролика, с их отпечатками.
+        """All saved tracks of this video, with their fingerprints.
 
-        Нужно для восстановления после перезагрузки страницы. Ключ кэша посчитать
-        заранее нельзя: в него входит отпечаток источника, а он зависит от того,
-        есть ли у ролика дорожка автора, — узнать это можно только запросом
-        к YouTube. Поэтому идём с другой стороны: берём то, что лежит, и смотрим
-        на записанный в самом файле отпечаток. Дальше вызывающий пересчитает
-        по нему ключ и сверит с текущей настройкой.
+        Needed for recovery after a page reload. The cache key can't be computed in
+        advance: it includes the source fingerprint, and that depends on whether the
+        video has an author's track — which can only be learned by a request to
+        YouTube. So we go from the other side: take what's lying there and look at the
+        fingerprint recorded in the file itself. Then the caller recomputes the key
+        from it and checks it against the current setting.
         """
         found = []
 
@@ -114,14 +115,14 @@ class TrackCache:
             try:
                 found.append(json.loads(Path(path).read_text(encoding="utf-8")))
             except (OSError, json.JSONDecodeError):
-                # Файл мог исчезнуть мимо индекса. Это не повод падать:
-                # восстановление — удобство, а не обязанность.
+                # The file may have disappeared past the index. That's no reason to
+                # crash: recovery is a convenience, not an obligation.
                 continue
 
         return found
 
     def get(self, key: CacheKey, length_seconds: float | None = None) -> dict | None:
-        """Готовая дорожка, если она есть и всё ещё относится к этому ролику."""
+        """A ready track, if it exists and still relates to this video."""
         path = self._path(key)
 
         if not path.exists():
@@ -132,8 +133,8 @@ class TrackCache:
         except (OSError, json.JSONDecodeError):
             return None
 
-        # Длительность в ключ не входит, поэтому сверяем отдельно: перезалитый ролик
-        # сохраняет идентификатор, но содержимое у него другое.
+        # The duration isn't part of the key, so we check it separately: a re-uploaded
+        # video keeps the identifier but its content is different.
         stored = payload.get("length_seconds")
 
         if length_seconds and stored and abs(stored - length_seconds) > 1.0:
@@ -154,27 +155,29 @@ class TrackCache:
         *,
         language: dict | None = None,
     ) -> None:
-        """Сохранить готовую дорожку.
+        """Save a ready track.
 
-        Только целиком: частично переведённое задание не кэшируется никогда, иначе
-        обрыв посреди работы навсегда закрепил бы дырявую дорожку под валидным ключом.
+        Only whole: a partially translated job is never cached, otherwise an interruption
+        in the middle of work would permanently pin a leaky track under a valid key.
 
-        language — решение о языке, LanguageVerdict.wire(), или None. Читатели берут его
-        через .get("language"), и запись без поля отдаётся с языком null.
+        language — the language decision, LanguageVerdict.wire(), or None. Readers take it
+        via .get("language"), and a record without the field is returned with language null.
         """
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         payload = {
             "video_id": key.video_id,
-            # Поле ключа пишется в файл по той же причине, что study_lang ниже: без него
-            # запись при разборе глазами не объясняет, почему ключ не сходится.
+            # The key field is written to the file for the same reason as study_lang
+            # below: without it the record, when parsed by eye, doesn't explain why the
+            # key doesn't match.
             "pin": key.pin,
             "asr_model": key.asr_model,
             "translator_model": key.translator_model,
-            # В хэш ключа входит, а в файл не писался — и при разборе глазами
-            # выглядел как None у всех дорожек сразу, мешая понять, почему ключ
-            # не сходится. На сверку не влияет: она идёт по хэшу, а не по этим полям.
+            # It's part of the key hash but wasn't written to the file — and when parsed
+            # by eye it looked like None for all tracks at once, making it hard to
+            # understand why the key doesn't match. It doesn't affect the comparison: it
+            # goes by the hash, not by these fields.
             "study_lang": key.study_lang,
             "track_fingerprint": key.track_fingerprint,
             "prompt_version": PROMPT_VERSION,
@@ -185,8 +188,8 @@ class TrackCache:
             "cues": cues,
         }
 
-        # Пишем через временный файл: падение посреди записи не должно оставить
-        # обрезанный JSON под валидным именем.
+        # Write through a temporary file: a crash in the middle of writing must not leave
+        # truncated JSON under a valid name.
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
@@ -209,7 +212,7 @@ class TrackCache:
         self._evict()
 
     def _evict(self) -> None:
-        """Держать кэш в рамках бюджета, выбрасывая самое давно не читанное."""
+        """Keep the cache within budget, discarding the least recently read."""
         total = self._db.execute("SELECT COALESCE(SUM(bytes), 0) FROM tracks").fetchone()[0]
 
         if total <= self._budget:

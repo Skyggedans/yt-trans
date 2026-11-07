@@ -1,4 +1,4 @@
-"""Кэш видео: готовность по файлу на диске, атомарная запись, потолок и вытеснение."""
+"""Video cache: readiness by the file on disk, atomic writes, the ceiling and eviction."""
 
 import asyncio
 import os
@@ -168,13 +168,13 @@ def test_the_registry_puts_the_cache_where_the_config_says(tmp_path):
         assert registry.videos.directory == tmp_path
         assert registry.videos.max_bytes == 4 * 1024**3
     finally:
-        # У TrackCache нет close(); без этого сборщик мусора ругается на sqlite.
+        # TrackCache has no close(); without this the garbage collector complains about sqlite.
         registry.cache._db.close()
 
 
 def test_the_cache_directory_is_closed_to_other_users(tmp_path):
-    # В /tmp каталог лежит рядом с чужими: предсказуемое имя ролика и открытый
-    # на запись каталог дали бы соседнему процессу место для подмены файла.
+    # In /tmp the directory sits next to other people's: a predictable video name
+    # and a world-writable directory would give a neighbouring process room to swap the file.
     target = tmp_path / "video"
 
     VideoStore(target)

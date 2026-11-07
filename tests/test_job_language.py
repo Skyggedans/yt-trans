@@ -1,4 +1,4 @@
-"""Язык на стороне демона: закрепление хозяина, отказ и разговор с воркером."""
+"""Language on the daemon side: the owner's pin, the refusal and the conversation with the worker."""
 
 import pytest
 from conftest import metadata
@@ -38,7 +38,7 @@ def test_unknown_pin_is_a_permanent_refusal(manager):
     with pytest.raises(jobs.PermanentJobError) as caught:
         runner_with(manager, "serbian")._pin()
 
-    assert str(caught.value) == "неизвестный язык «serbian»: [asr] language в config.toml"
+    assert str(caught.value) == 'unknown language "serbian": [asr] language in config.toml'
 
 
 async def test_unknown_pin_refuses_the_job_before_youtube(manager, pipeline):
@@ -50,8 +50,8 @@ async def test_unknown_pin_refuses_the_job_before_youtube(manager, pipeline):
     assert job.stage is jobs.Stage.ERROR
     assert job.error == language.refusal("serbian")
     assert job.retryable is False
-    # Метаданных не спрашивали (job.info пуст), звука и воркера не было: отказ
-    # не стоит ничего ни YouTube, ни карте.
+    # Metadata was not requested (job.info is empty), there was no audio or worker: the refusal
+    # costs neither YouTube nor the graphics card anything.
     assert job.info is None
     assert pipeline.workers == []
 
@@ -60,7 +60,7 @@ async def test_language_refusal_is_not_recreated_after_cooldown(manager, pipelin
     pipeline.configure(language="serbian")
     job = manager.get_or_create(VIDEO, "ru", True)
     await pipeline.run(job)
-    # Остывание повторяемого отказа прошло бы: окончательный отказ оно не трогает.
+    # The cooldown of a retryable failure would have elapsed: it does not touch a permanent refusal.
     job.failed_at -= jobs.RETRY_COOLDOWN
 
     assert manager.get_or_create(VIDEO, "ru", True) is job
@@ -74,7 +74,7 @@ async def test_language_refusal_is_not_recreated_after_cooldown(manager, pipelin
 async def test_pin_reaches_the_worker_normalised(manager, pipeline, raw, sent):
     pipeline.configure(language=raw)
     job = manager.get_or_create(VIDEO, "ru", True)
-    # Ролик без дорожек автора и без метки языка: путь распознавания.
+    # A video without author tracks and without a language label: the recognition path.
     job.info = metadata()
 
     await pipeline.run(job)
@@ -104,14 +104,14 @@ async def test_worker_crash_keeps_the_stderr_tail(manager, pipeline):
     await pipeline.run(job)
 
     assert job.stage is jobs.Stage.ERROR
-    assert job.error == "ASR не справился: Traceback (most recent call last):\nValueError: boom"
+    assert job.error == "ASR failed: Traceback (most recent call last):\nValueError: boom"
     assert job.retryable is True
 
 
 async def test_worker_error_reply_reaches_the_viewer(manager, pipeline):
-    # Воркер отказал сам, фразой в stdout, а stderr пуст: сегодня зритель видел
-    # «ASR не справился: » с пустым хвостом.
-    pipeline.asr_result = {"error": "аудио короче половины секунды"}
+    # The worker refused by itself, with a phrase in stdout, and stderr is empty: today the viewer saw
+    # "ASR failed: " with an empty tail.
+    pipeline.asr_result = {"error": "audio is shorter than half a second"}
     pipeline.asr_exit = 1
     pipeline.asr_stderr = b""
     job = manager.get_or_create(VIDEO, "ru", True)
@@ -119,11 +119,11 @@ async def test_worker_error_reply_reaches_the_viewer(manager, pipeline):
     await pipeline.run(job)
 
     assert job.stage is jobs.Stage.ERROR
-    assert job.error == "ASR не справился: аудио короче половины секунды"
+    assert job.error == "ASR failed: audio is shorter than half a second"
     assert job.retryable is True
 
 
-# ── Объявленное уходит в воркер подсказкой ───────────────────────────────────────
+# ── What is declared goes to the worker as a hint ───────────────────────────────
 
 
 def test_declaration_is_the_pin_and_the_normalised_label(manager):

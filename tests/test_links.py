@@ -1,4 +1,4 @@
-"""Ссылки: только YouTube, без дублей, и разбор плейлиста плоским списком."""
+"""Links: YouTube only, no duplicates, and playlist parsing as a flat list."""
 
 import json
 
@@ -62,8 +62,8 @@ def test_anything_else_is_refused(url):
     ],
 )
 def test_the_video_id_is_read_from_the_address_without_the_network(url, expected):
-    # Готовность картинки считается по id, а он уже есть в адресе: списку ссылок
-    # незачем ходить в YouTube ради значка.
+    # Picture readiness is computed from the id, and it is already in the address: the link list
+    # has no reason to go to YouTube for the badge.
     assert ytdlp.video_id_in(url) == expected
 
 
@@ -78,8 +78,8 @@ def test_adding_the_same_address_twice_keeps_one_record(tmp_path):
 
 
 def test_a_link_keeps_the_length_it_saw(tmp_path):
-    # Метраж известен уже в момент добавления: сохранить его дешевле, чем ходить
-    # в YouTube при каждом показе списка ради цифры в строке.
+    # The length is already known at the moment of adding: storing it is cheaper than going
+    # to YouTube on every list display for a figure in a row.
     path = tmp_path / "links.json"
 
     links.add("https://youtu.be/abcdefghijk", "Ролик", "video", duration=960, path=path)
@@ -89,7 +89,7 @@ def test_a_link_keeps_the_length_it_saw(tmp_path):
 
 
 def test_an_old_record_without_a_length_still_loads(tmp_path):
-    # Файл, записанный до появления метража, — не повод потерять ссылки.
+    # A file written before the length appeared is no reason to lose links.
     path = tmp_path / "links.json"
     path.write_text(
         json.dumps({"links": [{"id": "abc", "url": "https://youtu.be/x", "title": "Ролик",
@@ -209,7 +209,7 @@ async def test_a_link_opens_as_a_playlist(client, manager, monkeypatch, tmp_path
     assert response.status_code == 200
     payload = response.json()
     assert [video["videoId"] for video in payload["videos"]] == ["abcdefghijk"]
-    # Список сразу говорит, что можно смотреть мгновенно.
+    # The list says right away what can be watched instantly.
     assert payload["videos"][0]["state"] == "ready"
 
 
@@ -226,8 +226,8 @@ async def test_an_unprepared_episode_says_so(client, manager, monkeypatch, tmp_p
 
 
 async def test_a_video_link_says_its_picture_is_ready(client, manager, monkeypatch, tmp_path):
-    # Значок готовности нужен и верхней строке списка, а не только роликам
-    # внутри плейлиста: иначе про скачанный ролик приходится догадываться.
+    # The readiness badge is needed by the top row of the list too, not only by the videos
+    # inside a playlist: otherwise one has to guess about a downloaded video.
     from helper.video import VideoStore
 
     manager.videos = VideoStore(tmp_path)
@@ -253,8 +253,8 @@ async def test_a_video_link_without_a_picture_says_so(client, manager, monkeypat
 
 
 async def test_a_video_link_remembers_its_length(client, manager, monkeypatch, tmp_path):
-    # Демон уже видел метраж при разборе ссылки — список должен получать его
-    # без нового похода в YouTube.
+    # The daemon already saw the length while parsing the link — the list should get it
+    # without a new trip to YouTube.
     from helper.video import VideoStore
 
     manager.videos = VideoStore(tmp_path)
@@ -267,7 +267,7 @@ async def test_a_video_link_remembers_its_length(client, manager, monkeypatch, t
 
 
 async def test_a_playlist_has_no_length_of_its_own(client, manager, monkeypatch, tmp_path):
-    # У плейлиста нет одного метража: длина есть у каждого ролика внутри.
+    # A playlist has no single length: the length belongs to each video inside it.
     from helper.video import VideoStore
 
     manager.videos = VideoStore(tmp_path)
@@ -297,11 +297,11 @@ async def test_a_playlist_has_no_picture_state_of_its_own(client, manager, monke
     listed = (await client.get("/v1/links")).json()["links"]
 
     assert "state" not in listed[0]
-    # У плейлиста нет ни своей картинки, ни своего перевода: переводить нечего.
+    # A playlist has neither its own picture nor its own translation: there is nothing to translate.
     assert "translated" not in listed[0]
 
 
-# Готовая дорожка так, как её кладёт _finish_translation (JobCue.payload()).
+# A ready track the way _finish_translation (JobCue.payload()) puts it.
 TRANSLATED = [
     {
         "i": 0,
@@ -315,8 +315,8 @@ TRANSLATED = [
 ]
 
 
-# У каждого теста свой ролик: кэш дорожек общий на прогон, и готовый перевод
-# предыдущего теста иначе нашёлся бы и здесь.
+# Each test has its own video: the track cache is shared for the run, and the ready translation
+# of the previous test would otherwise be found here too.
 def cache_translation(manager, video_id, cues=TRANSLATED):
     manager.cache.put(manager._key_for(video_id, "asr"), cues, 300.0)
 
@@ -341,8 +341,8 @@ async def test_a_video_link_without_a_translation_says_so(client, manager, monke
 
 
 async def test_an_empty_cached_track_is_not_a_ready_translation(client, manager, monkeypatch):
-    # Пустая дорожка — испорченная запись, а не «всё готово»: с галкой зритель
-    # ждал бы субтитров, которых нет.
+    # An empty track is a broken record, not "everything is ready": with the check mark the viewer
+    # would wait for subtitles that are not there.
     probe_stub(monkeypatch, "emptytrack1")
     cache_translation(manager, "emptytrack1", cues=[])
     await client.post("/v1/links", json={"url": "https://youtu.be/emptytrack1"})
@@ -353,8 +353,8 @@ async def test_an_empty_cached_track_is_not_a_ready_translation(client, manager,
 
 
 async def test_a_track_from_other_models_is_not_a_ready_translation(client, manager, monkeypatch):
-    # Ключ кэша несёт модели и промпт: сделанное прежней моделью — не то, что
-    # зритель получил бы сейчас, и галка соврала бы.
+    # The cache key carries the models and the prompt: what a previous model made is not what
+    # the viewer would get now, and the check mark would lie.
     from helper.cache import CacheKey
 
     probe_stub(monkeypatch, "stalemodel1")
@@ -399,11 +399,11 @@ async def test_a_link_can_be_removed(client, monkeypatch):
 
 
 async def test_a_restricted_link_is_probed_again_with_the_account(monkeypatch):
-    """Ролик 18+ не читается анонимно — значит, вторая попытка с аккаунтом.
+    """An 18+ video is not readable anonymously — so a second attempt with the account.
 
-    Такое же правило, как у скачивания: анонимно всегда, аккаунт только там, где
-    без него никак. Без этой попытки ссылку на ролик 18+ нельзя было даже
-    сохранить со страницы планшета.
+    The same rule as for downloading: anonymous always, the account only where
+    there is no way without it. Without this attempt a link to an 18+ video could not even
+    be saved from the tablet page.
     """
     from pathlib import Path
 

@@ -1,4 +1,4 @@
-"""Страница планшета раздаётся самим демоном: с того же источника и без токена."""
+"""The tablet page is served by the daemon itself: from the same origin and without a token."""
 
 import httpx
 
@@ -38,13 +38,14 @@ async def test_the_page_never_asks_for_a_token(client):
 
     assert 'id="token-input"' not in text
     assert 'id="setup"' not in text
-    # Приложение видно сразу: экрана-препятствия перед ним больше нет.
+    # The app is visible at once: there is no obstacle screen before it any more.
     assert '<div id="app">' in text
 
 
 async def test_the_root_certificate_is_offered_before_https_starts(client, monkeypatch, tmp_path):
-    # Порядок важен: сертификат ставят на планшет, пока демон ещё по http, иначе
-    # браузер не откроет страницу и файл взять неоткуда.
+    # The order matters: the certificate is installed on the tablet while the
+    # daemon is still on http, otherwise the browser will not open the page and
+    # there is nowhere to get the file.
     from helper import app as helper_app
 
     ca = tmp_path / "ca.crt"
@@ -66,8 +67,8 @@ async def test_without_a_certificate_there_is_nothing_to_install(client, monkeyp
 
 
 async def test_the_service_worker_is_served_from_the_root(client):
-    # Воркер лежит в корне области видимости, поэтому Service-Worker-Allowed
-    # не нужен, а тип должен быть javascript: иначе браузер откажется.
+    # The worker lies at the root of the scope, so Service-Worker-Allowed is not
+    # needed, and the type must be javascript: otherwise the browser will refuse.
     response = await client.get("/sw.js")
 
     assert response.status_code == 200

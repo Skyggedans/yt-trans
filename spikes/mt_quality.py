@@ -1,25 +1,25 @@
-"""Спайк 2: качество sr→ru — прямой перевод против пивота, латиница против кириллицы.
+"""Spike 2: sr→ru quality — direct translation versus pivot, Latin versus Cyrillic.
 
-Материал — настоящие реплики из роликов пользователя, распознанные спайком asr_real.
-Это сознательный выбор: FLORES+ закрыт авторизацией, а Tatoeba и FLORES это формальная
-проза, тогда как пайплайн увидит спонтанную речь через ASR со всеми её ошибками.
-Ранжировать по chrF++ без эталонов нельзя, но три решения замера закрываются иначе.
+The material is real cues from the user's videos, recognized by the asr_real spike.
+This is a deliberate choice: FLORES+ is closed behind authorization, and Tatoeba and FLORES are formal
+prose, whereas the pipeline will see spontaneous speech through ASR with all its errors.
+There is no ranking by chrF++ without references, but three measurement decisions are settled differently.
 
-Плечи:
-  direct-lat  прямой перевод, латиница — боевой путь
-  direct-cyr  прямой перевод, тот же текст в кириллице
-  pivot-lat   sr→en→ru через английский
+Arms:
+  direct-lat  direct translation, Latin — the production path
+  direct-cyr  direct translation, the same text in Cyrillic
+  pivot-lat   sr→en→ru through English
 
-direct-cyr против direct-lat проверяет догадку, что модель с русским уклоном читает
-сербскую кириллицу как сломанный русский и копирует вместо перевода. pivot-lat проверяет,
-стоит ли двойная задержка структурного устранения ложных друзей.
+direct-cyr versus direct-lat tests the guess that a model with a Russian bias reads
+Serbian Cyrillic as broken Russian and copies instead of translating. pivot-lat tests
+whether the double latency of structural false-friend removal is worth it.
 
-Метрики считаются без эталона:
-  протечка   в выводе сербская диакритика, сербская кириллица или латинское слово
-             целиком со строчной буквы (марки и номера пишутся с прописной)
-  без правки вывод посимвольно совпал с источником
-  пусто      модель вернула пустую строку
-  ru/sr      отношение длин: русский обычно длиннее на 10–15%, сильное отклонение подозрительно
+Metrics are computed without a reference:
+  leak       the output contains Serbian diacritics, Serbian Cyrillic, or a Latin word
+             entirely lowercase (brands and numbers are written capitalized)
+  unchanged  the output matched the source character for character
+  empty      the model returned an empty string
+  ru/sr      length ratio: Russian is usually 10–15% longer, a strong deviation is suspicious
 
   python spikes/mt_quality.py --n 120
 """
@@ -76,10 +76,10 @@ class ArmResult:
 
 
 def load_real_cues(path: Path, limit: int) -> list[str]:
-    """Сербские реплики из прогона asr_real — уже нормализованные в латиницу."""
+    """Serbian cues from an asr_real run — already normalized to Latin."""
     if not path.exists():
         raise SystemExit(
-            f"{path} не найден. Сначала: python spikes/asr_real.py --ids <id> --model large-v3"
+            f"{path} not found. First: python spikes/asr_real.py --ids <id> --model large-v3"
         )
 
     videos = json.loads(path.read_text(encoding="utf-8"))
@@ -89,13 +89,13 @@ def load_real_cues(path: Path, limit: int) -> list[str]:
         cues += [c.strip() for c in video.get("cues_text", []) if c.strip()]
 
     if not cues:
-        raise SystemExit(f"в {path} нет реплик — перезапусти spikes/asr_real.py")
+        raise SystemExit(f"no cues in {path} — rerun spikes/asr_real.py")
 
     return cues[:limit]
 
 
 def _generic_translate(items: list[str], system: str, model: str) -> list[str]:
-    """Батч через ту же схему c1..cN, что и в проде, но с другим системным промптом."""
+    """A batch through the same c1..cN schema as in production, but with a different system prompt."""
     numbered = "\n".join(f"c{i}: {t}" for i, t in enumerate(items, 1))
     payload = chat(
         [{"role": "system", "content": system}, {"role": "user", "content": numbered}],
@@ -121,7 +121,7 @@ def run_arm(arm: str, sources: list[str], model: str) -> tuple[list[str], float]
             else:
                 hyps += translate_batch(Batch(cues=chunk), model=model)
         except (TranslateError, json.JSONDecodeError) as exc:
-            print(f"    батч {start // BATCH_SIZE}: {exc}")
+            print(f"    batch {start // BATCH_SIZE}: {exc}")
             hyps += [""] * len(chunk)
 
         print(f"    {min(start + BATCH_SIZE, len(sources))}/{len(sources)}")
@@ -131,7 +131,7 @@ def run_arm(arm: str, sources: list[str], model: str) -> tuple[list[str], float]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--n", type=int, default=120, help="сколько реплик взять")
+    parser.add_argument("--n", type=int, default=120, help="how many cues to take")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--arms", nargs="*", default=["direct-lat", "direct-cyr", "pivot-lat"])
     parser.add_argument("--cues", type=Path, default=Path("spikes/asr_real_v3.json"))
@@ -140,7 +140,7 @@ def main() -> int:
 
     latin = load_real_cues(args.cues, args.n)
     cyrillic = [cyrtranslit.to_cyrillic(t, "sr") for t in latin]
-    print(f"{len(latin)} реальных сербских реплик, {len(args.arms)} плеч\n")
+    print(f"{len(latin)} real Serbian cues, {len(args.arms)} arms\n")
 
     results, outputs = [], {}
 
@@ -163,8 +163,8 @@ def main() -> int:
         )
         results.append(result)
         print(
-            f"   протечка {result.leaked}/{result.samples}   без правки {result.unchanged}   "
-            f"пусто {result.empty}   ru/sr {result.ru_sr_ratio:.2f}   {result.seconds:.1f} с\n"
+            f"   leak {result.leaked}/{result.samples}   unchanged {result.unchanged}   "
+            f"empty {result.empty}   ru/sr {result.ru_sr_ratio:.2f}   {result.seconds:.1f} s\n"
         )
 
     args.out.write_text(
@@ -180,7 +180,7 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    print(f"{'плечо':12s} {'протечка':>9s} {'без правки':>11s} {'пусто':>6s} {'ru/sr':>6s} {'сек':>7s}")
+    print(f"{'arm':12s} {'leak':>9s} {'unchanged':>11s} {'empty':>6s} {'ru/sr':>6s} {'sec':>7s}")
 
     for r in sorted(results, key=lambda x: (x.leaked, x.seconds)):
         print(
@@ -188,7 +188,7 @@ def main() -> int:
             f"{r.ru_sr_ratio:6.2f} {r.seconds:7.1f}"
         )
 
-    print("\n── первые реплики бок о бок ──")
+    print("\n── first cues side by side ──")
 
     for i in range(min(5, len(latin))):
         print(f"\n  sr: {latin[i][:78]}")
@@ -196,8 +196,8 @@ def main() -> int:
         for arm in args.arms:
             print(f"  {arm:11s} {outputs[arm][i][:78]}")
 
-    print(f"\nзаписано в {args.out}")
-    print("Цифры отсеивают явный брак. Выбор между плечами — глазами по выводу выше.")
+    print(f"\nwritten to {args.out}")
+    print("The numbers weed out obvious rejects. Choosing between arms is done by eye on the output above.")
 
     return 0
 

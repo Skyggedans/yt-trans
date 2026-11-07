@@ -1,7 +1,7 @@
-// Чистая логика страницы: что показать в данную секунду. Ни document, ни fetch —
-// это гоняет node --test, а app.js только зовёт.
+// Pure page logic: what to show at a given second. No document, no fetch —
+// node --test runs it, and app.js only calls it.
 
-/** Индекс реплики, где start <= t < end; -1 — сейчас молчание. */
+/** Index of the cue where start <= t < end; -1 means silence right now. */
 export function activeCueIndex(cues, t) {
   for (let i = 0; i < cues.length; i += 1) {
     if (cues[i].start <= t && t < cues[i].end) {
@@ -12,7 +12,7 @@ export function activeCueIndex(cues, t) {
   return -1;
 }
 
-/** Попадает ли t в непереведённый интервал [start, end). */
+/** Whether t falls into an untranslated interval [start, end). */
 export function pendingAt(pending, t) {
   for (const [start, end] of pending) {
     if (start <= t && t < end) {
@@ -24,13 +24,13 @@ export function pendingAt(pending, t) {
 }
 
 const STAGE_WORDS = {
-  probing: () => "читаю ролик…",
-  fetching: () => "качаю звук…",
-  asr: () => "распознаю речь…",
-  paused: () => "пауза: не хватило видеопамяти",
+  probing: () => "reading the video…",
+  fetching: () => "downloading the audio…",
+  asr: () => "recognizing speech…",
+  paused: () => "paused: not enough video memory",
 };
 
-/** Надпись о ходе работы; на done — пустая, экран не должен ничего говорить. */
+/** Progress caption; on done it is empty, the screen should say nothing. */
 export function stageText(stage, state) {
   const data = state || {};
 
@@ -39,23 +39,23 @@ export function stageText(stage, state) {
   }
 
   if (stage === "error") {
-    const text = data.error || "ошибка";
+    const text = data.error || "error";
 
-    return data.retryable ? `${text} — можно повторить` : text;
+    return data.retryable ? `${text} — you can retry` : text;
   }
 
   if (stage === "queued") {
     return data.waiting === "gpu"
-      ? "ждём видеокарту: её занимает другая работа"
-      : "в очереди…";
+      ? "waiting for the GPU: another job is using it"
+      : "queued…";
   }
 
   if (stage === "translating") {
     if (typeof data.translated === "number" && typeof data.total === "number") {
-      return `перевожу… ${data.translated} из ${data.total}`;
+      return `translating… ${data.translated} of ${data.total}`;
     }
 
-    return "перевожу…";
+    return "translating…";
   }
 
   const words = STAGE_WORDS[stage];
@@ -63,23 +63,23 @@ export function stageText(stage, state) {
   return words ? words() : "";
 }
 
-/** Строка о языке речи: решение и приписка демона; пустая, если решения нет. */
+/** Line about the speech language: the verdict and the daemon's note; empty when there is no verdict. */
 export function languageText(language) {
   if (!language || !language.effective) {
     return "";
   }
 
-  const parts = [`язык речи: ${language.effective}`];
+  const parts = [`speech language: ${language.effective}`];
 
   if (language.reason === "track" && language.track) {
-    parts.push(`дорожка автора ${language.track}`);
+    parts.push(`author's track ${language.track}`);
   } else if (language.reason === "pin") {
-    parts.push("закреплено в настройках");
+    parts.push("pinned in the settings");
   } else if (language.reason === "detector" || language.reason === "floor") {
     parts.push(
       typeof language.confidence === "number"
-        ? `по речи, ${Math.round(language.confidence * 100)}%`
-        : "по речи",
+        ? `by speech, ${Math.round(language.confidence * 100)}%`
+        : "by speech",
     );
   }
 
@@ -90,7 +90,7 @@ export function languageText(language) {
   return parts.join("; ");
 }
 
-/** Две строки реплики. Вторая гаснет, когда её нечем показать или она повторяет первую. */
+/** Two lines of a cue. The second goes dark when there is nothing to show or it repeats the first. */
 export function cueLines(cue) {
   const target = (cue.lines || []).join("\n");
   const study = cue.study || "";
@@ -99,7 +99,7 @@ export function cueLines(cue) {
   return { target, secondary, failed: Boolean(cue.failed) };
 }
 
-/** Время как в плеере: часы появляются, только когда они есть. */
+/** Time the way a player shows it: hours appear only when they exist. */
 export function formatTime(seconds) {
   const whole = Math.max(0, Math.floor(seconds || 0));
   const hours = Math.floor(whole / 3600);
@@ -113,7 +113,7 @@ export function formatTime(seconds) {
   return `${minutes}:${rest}`;
 }
 
-/** Событие о другом ролике — не наше: сокет подписан на всё, что смотрит страница. */
+/** An event about another video is not ours: the socket is subscribed to whatever the page watches. */
 export function isForVideo(message, videoId) {
   return (
     message.videoId === undefined
@@ -122,12 +122,12 @@ export function isForVideo(message, videoId) {
   );
 }
 
-/** Отписка от ролика: без неё старый эпизод продолжает слать сюда свои реплики. */
+/** Unsubscribing from a video: without it the old episode keeps sending its cues here. */
 export function unwatchMessage(videoId) {
   return { op: "unwatch", videoId };
 }
 
-/** Что сказать сокету при подписке: отписка от прежнего, подписка, место просмотра. */
+/** What to tell the socket on subscribe: unsubscribe from the previous one, subscribe, watch position. */
 export function watchMessages(videoId, t, clientId, previous = null) {
   const messages = [];
 
@@ -146,7 +146,7 @@ export function watchMessages(videoId, t, clientId, previous = null) {
   return messages;
 }
 
-/** Карта мест просмотра из строки localStorage; битое и чужие поля — прочь. */
+/** Watch positions from a localStorage string; broken and foreign fields are dropped. */
 export function parsePositions(raw) {
   let data;
 
@@ -171,14 +171,14 @@ export function parsePositions(raw) {
   return positions;
 }
 
-/** Где остановились: 0, если ролик ещё не смотрели. */
+/** Where we stopped: 0 if the video has not been watched yet. */
 export function positionFor(positions, videoId) {
   const value = positions ? positions[videoId] : undefined;
 
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** Запомнить место. Ноль и нечисло местом не считаются и запись стирают. */
+/** Remember the position. Zero and non-numbers do not count as a position and erase the record. */
 export function rememberPosition(positions, videoId, seconds) {
   const next = { ...(positions || {}) };
 
@@ -191,18 +191,18 @@ export function rememberPosition(positions, videoId, seconds) {
   return next;
 }
 
-/** Строки реплики с учётом выключателей: зритель решает, что видеть. */
+/** Cue lines respecting the switches: the viewer decides what to see. */
 export function visibleLines(lines, show) {
   const switches = show || {};
   const target = switches.target === false ? "" : lines.target;
   const secondary = switches.study === false ? "" : lines.secondary;
 
-  // Пометка «перевод не вышел» относится к русской строке: без неё ей нечего
-  // подсвечивать.
+  // The "translation failed" mark belongs to the Russian line: without it
+  // there is nothing to highlight.
   return { target, secondary, failed: target ? lines.failed : false };
 }
 
-/** Выключатели из localStorage. Всё непонятное — «оба включены». */
+/** Switches from localStorage. Anything unclear means "both on". */
 export function readSwitches(raw) {
   const both = { target: true, study: true };
   let data;
@@ -220,7 +220,7 @@ export function readSwitches(raw) {
   return { target: data.target !== false, study: data.study !== false };
 }
 
-/** Переключить одну строку, не трогая вторую. */
+/** Flip one line without touching the other. */
 export function flipSwitch(switches, name) {
   const next = {
     target: (switches || {}).target !== false,
@@ -232,11 +232,11 @@ export function flipSwitch(switches, name) {
   return next;
 }
 
-// --- Поиск по сохранённым ссылкам -------------------------------------
+// --- Search across saved links -----------------------------------------
 
 /**
- * Есть ли запрос в строке. Пустой запрос совпадает со всем: поле поиска,
- * которое ничего не ищет, не должно прятать список.
+ * Whether the query appears in the text. An empty query matches everything:
+ * a search field that finds nothing should not hide the list.
  */
 export function matchesQuery(text, query) {
   const needle = String(query || "").trim().toLocaleLowerCase();
@@ -249,9 +249,9 @@ export function matchesQuery(text, query) {
 }
 
 /**
- * Ссылки, где запрос есть в названии плейлиста, адресе или в имени ролика.
- * Имена роликов отдаёт videosOf: у плейлиста их узнают у демона, у копии —
- * из её же записи на устройстве.
+ * Links where the query appears in the playlist title, the address or a video
+ * name. Video names come from videosOf: for a playlist they are learned from
+ * the daemon, for a copy — from its own record on the device.
  */
 export function filterLinks(items, query, videosOf = () => []) {
   const needle = String(query || "").trim();
@@ -267,12 +267,13 @@ export function filterLinks(items, query, videosOf = () => []) {
   ));
 }
 
-// --- Ссылка, пришедшая из share-диалога -------------------------------
+// --- A link that came from the share dialog ---------------------------
 
-// Android кладёт адрес во text (поля url у него в share-системе нет), иногда
-// вместе с заголовком ролика, и обрамляет его знаками препинания, если ссылка
-// стоит в скобках или в конце предложения. Берём адрес, а не всё поле: демон
-// принимает только YouTube и по адресу строит ссылку.
+// Android puts the address into text (its share system has no url field),
+// sometimes together with the video title, and wraps it in punctuation if the
+// link stands in brackets or at the end of a sentence. We take the address,
+// not the whole field: the daemon accepts YouTube only and builds the link
+// from the address.
 const YOUTUBE_HOSTS = /^(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)$/i;
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'«»]+/g;
 const TRAILING = /[.,;:!?)\]»"']+$/;
@@ -290,14 +291,14 @@ export function youTubeUrlIn(text) {
         return candidate;
       }
     } catch {
-      // Не адрес — например, «http://» без хоста.
+      // Not an address — for example, "http://" without a host.
     }
   }
 
   return "";
 }
 
-/** Первая ссылка YouTube среди полей, которые прислал share-диалог. */
+/** The first YouTube link among the fields the share dialog sent. */
 export function sharedUrl(params) {
   for (const name of ["url", "text", "title"]) {
     const value = params.get ? params.get(name) : params[name];
@@ -311,47 +312,49 @@ export function sharedUrl(params) {
   return "";
 }
 
-/** Размеры субтитров, которые предлагает страница; имя — то же, что в разметке. */
+/** Subtitle sizes the page offers; the name is the same as in the markup. */
 export const FONT_SIZES = ["tiny", "small", "normal", "large"];
 
-/** Размер из хранилища; чужое или испорченное значение — обычный размер. */
+/** The size from storage; a foreign or broken value means the usual size. */
 export function readFontSize(raw) {
   return FONT_SIZES.includes(raw) ? raw : "normal";
 }
 
-// --- Кеш роликов на устройстве -----------------------------------------
+// --- Video cache on the device -----------------------------------------
 //
-// Числа копии — размер, проценты, приговор по свободному месту — считаются
-// здесь, а не в app.js: их видит хозяин, их стоит проверять в node --test.
+// Copy numbers — size, percentages, the verdict on free space — are computed
+// here, not in app.js: the owner sees them, so they are worth checking in
+// node --test.
 
-const BYTE_UNITS = ["КБ", "МБ", "ГБ", "ТБ"];
+const BYTE_UNITS = ["KB", "MB", "GB", "TB"];
 
-/** Байты так, как их читает человек: «400 МБ», «1.2 ГБ». */
+/** Bytes the way a person reads them: "400 MB", "1.2 GB". */
 export function formatBytes(bytes) {
-  // Мусор и отрицательные — прочерк, а не «NaN МБ»: такое число не значит
-  // ничего, и показывать его как размер нельзя.
+  // Garbage and negative values are a dash, not "NaN MB": such a number means
+  // nothing, and it must not be shown as a size.
   if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
     return "—";
   }
 
   if (bytes < 1024) {
-    return `${Math.round(bytes)} Б`;
+    return `${Math.round(bytes)} B`;
   }
 
   let value = bytes;
-  let unit = "Б";
+  let unit = "B";
 
   for (const next of BYTE_UNITS) {
     value /= 1024;
     unit = next;
 
-    if (value < 1024 || next === "ТБ") {
+    if (value < 1024 || next === "TB") {
       break;
     }
   }
 
-  // У мелких чисел оставляем десятые («1.5 ГБ»): целыми они были бы слишком
-  // грубы. У крупных они уже шум, и там округление до целого.
+  // For small numbers we keep tenths ("1.5 GB"): whole ones would be too
+  // coarse. For large ones they are already noise, and there we round to a
+  // whole.
   const shown = value < 10
     ? Math.round(value * 10) / 10
     : Math.round(value);
@@ -359,7 +362,7 @@ export function formatBytes(bytes) {
   return `${shown} ${unit}`;
 }
 
-/** Проценты скачанного: без деления на ноль и без выхода за сотню. */
+/** Percent downloaded: no division by zero and no going past a hundred. */
 export function percent(seen, total) {
   if (!(total > 0) || !(seen > 0)) {
     return 0;
@@ -368,15 +371,15 @@ export function percent(seen, total) {
   return Math.min(100, Math.floor((seen / total) * 100));
 }
 
-// Запас на запись: базе и самому браузеру тоже нужно место, а квота, забитая
-// под ноль, обрывает копирование на середине файла. 200 МиБ — около половины
-// эпизода, который ещё и не влезает целиком.
+// Reserve for writing: the database and the browser itself need space too,
+// and a quota filled to zero breaks the copy in the middle of the file.
+// 200 MiB — about half an episode, which does not even fit whole.
 export const SPARE_BYTES = 200 * 1024 * 1024;
 
 /**
- * Начинать ли копирование: «ok» — да, «tight» — места меньше, чем нужно с
- * запасом, «unknown» — судить не по чему (размер или место неизвестны).
- * Неизвестность копирование не запрещает: пусть решит сама запись.
+ * Whether to start copying: "ok" — yes, "tight" — there is less space than
+ * needed with the reserve, "unknown" — nothing to judge by (size or space is
+ * unknown). Uncertainty does not forbid copying: let the write itself decide.
  */
 export function copyVerdict(need, free, reserve = SPARE_BYTES) {
   if (!(need > 0) || !(free > 0)) {
@@ -387,16 +390,17 @@ export function copyVerdict(need, free, reserve = SPARE_BYTES) {
 }
 
 /**
- * Подпись к иконке кеша. Само действие называет иконка (скачать, дискета или
- * отмена), поэтому здесь остаётся только то, что меняется: ожидание и проценты.
+ * Caption for the cache icon. The action itself is named by the icon
+ * (download, floppy or cancel), so here only what changes is left: waiting
+ * and percentages.
  */
 export function copyState({ waiting, active, percent: done = 0, failed } = {}) {
   if (failed) {
-    return "ошибка";
+    return "error";
   }
 
   if (waiting) {
-    return "ждёт";
+    return "waiting";
   }
 
   if (active) {
@@ -406,17 +410,17 @@ export function copyState({ waiting, active, percent: done = 0, failed } = {}) {
   return "";
 }
 
-/** Пометка сохранённого ролика в списке ссылок. */
+/** Mark of a saved video in the link list. */
 export function cacheLabel(size) {
-  return size > 0 ? `на устройстве · ${formatBytes(size)}` : "на устройстве";
+  return size > 0 ? `on the device · ${formatBytes(size)}` : "on the device";
 }
 
 /**
- * Заголовок строки ссылки. Метраж единственной копии — это и есть метраж
- * ролика, поэтому он стоит рядом с названием, а строка копии остаётся одна.
- * Копий несколько (плейлист) — метража здесь нет: одна цифра соврала бы про
- * остальные, и он остаётся при каждой копии. Без копии метраж берётся у
- * ссылки: демон запоминает его при добавлении.
+ * Title of a link row. The length of the only copy is the length of the video,
+ * so it stands next to the title, and the copy row stays one. There are
+ * several copies (a playlist) — no length here: one number would lie about
+ * the others, and it stays with each copy. Without a copy the length comes
+ * from the link: the daemon remembers it when it is added.
  */
 export function linkTitle(link, copy = null) {
   const title = (link && (link.title || link.url)) || "";
@@ -427,12 +431,12 @@ export function linkTitle(link, copy = null) {
   return seconds > 0 ? `${title} · ${formatTime(seconds)}` : title;
 }
 
-// --- Раскрытые карточки списка ------------------------------------------
+// --- Expanded cards in the list ----------------------------------------
 //
-// Ключ карточки — «link:<id>» или «video:<id>». Раскрытие живёт только до
-// перезагрузки: список открывается свёрнутым, а карточку раскрывают пальцем.
+// A card key is "link:<id>" or "video:<id>". Expansion lives only until a
+// reload: the list opens collapsed, and a card is expanded with a finger.
 
-/** Раскрыть или свернуть одну карточку, не трогая соседние. */
+/** Expand or collapse one card without touching its neighbours. */
 export function toggleExpanded(keys, key) {
   const next = Array.isArray(keys) ? [...keys] : [];
   const at = next.indexOf(key);
@@ -447,9 +451,9 @@ export function toggleExpanded(keys, key) {
 }
 
 /**
- * Слияние реплик по номеру: сохранённое лежит в базе, пришедшее приходит
- * сокетом и полнее, поэтому оно побеждает. Порядок — по времени, как рисует
- * слой.
+ * Merge cues by number: the saved ones lie in the database, the incoming ones
+ * arrive over the socket and are fuller, so they win. Order — by time, the
+ * way the layer draws it.
  */
 export function mergeCues(saved, incoming) {
   const byNumber = new Map();
@@ -465,7 +469,7 @@ export function mergeCues(saved, incoming) {
   return [...byNumber.values()].sort((a, b) => a.start - b.start);
 }
 
-/** Откуда играть: копия предпочтительнее демона и переживает его смерть. */
+/** Where to play from: a copy beats the daemon and survives its death. */
 export function playSource(hasCopy, daemonAlive) {
   if (hasCopy) {
     return "copy";

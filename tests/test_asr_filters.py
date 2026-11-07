@@ -1,4 +1,4 @@
-"""Затравка под решённый язык и отсев мусора распознавания: воркер и демон."""
+"""Priming for the decided language and screening of recognition garbage: the worker and the daemon."""
 
 import logging
 from dataclasses import replace
@@ -16,7 +16,7 @@ VIDEO = "abcdefghijk"
 PHRASE = "Ovo je transkript video snimka na srpskom jeziku."
 NAMED = initial_prompt("sr", ["Mamini", "Epizoda"])
 LOOP = ", ".join(["ne"] * 12)
-# jWrDvxtofLk, 201,8–229,6 с: шесть настоящих предложений, потом петля «tak» в том же куске.
+# jWrDvxtofLk, 201.8–229.6 s: six real sentences, then the "tak" loop in the same chunk.
 DIALOGUE = (
     "Pa nije to dobro. Kako nije? Šta nije dobro? Pa očajno je, pogledaj ti koliko je ovo "
     "krupno. Šta radiš sa ovim? Da ga jedem."
@@ -24,8 +24,8 @@ DIALOGUE = (
 TAK = "Ideš, slušaj me, prvo uzduš, ovako, pa poprično, pa što sitnije, " + "tak, " * 70 + "tak"
 MINUTE = np.zeros(60 * worker.SAMPLE_RATE, dtype="<f4")
 
-# Восемь окон с речью, решает определитель. Сербская речь — как у канала Juske,
-# который YouTube помечает en.
+# Eight windows with speech, the detector decides. Serbian speech — like the Juske channel,
+# which YouTube marks en.
 SERBIAN_SPEECH = Detection(
     language="sr", confidence=0.97, bcms_share=0.97, floor=False, votes=8, probed=8,
     windows=(("sr", 0.97, 25.0),) * 8,
@@ -35,7 +35,7 @@ ENGLISH_SPEECH = Detection(
     windows=(("en", 0.99, 28.0),) * 8,
 )
 
-# Аргументы, которые пакетный режим faster-whisper 1.2.1 принимает и не применяет.
+# Arguments that faster-whisper 1.2.1's batched mode accepts and does not apply.
 DEAD_GUARDS = {
     "temperature",
     "compression_ratio_threshold",
@@ -47,12 +47,12 @@ DEAD_GUARDS = {
 
 
 def heard(monkeypatch, detection: Detection) -> None:
-    """Определитель «услышал» заданное: окна, VAD и модель здесь ни при чём."""
+    """The detector "heard" the given thing: windows, VAD and the model play no part here."""
     monkeypatch.setattr(worker, "_detect", lambda model, audio: detection)
 
 
 def segment(start, end, text, *, no_speech=0.05, logprob=-0.2, ratio=1.1) -> dict:
-    """Сегмент так, как его приносит JSON воркера."""
+    """A segment the way the worker's JSON brings it."""
     return {
         "start": start, "end": end, "text": text, "words": [],
         "no_speech_prob": no_speech, "avg_logprob": logprob, "compression_ratio": ratio,
@@ -202,8 +202,8 @@ def test_without_a_prompt_the_phrase_is_just_speech():
 
 
 def test_a_loop_takes_only_its_own_sentence_not_the_dialogue_before_it():
-    # Кусок целиком сжимается в 3.45 раза, а каждое настоящее предложение в нём — не
-    # больше чем в 0.89: выброс куска унёс бы диалог вместе с петлёй.
+    # The chunk as a whole compresses 3.45 times, while each real sentence in it is not
+    # more than 0.89: dropping the chunk would carry the dialogue away with the loop.
     cues, dropped = jobs.asr_cues(
         [segment(201.8, 229.6, f"{DIALOGUE} {TAK}", ratio=3.45)], "sr", NAMED
     )
@@ -220,7 +220,7 @@ def test_a_two_sentence_loop_keeps_its_first_turn():
 
     cues, dropped = jobs.asr_cues([segment(0.0, 30.0, looped, ratio=3.0)], "sr", NAMED)
 
-    # Каждое предложение петли сжимается плохо, ловит её только повтор уже сказанного.
+    # Each sentence of the loop compresses poorly; only repetition of what was already said catches it.
     assert [c.text for c in cues] == ["Dobro jutro.", "Kako si?", "Idemo dalje.", "Vidimo se."]
     assert dropped == [("повтор", "Idemo dalje."), ("повтор", "Vidimo se.")] * 5
 
@@ -257,10 +257,10 @@ def test_dropped_lines_never_become_job_cues_and_each_is_logged(manager, caplog)
 
     logged = [r.getMessage() for r in caplog.records if r.name == "helper.jobs"]
 
-    assert f"затравка {VIDEO}: {NAMED}" in logged
-    assert f"выброшено {VIDEO} (тишина): Hvala na gledanju." in logged
-    assert f"выброшено {VIDEO} (повтор): {LOOP}" in logged
-    assert f"выброшено {VIDEO} (эхо затравки): Pominju se na srpskom jeziku." in logged
+    assert f"seed {VIDEO}: {NAMED}" in logged
+    assert f"dropped {VIDEO} (тишина): Hvala na gledanju." in logged
+    assert f"dropped {VIDEO} (повтор): {LOOP}" in logged
+    assert f"dropped {VIDEO} (эхо затравки): Pominju se na srpskom jeziku." in logged
 
 
 async def test_daemon_sends_title_and_tag_names_not_a_ready_prompt(pipeline, manager):
@@ -287,12 +287,12 @@ async def test_an_empty_name_list_keeps_the_bare_phrase_and_its_echo_is_dropped(
     whisper, monkeypatch, pipeline, manager, caplog
 ):
     caplog.set_level(logging.INFO, logger="helper.jobs")
-    # Ни заголовок, ни теги имён не дают: список пуст, но затравка у сербского
-    # остаётся — голая фраза без имён, и реплика из неё сама приходит эхом.
+    # Neither the title nor the tags yield names: the list is empty, but the Serbian priming
+    # remains — a bare phrase without names, and a cue from it comes back as an echo by itself.
     pipeline.info = replace(pipeline.info, title="copyright 2026", tags=["subscribe", "instagram"])
     heard(monkeypatch, SERBIAN_SPEECH)
     whisper.segments = [whisper.segment(0.0, 4.0, f" {PHRASE}")]
-    # Ответ воркера настоящий: пустой список имён даёт голую фразу, а не None.
+    # The worker's answer is real: an empty name list gives the bare phrase, not None.
     pipeline.asr_result = worker.transcribe(MINUTE, language="sr", prompt_names=[])
     job = manager.get_or_create(VIDEO, "ru", True)
 
@@ -304,5 +304,5 @@ async def test_an_empty_name_list_keeps_the_bare_phrase_and_its_echo_is_dropped(
     assert argv[argv.index("--prompt-names") + 1] == "[]"
     assert job.stage is Stage.DONE
     assert job.cues == []
-    assert f"затравка {VIDEO}: {PHRASE}" in logged
-    assert f"выброшено {VIDEO} (эхо затравки): {PHRASE}" in logged
+    assert f"seed {VIDEO}: {PHRASE}" in logged
+    assert f"dropped {VIDEO} (эхо затравки): {PHRASE}" in logged

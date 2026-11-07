@@ -1,16 +1,16 @@
-"""Сборка читаемых субтитров из сегментов ASR.
+"""Assembling readable subtitles from ASR segments.
 
-Здесь мы владеем таймлайном: Whisper отдаёт пословные тайминги, поэтому реплики
-строим сами, а не наследуем чужие границы.
+Here we own the timeline: Whisper gives word-level timings, so we build the utterances
+ourselves rather than inheriting someone else's boundaries.
 
-Константы — Netflix Russian Timed Text Style Guide: 42 знака в строке, максимум две
-строки, скорость чтения 17 знаков в секунду, длительность от 5/6 секунды до 7 секунд,
-зазор между репликами в два кадра.
+The constants are the Netflix Russian Timed Text Style Guide: 42 characters per line,
+at most two lines, reading speed 17 characters per second, duration from 5/6 second to
+7 seconds, a gap between utterances of two frames.
 
-Выравнивание количества реплик, которое гарантирует грамматика в translate.py, к этому
-модулю отношения не имеет: там гарантия «сколько отдали, столько вернулось», а здесь
-решается, сколько реплик вообще будет. Порядок такой: сначала собрать реплики, потом
-переводить — иначе переводить пришлось бы обрывки фраз.
+Aligning the number of utterances, which the grammar in translate.py guarantees, has
+nothing to do with this module: there the guarantee is "as many returned as given", and
+here it's decided how many utterances there will be at all. The order is: first build
+the utterances, then translate — otherwise one would have to translate fragments of phrases.
 """
 
 from __future__ import annotations
@@ -28,14 +28,14 @@ GAP = 0.08
 
 MAX_CHARS = MAX_CHARS_PER_LINE * MAX_LINES
 
-# Конец предложения: точка, вопрос, восклицание, многоточие — с закрывающей кавычкой
-# или скобкой после и пробелом следом.
+# End of a sentence: period, question, exclamation, ellipsis — with a closing quote
+# or parenthesis after it and a space following.
 SENTENCE_END = re.compile(r'(?<=[.!?…])["»\')\]]*\s+')
 
-# Места, где разрыв строки читается лучше всего, от лучшего к худшему.
+# Places where a line break reads best, from best to worst.
 BREAK_AFTER = re.compile(r"[,;:—–]\s")
 CONJUNCTIONS = frozenset(
-    # сербские (латиница) и русские союзы и предлоги — перед ними ломать хорошо
+    # Serbian (Latin) and Russian conjunctions and prepositions — it's good to break before them
     "i a ali ili pa te da jer kad ako što koji koja koje sa za od do na u o "
     "и а но или да что чтобы если когда как который которая которое с со за от до на в о".split()
 )
@@ -61,22 +61,23 @@ class Cue:
 
 
 def split_sentences(text: str) -> list[str]:
-    """Разбить на предложения по пунктуации.
+    """Split into sentences by punctuation.
 
-    large-v3 расставляет знаки препинания, поэтому пунктуации обычно достаточно.
-    Если попадётся дорожка совсем без знаков — сюда подключается wtpsplit SaT
-    (`sat-3l-sm`), который держит границы предложений на 85 языках и не зависит
-    от пунктуации. Пока не подключён: на пунктуированном входе он не окупается.
+    large-v3 places punctuation, so punctuation is usually enough.
+    If a track with no punctuation at all comes along — wtpsplit SaT
+    (`sat-3l-sm`) hooks in here, which holds sentence boundaries in 85 languages and
+    doesn't depend on punctuation. Not hooked up yet: on punctuated input it doesn't pay off.
 
-    Правило склейки не зависит от языка: часть, первый знак которой — строчная
-    буква, предложения не начинает и приписывается к предыдущей через один пробел.
-    Точка перед строчной буквой границей не считается — так остаются целыми
-    порядковые числительные и годы («5. maja», «1980. godine»), сокращения
-    («U.S. market», «e.g. tech», «npr.») и многоточие перед продолжением
-    («ali... ali, nekako»). Части с заглавной, цифры, кавычки или скобки в начале
-    остаются отдельными: продолжение с заглавной («Mr. Smith») по-прежнему режется,
-    письменности без регистра не затронуты — у них `islower()` ложно. Граница,
-    совпавшая с краем куска VAD, лежит между сегментами и сюда не доходит.
+    The joining rule doesn't depend on the language: a part whose first character is
+    lowercase doesn't start a sentence and is appended to the previous one with a single
+    space. A period before a lowercase letter isn't considered a boundary — this way
+    ordinal numerals and years ("5. maja", "1980. godine"), abbreviations
+    ("U.S. market", "e.g. tech", "npr.") and an ellipsis before a continuation
+    ("ali... ali, nekako") stay intact. Parts with an uppercase letter, a digit, a quote or
+    a parenthesis at the start remain separate: a continuation with an uppercase letter
+    ("Mr. Smith") is still cut, scripts without case aren't affected — for them
+    `islower()` is false. A boundary that coincides with the edge of a VAD chunk lies
+    between segments and doesn't reach here.
     """
     parts = [p.strip() for p in SENTENCE_END.split(text) if p.strip()]
     merged: list[str] = []
@@ -91,10 +92,11 @@ def split_sentences(text: str) -> list[str]:
 
 
 def wrap_lines(text: str) -> list[str]:
-    """Разложить текст максимум в две строки, ломая по смыслу, а не по счётчику.
+    """Lay the text out into at most two lines, breaking by meaning, not by a counter.
 
-    Разбиение строго по числу знаков читается плохо: разрыв должен приходиться
-    на пунктуацию, а если её нет — на союз или предлог, чтобы не разрывать группу.
+    Splitting strictly by character count reads poorly: the break must fall
+    on punctuation, and if there's none — on a conjunction or preposition, so as not to
+    break a group.
     """
     if len(text) <= MAX_CHARS_PER_LINE:
         return [text]
@@ -102,7 +104,7 @@ def wrap_lines(text: str) -> list[str]:
     words = text.split()
     best_index, best_score = None, None
 
-    # Кандидаты — все разрывы, при которых обе строки влезают в лимит.
+    # Candidates are all breaks at which both lines fit the limit.
     for i in range(1, len(words)):
         left = " ".join(words[:i])
         right = " ".join(words[i:])
@@ -110,7 +112,7 @@ def wrap_lines(text: str) -> list[str]:
         if len(left) > MAX_CHARS_PER_LINE or len(right) > MAX_CHARS_PER_LINE:
             continue
 
-        # Чем ровнее половины, тем лучше; пунктуация и союз дают бонус.
+        # The more even the halves, the better; punctuation and a conjunction give a bonus.
         score = abs(len(left) - len(right))
 
         if BREAK_AFTER.search(left[-2:] + " "):
@@ -122,21 +124,21 @@ def wrap_lines(text: str) -> list[str]:
             best_index, best_score = i, score
 
     if best_index is None:
-        # Ни один разрыв не даёт две влезающие строки — вернём как есть,
-        # длину порежет вызывающий, разбив предложение на несколько реплик.
+        # No break gives two fitting lines — return as is, the caller will cut the
+        # length by splitting the sentence into several utterances.
         return [text]
 
     return [" ".join(words[:best_index]), " ".join(words[best_index:])]
 
 
 def _split_balanced(text: str, limit: int) -> list[str]:
-    """Порезать на куски не длиннее limit, стараясь сделать их равными.
+    """Cut into chunks no longer than limit, trying to make them equal.
 
-    Жадная нарезка «набивай до лимита» оставляет огрызок в хвосте: предложение
-    в 77 знаков при лимите 76 разваливается на 69 знаков и одно слово. Такая
-    реплика мелькает на экране и читается как сбой, даже если формально влезает
-    во все ограничения. Поэтому сначала считаем, сколько кусков нужно, а потом
-    делим на примерно равные.
+    Greedy "fill up to the limit" cutting leaves a stub at the tail: a sentence
+    of 77 characters at a limit of 76 falls apart into 69 characters and one word. Such
+    an utterance flashes on screen and reads like a glitch, even if it formally fits
+    all the constraints. So first we count how many chunks are needed, then divide into
+    roughly equal ones.
     """
     if len(text) <= limit:
         return [text]
@@ -169,13 +171,13 @@ def _split_balanced(text: str, limit: int) -> list[str]:
 
 
 def _allocate(chunks: list[str], start: float, end: float) -> list[Cue]:
-    """Раздать интервал кускам пропорционально длине текста.
+    """Distribute the interval to the chunks in proportion to the text length.
 
-    Пропорционально знакам, а не поровну: короткий кусок, получивший столько же
-    времени, сколько длинный, читается как пауза, а длинный — не успевает.
+    In proportion to characters, not equally: a short chunk that got as much
+    time as a long one reads as a pause, and the long one doesn't keep up.
     """
     total = sum(len(c) for c in chunks) or 1
-    # Зазоры съедают время, поэтому интервал под текст считаем уже без них.
+    # Gaps eat time, so we count the interval for the text already without them.
     gaps = GAP * (len(chunks) - 1)
     span = max(end - start - gaps, MIN_DURATION * len(chunks))
     cues, cursor = [], start
@@ -185,8 +187,9 @@ def _allocate(chunks: list[str], start: float, end: float) -> list[Cue]:
         duration = min(max(share, MIN_DURATION), MAX_DURATION)
 
         cues.append(Cue(start=cursor, end=cursor + duration, lines=wrap_lines(chunk)))
-        # Зазор уходит в старт следующей реплики, а не вычитается из длительности
-        # текущей — иначе клампинг по минимуму отменяется сразу после применения.
+        # The gap goes into the start of the next utterance, and isn't subtracted from
+        # the duration of the current one — otherwise the clamping by the minimum is
+        # cancelled right after being applied.
         cursor += duration + GAP
 
     return cues
@@ -195,13 +198,14 @@ def _allocate(chunks: list[str], start: float, end: float) -> list[Cue]:
 def build_cues(
     segments: list[dict], drop: Callable[[str, dict], bool] | None = None
 ) -> list[Cue]:
-    """Собрать реплики из сегментов ASR (start, end, text, words).
+    """Assemble utterances from ASR segments (start, end, text, words).
 
-    Пословные тайминги используются, чтобы посадить границу предложения на реальную
-    паузу между словами, а не на пропорциональную оценку внутри сегмента.
+    Word timings are used to plant the sentence boundary on a real
+    pause between words, rather than on a proportional estimate inside the segment.
 
-    drop зовётся как drop(предложение, сегмент); True — предложение в реплики не идёт.
-    Без drop поведение прежнее: на этом держится spikes/asr_real.py.
+    drop is called as drop(sentence, segment); True — the sentence doesn't go into
+    utterances. Without drop the behavior is the previous one: spikes/asr_real.py relies
+    on this.
     """
     cues: list[Cue] = []
 
@@ -216,11 +220,12 @@ def build_cues(
         spans = _sentence_spans(sentences, words, segment["start"], segment["end"])
 
         for sentence, (start, end) in zip(sentences, spans):
-            # Интервалы сопоставлены со словами по всем предложениям сегмента, до отсева:
-            # выбрось предложение раньше, и каждое следующее легло бы на чужие слова.
-            # Отсев идёт по предложению целиком, до _split_balanced и _enforce_min_duration:
-            # длинное эхо иначе резалось бы на куски, порознь на эхо не похожие, а короткое
-            # склеивалось бы с соседней настоящей репликой («Da. Pominju se na srpskom jeziku.»).
+            # Intervals are matched to words across all sentences of the segment, before
+            # screening: discard a sentence earlier, and each following one would land on
+            # someone else's words. Screening goes by the sentence as a whole, before
+            # _split_balanced and _enforce_min_duration: otherwise a long echo would be
+            # cut into chunks that separately don't look like an echo, and a short one
+            # would be glued to a neighbouring real utterance ("Da. Pominju se na srpskom jeziku.").
             if drop is not None and drop(sentence, segment):
                 continue
 
@@ -231,14 +236,15 @@ def build_cues(
                 cues.append(Cue(start=start, end=end, lines=wrap_lines(sentence)))
                 continue
 
-            # Не влезает по знакам или по длительности — режем на несколько реплик
-            # и раздаём интервал пропорционально.
+            # Doesn't fit by characters or by duration — cut into several utterances
+            # and distribute the interval proportionally.
             #
-            # Скорость чтения сюда намеренно не входит. Если говорящий произнёс
-            # 76 знаков за 3 секунды, то разбиение оставит те же 26 знаков в секунду,
-            # только реплики начнут сменяться вдвое чаще — станет хуже, а не лучше.
-            # Единственный рычаг против высокого CPS — укоротить текст, и он находится
-            # в переводе: валидатор помечает такие реплики, и модель их сокращает.
+            # Reading speed deliberately doesn't enter here. If the speaker uttered
+            # 76 characters in 3 seconds, then the split will leave the same 26 characters
+            # per second, only the utterances will start changing twice as often — it will
+            # get worse, not better. The only lever against high CPS is to shorten the
+            # text, and it's found in the translation: the validator flags such utterances,
+            # and the model shortens them.
             needed = max(
                 len(sentence) / MAX_CHARS,
                 (end - start) / MAX_DURATION,
@@ -250,13 +256,13 @@ def build_cues(
 
 
 def _enforce_min_duration(cues: list[Cue]) -> list[Cue]:
-    """Убрать реплики короче минимума: сначала объединением, потом растягиванием.
+    """Remove utterances shorter than the minimum: first by merging, then by stretching.
 
-    Короткие фразы вроде «Да.» и «Нет.», сказанные подряд, приходят прямым путём
-    в обход разбиения, где минимум уже соблюдается. Показывать их по полсекунды
-    нельзя — они мелькают и не читаются. Растянуть обе тоже не выйдет: между ними
-    нет столько времени. Правильное решение то же, что у живых субтитровщиков, —
-    объединить в одну реплику, если объединённый текст влезает в две строки.
+    Short phrases like "Да." and "Нет.", said in a row, come by a direct path
+    bypassing the splitting where the minimum is already observed. Showing them for half
+    a second is not allowed — they flash and aren't read. Stretching both won't work
+    either: there isn't that much time between them. The right solution is the same as
+    for live subtitlers — merge into one utterance if the combined text fits two lines.
     """
     merged: list[Cue] = []
 
@@ -274,7 +280,7 @@ def _enforce_min_duration(cues: list[Cue]) -> list[Cue]:
 
         merged.append(cue)
 
-    # Что не удалось объединить — растягиваем в паузу до следующей реплики.
+    # What couldn't be merged — stretch into a pause up to the next utterance.
     for index, cue in enumerate(merged):
         if cue.duration >= MIN_DURATION:
             continue
@@ -288,17 +294,17 @@ def _enforce_min_duration(cues: list[Cue]) -> list[Cue]:
 def _sentence_spans(
     sentences: list[str], words: list[dict], start: float, end: float
 ) -> list[tuple[float, float]]:
-    """Сопоставить предложениям интервалы времени по пословным таймингам."""
+    """Match sentences to time intervals by word timings."""
     if not words or len(sentences) == 1:
         return _proportional_spans(sentences, start, end)
 
     spans, cursor = [], 0
 
     for index, sentence in enumerate(sentences):
-        # Слова могут кончиться раньше предложений: пословный список бывает короче
-        # текста сегмента, потому что счёт идёт по знакам, а знаки препинания и
-        # пробелы распределены между словами не так, как в исходной строке.
-        # Остаток раскладываем пропорционально внутри оставшегося интервала.
+        # Words may run out before sentences: the word list is sometimes shorter
+        # than the segment text, because counting goes by characters, and punctuation
+        # marks and spaces are distributed among words differently than in the source
+        # line. We lay out the remainder proportionally inside the remaining interval.
         if cursor >= len(words):
             tail_start = spans[-1][1] if spans else start
 
@@ -335,21 +341,21 @@ def _proportional_spans(
 
 
 def _dedupe_overlaps(cues: list[Cue]) -> list[Cue]:
-    """Не дать соседним репликам наехать друг на друга.
+    """Don't let neighbouring utterances overlap.
 
-    Перекрытие означает, что две реплики нарисуются одновременно, а поиск активной
-    реплики по currentTime вернёт произвольную из них.
+    An overlap means two utterances will be drawn simultaneously, and the search for the
+    active utterance by currentTime will return an arbitrary one of them.
     """
     for previous, current in zip(cues, cues[1:]):
         if previous.end > current.start - GAP:
-            # Пол — собственное начало реплики, а не MIN_DURATION/2. Прежний вариант
-            # брал больший из двух вариантов, поэтому при тесно идущих репликах
-            # выигрывал пол, и перекрытие, ради устранения которого функция и нужна,
-            # оставалось на месте. Заодно он нарушал минимум, только что выставленный
-            # _enforce_min_duration, вдвое — и восстановить его здесь нельзя: тянуть
-            # реплику за начало следующей значит вернуть перекрытие.
+            # The floor is the utterance's own start, not MIN_DURATION/2. The previous
+            # variant took the larger of the two options, so with closely spaced
+            # utterances the floor won, and the overlap, for whose removal the function
+            # exists, remained. At the same time it violated the minimum just set by
+            # _enforce_min_duration, by half — and it can't be restored here: pulling an
+            # utterance past the start of the next means bringing the overlap back.
             previous.end = max(current.start - GAP, previous.start)
 
-    # Реплики, схлопнувшиеся в ноль (следующая начинается раньше, чем через GAP),
-    # на таймлайне бесполезны: показать их всё равно невозможно.
+    # Utterances collapsed to zero (the next one starts earlier than after GAP)
+    # are useless on the timeline: showing them is impossible anyway.
     return [cue for cue in cues if cue.end > cue.start]

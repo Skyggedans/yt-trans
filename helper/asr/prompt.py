@@ -1,19 +1,20 @@
-"""Затравка распознавания и отсев его мусора — общее у воркера и демона.
+"""Recognition seed and screening of its garbage — shared by the worker and the daemon.
 
-Затравка нужна ровно для одного — прибить латиницу у сербского семейства
-(`helper/script.py`), поэтому фраза есть только у `sr`. Где фразы нет, нет и затравки:
-имена тоже не идут.
+The seed is needed for exactly one thing — to pin Latin script in the Serbian family
+(`helper/script.py`), so the phrase exists only for `sr`. Where there's no phrase,
+there's no seed either: names don't go either.
 
-Пакетный режим faster-whisper 1.2.1 подаёт одну и ту же затравку каждому куску до 30
-секунд (`generate_segment_batched` копирует её на каждый кусок пачки), и на кусках без
-речи она всплывает эхом. Из затравки он берёт последние 223 токена (`get_prompt`:
-`max_length // 2 - 1`): переполнение съело бы фразу, а не имена.
+faster-whisper 1.2.1's batched mode feeds the same seed to every chunk up to 30
+seconds (`generate_segment_batched` copies it to every chunk of the batch), and on
+chunks without speech it surfaces as an echo. From the seed it takes the last 223
+tokens (`get_prompt`: `max_length // 2 - 1`): an overflow would eat the phrase, not
+the names.
 
-Пороги тишины и повторов пакетный режим принимает и не применяет («Unused Arguments»
-в докстроке `BatchedInferencePipeline.transcribe`), поэтому отсев — на стороне демона:
-сегмент судят по метрикам, которые он и так несёт (`segment_verdict`), а предложения
-сегмента с «повтором» — по своей `compression_ratio` и по повтору уже сказанного
-(`helper.jobs.asr_cues`).
+The batched mode accepts and doesn't apply the silence and repetition thresholds
+("Unused Arguments" in the docstring of `BatchedInferencePipeline.transcribe`), so
+screening is on the daemon side: a segment is judged by the metrics it carries anyway
+(`segment_verdict`), and the segment's sentences with a "repeat" — by their own
+`compression_ratio` and by repetition of what was already said (`helper.jobs.asr_cues`).
 """
 
 from __future__ import annotations
@@ -26,28 +27,29 @@ from collections.abc import Mapping, Sequence
 from helper.language import family
 from helper.script import CYRILLIC, to_latin
 
-# Пороги — те же, что Whisper применяет в последовательном режиме, а пакетный режим
-# только хранит в опциях. Тишина выбрасывает сегмент целиком, повтор его лишь помечает.
+# Thresholds are the same ones Whisper applies in sequential mode, and the batched mode
+# only stores them in options. Silence discards the segment whole, a repeat only marks it.
 NO_SPEECH_THRESHOLD = 0.6
 LOG_PROB_THRESHOLD = -1.0
 COMPRESSION_RATIO_THRESHOLD = 2.4
 
-# Дольше воркер всё равно не возьмёт: переполнение затравки съело бы фразу.
+# The worker won't take longer anyway: an overflow of the seed would eat the phrase.
 MAX_NAMES = 12
 
 PHRASES = {"sr": "Ovo je transkript video snimka na srpskom jeziku."}
 NAMES_LEAD = "Pominju se:"
 
-# Обиходные слова фразы и вводки: сами по себе эхо они не делают.
+# Common words of the phrase and the lead-in: by themselves they don't make an echo.
 ECHO_COMMON = frozenset({"ovo", "je", "video", "na", "se", "srpskom", "jeziku"})
 
 
 def harvest_names(title: str, tags: Sequence[str]) -> list[str]:
-    """Имена из заголовка и тегов в их собственном написании, без транслитерации.
+    """Names from the title and tags in their own spelling, without transliteration.
 
-    Эхо в поле шло из шаблонного текста описаний (Label, Copyright, Patreon, Instagram,
-    спонсоры), поэтому описания нет даже в параметрах. Слово капсом длиннее четырёх букв
-    — выделение в заголовке (UDARIO, OFARBANOG, NAJGORIH), а короткие BMW и NATO — названия.
+    The echo in the field came from the template text of descriptions (Label, Copyright,
+    Patreon, Instagram, sponsors), so the description isn't even in the parameters. A word
+    in caps longer than four letters is an emphasis in the title (UDARIO, OFARBANOG,
+    NAJGORIH), and short BMW and NATO are names.
     """
     names: dict[str, None] = {}
 
@@ -70,11 +72,11 @@ def harvest_names(title: str, tags: Sequence[str]) -> list[str]:
 
 
 def initial_prompt(language: str | None, names: Sequence[str]) -> str | None:
-    """Затравка для решённого языка; None — язык без фразы, имена тогда не идут.
+    """The seed for a decided language; None — a language without a phrase, then names don't go either.
 
-    Имена транслитерируются сербскими правилами и выкидываются, если после них осталась
-    кириллица («Для» → «Dlя»): в затравке от них один мусор. Тест BCMS здесь
-    структурный — фраза есть только у семейства `sr`.
+    Names are transliterated by Serbian rules and dropped if Cyrillic remains after them
+    ("Для" → "Dlя"): in the seed they're just garbage. The BCMS test here is structural —
+    the phrase exists only for the `sr` family.
     """
     phrase = PHRASES.get(family(language))
 
@@ -101,8 +103,8 @@ def initial_prompt(language: str | None, names: Sequence[str]) -> str | None:
 
 
 def _words(text: str) -> set[str]:
-    """Слова строки без регистра, диакритики и знаков: «Jürgen» и «jurgen» — одно."""
-    # у đ нет разложения в NFKD, поэтому диграф подставляется до него.
+    """Words of a line without case, diacritics and punctuation: "Jürgen" and "jurgen" are one."""
+    # đ has no decomposition in NFKD, so the digraph is substituted before it.
     folded = text.casefold().replace("đ", "dj")
     folded = "".join(
         char for char in unicodedata.normalize("NFKD", folded)
@@ -113,14 +115,15 @@ def _words(text: str) -> set[str]:
 
 
 def is_echo(sentence: str, prompt: str | None) -> bool:
-    """Предложение состоит только из слов затравки, и это её хвост, а не обиходная речь.
+    """The sentence consists only of the seed's words, and it's its tail, not everyday speech.
 
-    Отступление от буквы замысла: буквального совпадения с затравкой нет ни в одной из
-    66 620 закэшированных реплик, эхо — обрывки и перестановки её хвоста («Pominju se na
-    srpskom jeziku.») и списки имён. Обиходные слова фразы эхо не делают («Ovo je video.»,
-    «Na srpskom jeziku.»), одно слово тоже («Andrija, Andrija.»), и одно имя из заголовка
-    в обиходной фразе тоже: заголовок «ŠTA SE KRILO U TITOVOM PLAVOM VOZU?» даёт имя ŠTA,
-    и без этого условия «Šta je ovo?» уходило бы эхом.
+    A deviation from the letter of the intent: there's no literal match with the seed in
+    any of the 66,620 cached utterances, the echo is fragments and permutations of its
+    tail ("Pominju se na srpskom jeziku.") and lists of names. The phrase's common words
+    don't make an echo ("Ovo je video.", "Na srpskom jeziku."), neither does a single word
+    ("Andrija, Andrija."), nor one name from the title in an everyday phrase: the title
+    "ŠTA SE KRILO U TITOVOM PLAVOM VOZU?" yields the name ŠTA, and without this condition
+    "Šta je ovo?" would go off as an echo.
     """
     if prompt is None:
         return False
@@ -138,10 +141,10 @@ def is_echo(sentence: str, prompt: str | None) -> bool:
 
 
 def compression_ratio(text: str) -> float:
-    """Степень сжатия по формуле faster-whisper (`get_compression_ratio`).
+    """Compression degree by faster-whisper's formula (`get_compression_ratio`).
 
-    Нужна демону для предложений внутри сегмента: метрику сегмента считает сама
-    библиотека, а предложения — только мы.
+    Needed by the daemon for sentences inside a segment: the segment metric is computed
+    by the library itself, but sentences — only by us.
     """
     data = text.encode("utf-8")
 
@@ -149,15 +152,15 @@ def compression_ratio(text: str) -> float:
 
 
 def segment_verdict(segment: Mapping[str, object]) -> str | None:
-    """«тишина», «повтор» или None по метрикам сегмента распознавания.
+    """ "тишина" (silence), "повтор" (repeat) or None by the recognition segment's metrics.
 
-    «тишина» — правило, которым Whisper сам пропускает окно в последовательном режиме,
-    и такой сегмент выбрасывается целиком. «повтор» — замена отката по температуре,
-    которого в пакетном режиме нет (Whisper перерасшифровал бы кусок), но сегмент
-    пакетного режима — целый кусок речи до 30 секунд, и петля часто начинается посреди
-    него, после настоящего диалога. Поэтому «повтор» сегмент только помечает: внутри
-    выбрасываются одни зациклившиеся предложения (`asr_cues`), а речь перед петлёй
-    остаётся. Каждый выброс уходит в журнал.
+    "тишина" — the rule by which Whisper itself skips a window in sequential mode, and
+    such a segment is discarded whole. "повтор" — a replacement for the temperature
+    fallback, which doesn't exist in batched mode (Whisper would re-decode the chunk),
+    but a batched-mode segment is a whole piece of speech up to 30 seconds, and the loop
+    often starts in the middle of it, after real dialogue. Therefore "повтор" only marks
+    the segment: inside it only the looping sentences are discarded (`asr_cues`), while
+    the speech before the loop remains. Every discard goes to the log.
     """
     no_speech = segment.get("no_speech_prob")
     logprob = segment.get("avg_logprob")

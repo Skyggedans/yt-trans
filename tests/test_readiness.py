@@ -1,4 +1,4 @@
-"""Готовность на проводе: где перевод кончается и какие куски ещё пусты."""
+"""Readiness on the wire: where the translation ends and which pieces are still empty."""
 
 from conftest import preempt_after_asr
 from helper import jobs
@@ -67,9 +67,9 @@ async def test_the_segmented_event_says_the_whole_transcript_is_still_pending(
     assert job.stage is Stage.PAUSED
     segmented = next(e for e in job.events if e["type"] == "segmented")
     assert segmented["total"] == 2
-    # Нарезка обрезает конец реплики по тишине, так что между репликами остаётся
-    # настоящий просвет, и сливать его не с чем. Проверяем то, что обещает поле:
-    # непереведённое покрывает ролик с начала до конца, и перевод не начат.
+    # The cut trims the end of an utterance at silence, so a real gap remains
+    # between utterances and there is nothing to merge it with. We check what the field
+    # promises: the untranslated part covers the video from start to end, and the translation has not begun.
     assert segmented["pending"][0][0] == 0.0
     assert segmented["pending"][-1][1] == 4.0
     assert segmented["translatedThrough"] == 0.0

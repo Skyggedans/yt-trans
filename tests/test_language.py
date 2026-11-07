@@ -1,4 +1,4 @@
-"""helper/language.py: коды языков, правило определителя и решение о языке."""
+"""helper/language.py: language codes, the detector rule and the language decision."""
 
 import ast
 import json
@@ -135,7 +135,7 @@ def test_bcms_is_three_whisper_tokens():
 def test_refusal_names_the_value_and_where_to_fix_it():
     phrase = language.refusal("serbian")
 
-    assert phrase == "неизвестный язык «serbian»: [asr] language в config.toml"
+    assert phrase == 'unknown language "serbian": [asr] language in config.toml'
     assert len(phrase) <= 60
 
 
@@ -152,12 +152,12 @@ def test_language_module_imports_only_the_standard_library():
     assert roots <= sys.stdlib_module_names
 
 
-# ── Определитель: окна, правило, решение ─────────────────────────────────────────
+# ── Detector: windows, rule, decision ────────────────────────────────────────────
 
 
 def test_detector_constants_are_pinned():
-    # Смена любой из них меняет распознавание закэшированных роликов: правишь здесь —
-    # поднимай helper.cache.PROMPT_VERSION.
+    # Changing any of them changes recognition of cached videos: edit here —
+    # bump helper.cache.PROMPT_VERSION.
     assert language.MIN_SPEECH_SECONDS == 3.0
     assert language.BCMS_FLOOR == 0.2
     assert language.SLAVIC_NEIGHBOURS == {"mk", "bg", "sl", "ru", "uk", "be", "cs", "sk", "pl"}
@@ -186,20 +186,20 @@ def window(*shares: tuple[str, float], speech: float = 25.0):
     return (speech, list(shares))
 
 
-# 3XJLfTSZy6I: сербская речь без метаданных. en сверху в пяти окнах из восьми,
-# в среднем en 0.55 против 0.44 у сербского семейства.
+# 3XJLfTSZy6I: Serbian speech without metadata. en on top in five windows out of eight,
+# on average en 0.55 versus 0.44 for the Serbian family.
 IZA_MRAKA = [window(("en", 0.80), ("sr", 0.10), ("hr", 0.06), ("bs", 0.03), ("de", 0.01))] * 5 + [
     window(("sr", 0.45), ("hr", 0.27), ("bs", 0.15), ("en", 0.10), ("de", 0.03)),
     window(("hr", 0.40), ("sr", 0.35), ("en", 0.15), ("bs", 0.10)),
     window(("sr", 0.50), ("bs", 0.20), ("hr", 0.15), ("en", 0.15)),
 ]
-# Q2QcYOBk0Jo (Juske): метка YouTube en, речь сербская.
+# Q2QcYOBk0Jo (Juske): YouTube label en, speech Serbian.
 JUSKE = [window(("sr", 0.60), ("hr", 0.25), ("bs", 0.12), ("en", 0.03))] * 8
-# 3UbtKc9MlXg: английский, сербского семейства ноль во всех восьми окнах.
+# 3UbtKc9MlXg: English, zero Serbian family in all eight windows.
 ENGLISH = [window(("en", 0.95), ("de", 0.03), ("nl", 0.02))] * 8
-# Русская речь, у которой сербского семейства 0.3: выше порога, но язык свой.
+# Russian speech with a Serbian-family share of 0.3: above the threshold, but its own language.
 RUSSIAN = [window(("ru", 0.60), ("sr", 0.20), ("hr", 0.10), ("uk", 0.10))] * 8
-# Клип почти без речи: ни одно окно не голосует.
+# A clip with almost no speech: no window votes.
 SILENCE = [window(speech=0.0)] * 8
 
 
@@ -226,7 +226,7 @@ def test_serbian_speech_under_an_english_label():
     assert (verdict.declared, verdict.declared_by) == ("en", "metadata")
     assert verdict.reason == "detector"
     assert verdict.mismatch is True
-    assert verdict.note() == "YouTube указал en, по речи sr"
+    assert verdict.note() == "YouTube indicated en, by speech sr"
 
 
 def test_english_without_bcms_stays_english():
@@ -264,7 +264,7 @@ def test_windows_without_speech_or_answer_do_not_vote():
         [
             window(("en", 0.99), speech=2.9),
             window(speech=0.0),
-            # Речь есть, но определитель на этом окне упал: ответа нет.
+            # There is speech, but the detector crashed on this window: there is no answer.
             window(speech=25.0),
         ]
     )
@@ -325,12 +325,12 @@ def manual(effective: str, declared: str | None, declared_by: str | None) -> lan
 @pytest.mark.parametrize(
     ("pin", "hint", "windows", "mismatch", "note"),
     [
-        ("sr", None, ENGLISH, True, "в настройках sr, по речи en"),
+        ("sr", None, ENGLISH, True, "in the settings sr, by speech en"),
         ("hr", None, JUSKE, False, None),
-        (None, "en", JUSKE, True, "YouTube указал en, по речи sr"),
+        (None, "en", JUSKE, True, "YouTube indicated en, by speech sr"),
         (None, None, IZA_MRAKA, False, None),
-        (None, "en", SILENCE, False, "речи почти нет, язык взят у YouTube: en"),
-        (None, None, SILENCE, False, "речи почти нет, язык принят за sr"),
+        (None, "en", SILENCE, False, "almost no speech, the language came from YouTube: en"),
+        (None, None, SILENCE, False, "almost no speech, the language was assumed to be sr"),
     ],
 )
 def test_mismatch_and_note_from_speech(pin, hint, windows, mismatch, note):
@@ -344,8 +344,8 @@ def test_mismatch_and_note_from_speech(pin, hint, windows, mismatch, note):
 @pytest.mark.parametrize(
     ("declared", "declared_by", "mismatch", "note"),
     [
-        ("en", "metadata", True, "YouTube указал en, дорожка автора sr"),
-        ("ru", "config", True, "в настройках ru, дорожка автора sr"),
+        ("en", "metadata", True, "YouTube indicated en, the author's track sr"),
+        ("ru", "config", True, "in the settings ru, the author's track sr"),
         ("hr", "config", False, None),
         (None, None, False, None),
     ],
@@ -372,7 +372,7 @@ def test_wire_carries_exactly_the_agreed_keys():
         "track": None,
         "verified": None,
         "mismatch": True,
-        "note": "YouTube указал en, по речи sr",
+        "note": "YouTube indicated en, by speech sr",
     }
 
 
@@ -414,8 +414,8 @@ def test_from_wire_ignores_derived_and_broken_fields():
 
 @pytest.mark.parametrize("confidence", [float("nan"), float("inf"), float("-inf"), 10**400])
 def test_from_wire_drops_a_confidence_that_is_not_a_finite_share(confidence):
-    # json.dumps пишет NaN и Infinity, json.loads их читает: правленная руками запись
-    # кэша донесла бы их до JSONResponse, а тот на них падает (allow_nan=False).
+    # json.dumps writes NaN and Infinity, json.loads reads them: a hand-edited cache
+    # entry would carry them to JSONResponse, and that crashes on them (allow_nan=False).
     verdict = language.LanguageVerdict.from_wire({"effective": "sr", "confidence": confidence})
 
     assert verdict.confidence is None

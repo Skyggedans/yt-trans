@@ -1,12 +1,13 @@
-"""Нормализация письменности сербского текста.
+"""Normalization of the writing system of Serbian text.
 
-Сербский диграфичен: кириллица и латиница равноправны. Whisper это наследует и
-выдаёт то одно, то другое — иногда внутри одного транскрипта. Замер (arXiv 2601.02906):
-у large-v3 доля правильной кириллицы 0.18 против 0.63–0.93 у латиницы, а OpenAI прямо
-пишут, что предсказания «часто колеблются между двумя письменностями».
+Serbian is digraphic: Cyrillic and Latin are equal. Whisper inherits this and
+outputs now one, now the other — sometimes within a single transcript. Measurement
+(arXiv 2601.02906): for large-v3 the share of correct Cyrillic is 0.18 versus
+0.63–0.93 for Latin, and OpenAI writes directly that predictions "often fluctuate
+between the two scripts".
 
-Смешанная письменность внутри одного батча — это и есть реальная проблема, а не
-способность моделей. Приводим к одной ДО перевода.
+Mixed script within a single batch is the real problem, not a capability of the
+models. We reduce to one BEFORE translation.
 """
 
 from __future__ import annotations
@@ -19,34 +20,35 @@ from helper.language import is_bcms
 
 CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 
-# Буквы, которые есть в сербской кириллице и отсутствуют в русской. Прямой признак,
-# что перед нами сербский, а не русский, — пригодится и как детектор протечки.
+# Letters that exist in Serbian Cyrillic and are absent from Russian. A direct sign
+# that we're dealing with Serbian, not Russian — also useful as a leak detector.
 SERBIAN_ONLY = re.compile(r"[ђЂјЈљЉњЊћЋџЏ]")
 
 
 def to_latin(text: str) -> str:
-    """Привести к латинице. На уже латинском тексте это no-op.
+    """Reduce to Latin. On already Latin text this is a no-op.
 
-    Направление выбрано не по вкусу. Кириллица → латиница это инъективное 1:1
-    отображение, потому что љ, њ и џ — одиночные глифы. Обратное направление
-    неоднозначно: диграфы lj/nj/dž иногда должны остаться двумя буквами через
-    границу морфемы (nadživeti → надживети, а не наџивети), и правиловые
-    транслитераторы, включая cyrtranslit, там ошибаются.
+    The direction was not chosen by taste. Cyrillic → Latin is an injective 1:1
+    mapping, because љ, њ and џ are single glyphs. The reverse direction is
+    ambiguous: the digraphs lj/nj/dž sometimes must remain two letters across a
+    morpheme boundary (nadživeti → надживети, not наџивети), and rule-based
+    transliterators, including cyrtranslit, get that wrong.
 
-    Побочная выгода: BCMS-латиница доминирует в веб-корпусах (её делят hr, bs и
-    sr-Latn), тогда как сербская кириллица разрежена и визуально совпадает с русской —
-    модель с русским уклоном рискует «прочитать» её как сломанный русский и скопировать
-    вместо перевода. Латиница делает источник однозначно не-русским.
+    A side benefit: BCMS Latin dominates web corpora (hr, bs and sr-Latn share it),
+    whereas Serbian Cyrillic is sparse and visually coincides with Russian — a model
+    with a Russian bias risks "reading" it as broken Russian and copying it instead
+    of translating. Latin makes the source unambiguously non-Russian.
     """
     return cyrtranslit.to_latin(text, "sr")
 
 
 def cyrillic_ratio(text: str) -> float:
-    """Доля кириллицы среди букв. После нормализации должна быть около нуля.
+    """Share of Cyrillic among letters. After normalization it should be near zero.
 
-    Это диагностика, а не косметика: ненулевое значение на выходе ASR означает,
-    что модель колебалась между письменностями, и без нормализации любой замер WER
-    и любое сравнение с глоссарием измеряли бы выбор алфавита, а не содержание.
+    This is diagnostics, not cosmetics: a nonzero value at the ASR output means the
+    model fluctuated between scripts, and without normalization any WER measurement
+    and any comparison with the glossary would be measuring the alphabet choice, not
+    the content.
     """
     letters = [c for c in text if c.isalpha()]
 
@@ -57,24 +59,23 @@ def cyrillic_ratio(text: str) -> float:
 
 
 def normalize_cues(cues: list[dict], language: str = "sr") -> list[dict]:
-    """Привести к латинице и текст, и пословный список, сохранив тайминги.
+    """Reduce both the text and the per-word list to Latin, preserving timings.
 
-    Применяется ТОЛЬКО к языкам сербского континуума. Правила транслитерации
-    здесь сербские, и на чужой кириллице они дают бессмыслицу: украинская или
-    русская реплика превращается в свой же текст латиницей — ровно тот симптом,
-    ради которого эта проверка и появилась. Для остальных языков возвращаем
-    реплики нетронутыми.
+    Applied ONLY to languages of the Serbian continuum. The transliteration rules
+    here are Serbian, and on foreign Cyrillic they produce nonsense: a Ukrainian or
+    Russian utterance turns into its own text in Latin — exactly the symptom this
+    check was introduced for. For other languages we return the cues untouched.
 
-    Язык сверяется по семье (is_bcms), а не строкой: метка дорожки автора
-    бывает sr-Cyrl или SR, и точное сравнение пропускало такую кириллицу
-    в переводчик.
+    The language is checked by family (is_bcms), not by string: the author's track
+    label may be sr-Cyrl or SR, and an exact comparison let such Cyrillic through
+    to the translator.
 
-    Слова обязаны нормализоваться вместе с текстом. Сегментация сопоставляет
-    предложения словам по числу знаков, а одна и та же сербская буква занимает
-    в двух письменностях разное их количество: кириллическое «њ» — один знак,
-    латинское «nj» — два. Оставив слова в исходном алфавите, мы сравнивали бы
-    латинский счёт с кириллическим, и границы предложений уезжали бы тем сильнее,
-    чем больше в тексте диграфов.
+    Words must be normalized together with the text. Segmentation matches sentences
+    to words by character count, and the same Serbian letter takes a different number
+    of them in the two scripts: Cyrillic "њ" is one character, Latin "nj" is two.
+    Leaving the words in the original alphabet, we would be comparing a Latin count
+    with a Cyrillic one, and sentence boundaries would drift the more digraphs the
+    text contains.
     """
     if not is_bcms(language):
         return cues

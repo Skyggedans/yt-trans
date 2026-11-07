@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Сертификат для демона: свой корневой CA и выписанный им сертификат на адреса
-# и имена, по которым открывают страницу.
+# Certificate for the daemon: its own root CA and a certificate issued by it for the addresses
+# and names by which the page is opened.
 #
-# Зачем: браузер считает безопасным только https (и петлю). Без https страницу
-# нельзя поставить как приложение, а в share-диалоге Android её не будет вовсе.
-# Публичный сертификат тут не годен: домашний адрес вида 192.168.* и имя вида
-# *.local не принадлежат никому, и выписать на них Let's Encrypt нельзя. Свой CA
-# решает это одним действием на планшете — установкой ca.crt.
+# Why: the browser considers only https (and loopback) secure. Without https the page
+# cannot be installed as an app, and Android will not show it in the share dialog at all.
+# A public certificate is not suitable here: a home address like 192.168.* and a name like
+# *.local belong to no one, and Let's Encrypt cannot issue for them. Your own CA
+# solves this with one action on the tablet — installing ca.crt.
 #
-# Запуск: packaging/make-tls.sh [адрес или имя ...]
-# Имена попадают в сертификат как DNS, адреса — как IP; и то и другое сверяется
-# браузером буквально, поэтому «yt-trans.local» нельзя подписать как IP.
-# Адреса этой машины добавляются всегда, даже если переданы имена.
+# Run: packaging/make-tls.sh [address or name ...]
+# Names go into the certificate as DNS, addresses — as IP; both are checked by the
+# browser literally, so "yt-trans.local" cannot be signed as an IP.
+# This machine's addresses are always added, even if names are passed.
 #
-# CA создаётся один раз и при повторных запусках не меняется: сертификат демона
-# можно перевыпускать сколько угодно, а установленный на планшет ca.crt остаётся
-# тем же. Удалить пару — удалить каталог tls целиком и поставить CA заново.
+# The CA is created once and does not change on repeated runs: the daemon's certificate
+# can be reissued as many times as you like, and the ca.crt installed on the tablet stays
+# the same. To remove the pair — delete the tls directory entirely and install the CA anew.
 
 set -euo pipefail
 
@@ -27,8 +27,8 @@ DAYS_CERT=825
 IPV4='^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
 
 own_addresses() {
-  # scope global — без петли и link-local; контейнерные мосты отбрасываем, их
-  # адреса планшету не принадлежат и в сертификате только мешают.
+  # scope global — no loopback and link-local; container bridges are discarded, their
+  # addresses do not belong to the tablet and only get in the way in the certificate.
   ip -4 -o addr show scope global |
     awk '$2 !~ /^(docker|br-|veth|virbr|tun|tap|cni|flannel)/ { split($4, a, "/"); print a[1] }'
 }
@@ -47,7 +47,7 @@ done
 addresses="$(own_addresses) $extra_ips"
 
 if [ -z "${addresses// /}" ]; then
-  echo "не нашёл ни одного адреса в сети: укажи его аргументом" >&2
+  echo "found no address on the network: pass one as an argument" >&2
   exit 1
 fi
 
@@ -63,7 +63,7 @@ mkdir -p "$TLS_DIR"
 chmod 700 "$TLS_DIR"
 
 if [ ! -f "$TLS_DIR/ca.key" ] || [ ! -f "$TLS_DIR/ca.crt" ]; then
-  echo "создаю корневой CA"
+  echo "creating the root CA"
   openssl req -x509 -newkey rsa:4096 -sha256 -days "$DAYS_CA" -nodes \
     -keyout "$TLS_DIR/ca.key" -out "$TLS_DIR/ca.crt" \
     -subj "/CN=yt-trans $HOSTNAME_NOW" -addext "basicConstraints=critical,CA:TRUE" \
@@ -71,7 +71,7 @@ if [ ! -f "$TLS_DIR/ca.key" ] || [ ! -f "$TLS_DIR/ca.crt" ]; then
   chmod 600 "$TLS_DIR/ca.key"
 fi
 
-echo "выпускаю сертификат на: $SAN"
+echo "issuing a certificate for: $SAN"
 openssl req -newkey rsa:2048 -sha256 -nodes \
   -keyout "$TLS_DIR/server.key" -out "$TLS_DIR/server.csr" \
   -subj "/CN=$HOSTNAME_NOW" 2>/dev/null
@@ -92,21 +92,21 @@ rm -f "$TLS_DIR/server.csr" "$TLS_DIR/server.ext"
 
 PORT="${YT_TRANS_PORT:-8756}"
 first_name="$(echo $extra_names | awk '{print $1}')"
-where="${first_name:-<адрес>}"
+where="${first_name:-<address>}"
 
 cat <<EOF
 
-готово. В $CONFIG_DIR/config.toml:
+done. In $CONFIG_DIR/config.toml:
 
 [server]
 host = "0.0.0.0"
 tls_cert = "$TLS_DIR/server.crt"
 tls_key = "$TLS_DIR/server.key"
 
-затем: systemctl --user restart yt-trans
+then: systemctl --user restart yt-trans
 
-на планшет один раз поставить $TLS_DIR/ca.crt
-(Настройки → Безопасность → Шифрование и учётные данные → Установить сертификат
-→ Сертификат CA), после чего открывать страницу по https://$where:$PORT/
-и поставить её как приложение.
+install $TLS_DIR/ca.crt on the tablet once
+(Settings → Security → Encryption & credentials → Install a certificate
+→ CA certificate), then open the page at https://$where:$PORT/
+and install it as an app.
 EOF

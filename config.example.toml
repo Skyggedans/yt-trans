@@ -1,121 +1,121 @@
-# Пример конфигурации демона. Скопировать в ~/.config/yt-trans/config.toml
-# и отредактировать. Без файла берутся значения, показанные ниже как умолчания.
+# Example daemon configuration. Copy to ~/.config/yt-trans/config.toml
+# and edit. Without the file, the values shown below as defaults are used.
 #
-# Читается один раз при старте: смена модели требует перезапуска демона. Это
-# намеренно — модель резидентна в ollama, и менять её посреди задания значит
-# переоткрывать всю дисциплину свопа видеопамяти.
+# It is read once at startup: changing the model requires a daemon restart. This is
+# deliberate — the model is resident in ollama, and changing it in the middle of a job
+# means reopening the whole video-memory swap discipline.
 
 [asr]
-# Распознавание. Замеры на FLEURS sr_rs: large-v3 даёт WER 11.4%,
-# large-v3-turbo 11.8% при вдвое большей скорости, но на реальном ролике
-# turbo однажды недосчитался 7 пунктов покрытия — потерял кусок речи.
-# Задержка упирается в перевод, а не в распознавание, поэтому экономить
-# здесь нечего и по умолчанию стоит large-v3.
+# Recognition. Measurements on FLEURS sr_rs: large-v3 gives WER 11.4%,
+# large-v3-turbo 11.8% at twice the speed, but on a real video
+# turbo once came up 7 points short on coverage — it lost a piece of speech.
+# Latency is limited by translation, not recognition, so there is nothing to save
+# here and by default large-v3 is set.
 model = "large-v3"
 
-# int8_float16 экономит около гигабайта, но НЕ ускоряет: замерено 19.6 с
-# против 19.2 у float16 на одном и том же клипе. Брать его стоит только
-# если памяти не хватает.
+# int8_float16 saves about a gigabyte, but does NOT speed things up: measured 19.6 s
+# versus 19.2 for float16 on the same clip. Take it only
+# if there is not enough memory.
 compute_type = "float16"
 
-# Язык речи. "auto" — язык определяет сам демон: определитель слушает окна
-# по всей длине ролика и работает всегда, а метка языка от YouTube для него
-# лишь подсказка (сербские каналы YouTube бывает помечает английскими).
+# Speech language. "auto" — the daemon determines the language itself: the detector listens to windows
+# along the whole video length and always works, and YouTube's language label is
+# only a hint for it (YouTube sometimes marks Serbian channels as English).
 #
-# Код языка ("sr", "en", "ru"…) закрепляет язык для КАЖДОГО ролика: Whisper
-# распознаёт с ним, даже если звучит другой язык, а определитель только
-# отмечает расхождение. Ставить, лишь если все ролики на одном языке.
-# sh, me и cnr годятся и означают sr; регион и письменность отбрасываются
-# ("sr-Latn" — это sr). Код, которого Whisper не знает, — ошибка в журнале
-# при старте и отказ каждого нового ролика: «неизвестный язык …».
+# A language code ("sr", "en", "ru"…) pins the language for EVERY video: Whisper
+# recognizes with it, even if another language is spoken, and the detector only
+# notes the mismatch. Set it only if all videos are in one language.
+# sh, me and cnr are also suitable and mean sr; region and script are discarded
+# ("sr-Latn" is sr). A code Whisper does not know is an error in the log
+# at startup and a refusal for every new video: "unknown language …".
 language = "auto"
 
-# Расход видеопамяти. Обычно не нужен: для известных сочетаний модели
-# и типа вычислений он берётся из справочника в helper/config.py.
-# Задавать обязательно, если ставишь модель, которой там нет — иначе
-# контроль допуска не сможет решить, помещается ли она на карту.
+# Video memory usage. Usually not needed: for known combinations of the model
+# and compute type it is taken from the reference table in helper/config.py.
+# Must be set if you install a model that is not there — otherwise
+# the admission check will not be able to decide whether it fits on the card.
 # vram_mib = 6144
 
 
 [translator]
-# Любая модель из `ollama list`. Требование одно: она должна помещаться
-# на карту рядом с десктопом. На 24 ГБ это примерно до 18 ГБ.
+# Any model from `ollama list`. There is one requirement: it must fit
+# on the card next to the desktop. On 24 GB that is roughly up to 18 GB.
 #
-# Замеры на RTX 4090: qwen3.8:27b держится целиком в видеопамяти и выдаёт
-# 98–130 токенов в секунду, тогда как gemma4:31b не помещается, сползает
-# на процессор и падает до 15 — при том же качестве русского.
+# Measurements on RTX 4090: qwen3.8:27b stays entirely in video memory and gives
+# 98–130 tokens per second, while gemma4:31b does not fit, slides
+# onto the CPU and drops to 15 — with the same Russian quality.
 model = "qwen3.8:27b"
 
-# Более лёгкая замена, если карта нужна под другое. Осторожно: по
-# человеческой оценке качества перевода на сербском 12B проигрывает 27B
-# почти вдвое — это куда более резкий обрыв, чем на других языках.
+# A lighter replacement if the card is needed for something else. Careful: by
+# human assessment of translation quality on Serbian, 12B loses to 27B
+# by almost half — this is a much sharper drop than on other languages.
 # model = "translategemma:12b"
 
 # vram_mib = 17800
 
 
 [youtube]
-# Отдельный аккаунт YouTube для роликов 18+. Без него такие ролики не
-# переводятся: YouTube отдаёт их только вошедшему пользователю. Всё остальное
-# демон качает анонимно, а аккаунт подставляет, только когда YouTube отказал
-# именно возрастным ограничением.
+# A separate YouTube account for 18+ videos. Without it such videos are not
+# translated: YouTube serves them only to a signed-in user. Everything else
+# the daemon downloads anonymously, and substitutes the account only when YouTube refused
+# specifically because of the age restriction.
 #
-# Аккаунт нужен отдельный, не основной. Так советует сам yt-dlp: аккаунт,
-# через который он ходит, YouTube может забанить, временно или навсегда
+# The account must be separate, not the main one. yt-dlp itself advises this: the account
+# through which it talks can be banned by YouTube, temporarily or forever
 # (https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies).
-# Возраст у аккаунта должен быть подтверждён: проверить можно, открыв под ним
-# любой ролик 18+ в браузере.
+# The account's age must be confirmed: you can check by opening any
+# 18+ video with it in a browser.
 #
-# Выгружать cookies так, чтобы браузер их потом не перевыпустил и тем не
-# обесценил — открытые вкладки YouTube обновляет регулярно:
-#   1. Открыть приватное окно и войти в этот аккаунт на youtube.com.
-#   2. В той же вкладке открыть https://www.youtube.com/robots.txt; других
-#      приватных вкладок быть не должно.
-#   3. Выгрузить cookies youtube.com в файл формата Netscape расширением,
-#      которому разрешено работать в приватном режиме (подходящие перечислены
-#      в FAQ yt-dlp, «How do I pass cookies to yt-dlp?»).
-#   4. Закрыть приватное окно.
-#   5. chmod 600 на файл: в нём вход в аккаунт.
+# Export cookies so that the browser does not reissue them later and thereby
+# devalue them — YouTube updates open tabs regularly:
+#   1. Open a private window and sign in to this account on youtube.com.
+#   2. In the same tab open https://www.youtube.com/robots.txt; there must be no other
+#      private tabs.
+#   3. Export youtube.com cookies to a Netscape-format file with an extension
+#      that is allowed to work in private mode (suitable ones are listed
+#      in the yt-dlp FAQ, "How do I pass cookies to yt-dlp?").
+#   4. Close the private window.
+#   5. chmod 600 on the file: it contains the account sign-in.
 #
-# yt-dlp при каждом вызове дописывает в файл обновлённые cookies, поэтому
-# файл должен быть доступен демону на запись. Настройка читается при старте:
-# после правки — systemctl --user restart yt-trans. После замены устаревшего
-# файла тоже: отказ по ролику, уже полученный, держится до перезапуска.
+# yt-dlp appends updated cookies to the file on each call, so
+# the file must be writable by the daemon. The setting is read at startup:
+# after editing — systemctl --user restart yt-trans. After replacing a stale
+# file too: a refusal on a video already received is held until a restart.
 # cookies = "~/.config/yt-trans/youtube-18.txt"
 
 [server]
-# На каком адресе слушает демон. По умолчанию только петля: демон запускает
-# запросы к YouTube по команде клиента, и открывать его в сеть просто так нельзя.
-# Планшет в другой комнате требует "0.0.0.0". Тогда демон доступен всем в своей
-# сети: токена у него нет, и чужие страницы в браузере отсекает только проверка
-# Origin. Любой, кто дотянется до порта, будет им пользоваться.
+# On which address the daemon listens. By default only loopback: the daemon issues
+# requests to YouTube on the client's command, and it cannot simply be opened to the network.
+# A tablet in another room requires "0.0.0.0". Then the daemon is available to everyone in its
+# network: it has no token, and foreign pages in the browser are cut off only by the
+# Origin check. Anyone who reaches the port will use it.
 # host = "0.0.0.0"
 
-# HTTPS. Нужен не ради шифрования домашней сети, а ради планшета: браузер
-# считает безопасным только https, а без этого страницу не поставить как
-# приложение — и тогда Android не покажет её в share-диалоге, то есть
-# «Поделиться» из YouTube не сработает.
+# HTTPS. It is needed not for encryption of the home network, but for the tablet: the browser
+# considers only https secure, and without this the page cannot be installed as
+# an app — and then Android will not show it in the share dialog, that is,
+# "Share" from YouTube will not work.
 #
-# Сертификат выпускает packaging/make-tls.sh: свой корневой CA плюс сертификат
-# на адреса этой машины. ca.crt из того же каталога один раз ставится на
-# планшет. Без обоих файлов демон работает по http, как раньше.
+# The certificate is issued by packaging/make-tls.sh: its own root CA plus a certificate
+# for the addresses of this machine. ca.crt from the same directory is installed on the
+# tablet once. Without both files the daemon works over http, as before.
 #
-# С сертификатом демон слушает ТОЛЬКО https: расширение на компьютере тоже
-# переключается на https (протокол в его настройках), а ca.crt нужен и его
-# браузеру — иначе запрос падает на недоверии к сертификату.
+# With a certificate the daemon listens ONLY over https: the extension on the computer also
+# switches to https (the protocol in its settings), and its browser needs ca.crt too —
+# otherwise the request fails on distrust of the certificate.
 # tls_cert = "~/.config/yt-trans/tls/server.crt"
 # tls_key = "~/.config/yt-trans/tls/server.key"
 
 [video]
-# Куда складывать готовые mp4 для страницы планшета. По умолчанию — общий кэш
-# проекта (~/.cache/yt-trans/video). Каталог можно увести, например, в /tmp:
-# там файлы живут в оперативной памяти, SSD не пишется вовсе, но после
-# перезагрузки кэш пуст и первый просмотр качает ролик заново.
+# Where to put ready mp4 files for the tablet page. By default — the shared project
+# cache (~/.cache/yt-trans/video). The directory can be moved, for example, to /tmp:
+# there the files live in RAM, the SSD is not written to at all, but after
+# a reboot the cache is empty and the first viewing downloads the video again.
 # dir = "/tmp/yt-trans-video"
 
-# Потолок кэша в гибибайтах: при переполнении удаляются самые давние ролики,
-# кроме последнего скачанного. Двадцать — это про диск (примерно пятьдесят
-# часовых роликов в 1080p). В /tmp (tmpfs) столько занимать нельзя: там это
-# оперативная память, и потолок ставят по запасу памяти — четыре гигабайта
-# хватает примерно на десять роликов по 26 минут.
+# Cache ceiling in gibibytes: on overflow the oldest videos are deleted,
+# except the last downloaded. Twenty is about the disk (roughly fifty
+# hour-long videos in 1080p). In /tmp (tmpfs) that much cannot be occupied: there it is
+# RAM, and the ceiling is set by the memory reserve — four gigabytes
+# is enough for about ten videos of 26 minutes.
 # max_gib = 20

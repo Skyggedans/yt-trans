@@ -1,4 +1,4 @@
-"""Видео на проводе: подготовка, состояние и файл, который умеет Range."""
+"""Video on the wire: preparation, state and a file that supports Range."""
 
 import pytest
 
@@ -64,9 +64,9 @@ async def test_a_bad_video_id_is_a_400_before_any_download(client, manager, tmp_
 
 
 async def test_the_file_is_open_without_a_token(manager, tmp_path):
-    # <video src> заголовков не шлёт, а токена больше нет: файл отдаётся тому,
-    # кого пустил Origin. Запрос без Origin — это страница самого демона, curl
-    # и приложения вне браузера.
+    # <video src> sends no headers, and there is no token any more: the file is served to
+    # whoever Origin lets in. A request without Origin is the daemon's own page, curl
+    # and applications outside the browser.
     import httpx
 
     from helper import app as helper_app
@@ -82,8 +82,8 @@ async def test_the_file_is_open_without_a_token(manager, tmp_path):
 
 
 async def test_the_size_is_asked_for_with_head_and_no_body(client, manager, tmp_path):
-    # Страница узнаёт размер до скачивания: без HEAD она не проверит свободное
-    # место и не покажет проценты, а молча начнёт качать ролик на 400 МБ.
+    # The page learns the size before downloading: without HEAD it would not check free
+    # space and would not show percentages, but would silently start downloading a 400 MB video.
     manager.videos = VideoStore(tmp_path, fetch=writer())
     manager.videos.ensure(VIDEO)
     await manager.videos.settled(VIDEO)

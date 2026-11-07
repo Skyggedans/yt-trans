@@ -1,11 +1,12 @@
-"""Пути кэшей проекта. Импортировать ПЕРВЫМ, до всего, что тянет huggingface.
+"""Project cache paths. Import FIRST, before anything that pulls in huggingface.
 
-На этой машине `XDG_CACHE_HOME=/mnt/ramdisk` — 8 ГБ tmpfs, и по умолчанию кэш
-huggingface уезжает туда. Веса large-v3 это ~3 ГБ, и на ramdisk они не помещаются
-(а если бы помещались, то съедали бы оперативную память, которой и так мало).
+On this machine `XDG_CACHE_HOME=/mnt/ramdisk` — an 8 GB tmpfs, and by default the
+huggingface cache goes there. large-v3 weights are ~3 GB, and they don't fit on the
+ramdisk (and if they did, they'd eat RAM, of which there's already little).
 
-Глобальную настройку не трогаем — она осознанная. Просто уводим кэши этого проекта
-на NVMe явным HF_HOME, который читается до импорта huggingface_hub.
+We don't touch the global setting — it's deliberate. We simply steer this project's
+caches to the NVMe with an explicit HF_HOME, which is read before huggingface_hub
+is imported.
 """
 
 from __future__ import annotations
@@ -21,12 +22,12 @@ HF_HOME = CACHE_DIR / "hf"
 YTDLP_CACHE = CACHE_DIR / "yt-dlp"
 TRACKS_DIR = CACHE_DIR / "tracks"
 
-# Настройки. Живут отдельно от кэша: кэш можно удалять безболезненно,
-# а конфигурацию — нет.
+# Settings. They live separately from the cache: the cache can be deleted painlessly,
+# but the configuration cannot.
 CONFIG_DIR = Path(os.environ.get("YT_TRANS_CONFIG", Path.home() / ".config" / "yt-trans"))
 
 
-# Порядок важен: cublasLt должна загрузиться раньше cublas, которая от неё зависит.
+# Order matters: cublasLt must be loaded before cublas, which depends on it.
 CUDA_LIBS = ("libcublasLt.so.*", "libcublas.so.*", "libcudnn.so.*")
 CUDA_MODULES = ("nvidia.cublas.lib", "nvidia.cudnn.lib")
 
@@ -40,8 +41,8 @@ def _cuda_lib_dirs() -> list[str]:
         except ImportError:
             continue
 
-        # Это namespace-пакеты без __init__.py, поэтому __file__ у них None,
-        # а каталог лежит в __path__.
+        # These are namespace packages without __init__.py, so their __file__ is None,
+        # and the directory is in __path__.
         paths = list(getattr(module, "__path__", None) or [])
 
         if paths:
@@ -53,20 +54,20 @@ def _cuda_lib_dirs() -> list[str]:
 
 
 def preload_cuda() -> list[str]:
-    """Подключить cuBLAS и cuDNN из колёс nvidia-*-cu12.
+    """Load cuBLAS and cuDNN from the nvidia-*-cu12 wheels.
 
-    Системного CUDA-рантайма на машине нет, а CTranslate2 подгружает libcublas.so.12
-    и libcudnn.so.9 через dlopen в момент первого прохода энкодера. Без этого всё
-    выглядит рабочим — модель грузится, VAD отрабатывает — и падает только когда
-    дело доходит до настоящего инференса.
+    There is no system CUDA runtime on the machine, and CTranslate2 loads libcublas.so.12
+    and libcudnn.so.9 via dlopen at the first encoder pass. Without this everything
+    looks working — the model loads, VAD runs — and it fails only when it reaches
+    actual inference.
 
-    Нужны оба механизма, потому что ASR идёт отдельным процессом:
-      * LD_LIBRARY_PATH наследуется подпроцессами, и там его читает динамический
-        загрузчик при старте — для воркера этого достаточно;
-      * в уже запущенном процессе менять LD_LIBRARY_PATH поздно, загрузчик его
-        больше не перечитывает, поэтому библиотеки подгружаются явно через ctypes.
+    Both mechanisms are needed because ASR runs as a separate process:
+      * LD_LIBRARY_PATH is inherited by subprocesses, and the dynamic loader reads it
+        there at startup — that's enough for the worker;
+      * in an already running process it's too late to change LD_LIBRARY_PATH, the
+        loader no longer re-reads it, so the libraries are loaded explicitly via ctypes.
 
-    Если библиотеки стоят в системе, функция просто ничего не делает.
+    If the libraries are installed system-wide, the function simply does nothing.
     """
     dirs = _cuda_lib_dirs()
 
@@ -82,15 +83,15 @@ def preload_cuda() -> list[str]:
                 try:
                     ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
                 except OSError:
-                    # Не фатально: библиотека может быть не нужна этой сборке
-                    # CTranslate2 либо уже присутствовать в системе.
+                    # Not fatal: the library may be unneeded by this CTranslate2
+                    # build or already present in the system.
                     pass
 
     return dirs
 
 
 def setup() -> None:
-    """Разложить кэши по NVMe и подключить CUDA. Идемпотентно."""
+    """Lay out the caches on the NVMe and load CUDA. Idempotent."""
     for path in (HF_HOME, YTDLP_CACHE, TRACKS_DIR):
         path.mkdir(parents=True, exist_ok=True)
 

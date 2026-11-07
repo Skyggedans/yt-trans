@@ -1,107 +1,106 @@
-# Страница для планшета
+# Page for the tablet
 
-## Что это
+## What it is
 
-Демон сам раздаёт страницу с плеером: открыл её на планшете — и поверх ролика идут
-те же две строки, что расширение рисует на компьютере, — русский перевод и
-черногорский текст той же реплики. Расширение для этого не нужно, и плеер YouTube
-не участвует. Титры не запекаются в картинку: демон отдаёт чистый mp4, а строки
-рисует страница, поэтому их можно выключить, перемотать и увидеть заново.
+The daemon serves a page with a player itself: open it on the tablet — and over the video
+run the same two lines that the extension draws on the computer — the Russian translation and
+the Montenegrin text of the same utterance. No extension is needed for this, and the YouTube
+player is not involved. Subtitles are not burned into the picture: the daemon serves a clean mp4, and the lines
+are drawn by the page, so they can be turned off, rewound and seen again.
 
-Страницу можно поставить на планшет как приложение — и тогда приложение YouTube
-само предлагает её в «Поделиться»: ролик открывается у нас одним нажатием, без
-набора адреса. Что для этого нужно (https и свой сертификат) — в разделе
-«Приложение и „Поделиться“ из YouTube».
+The page can be installed on the tablet as an app — and then the YouTube app
+itself offers it in “Share”: a video opens in ours with one tap, without
+typing the address. What is needed for this (https and your own certificate) — in the section
+“App and ‘Share’ from YouTube”.
 
-Кнопки **RU** и **CNR** в правом верхнем углу сцены выключают каждую
-строку по отдельности: оставить только перевод, только черногорский текст или ни
-одной. Рядом с ними — выбор размера строк: **очень мелкий**, **мелкий**, **обычный**,
-**крупный**. С другого конца комнаты обычного не хватает, а вплотную к экрану
-мешает крупный; размер умножает обычный, а не заменяет его, поэтому на широком
-экране «мелкий» не становится мельче, чем на телефоне. Оба выбора запоминаются
-в браузере каждого устройства отдельно. В левом
-верхнем углу — **⛶**: разворачивает всю сцену, то есть картинку вместе со
-строками. Родная кнопка плеера разворачивает только сам ролик, а строки в этом
-режиме не видны, поэтому там, где браузер это позволяет (`controlslist`), она
-спрятана. iOS такой атрибут не знает: там родная кнопка остаётся, но строк в её
-полноэкранном режиме не будет — разворачивать нужно своей, **⛶**.
+The **RU** and **CNR** buttons in the top right corner of the stage turn each
+line off separately: leave only the translation, only the Montenegrin text, or none.
+Next to them — subtitle size selection: **very small**, **small**, **normal**,
+**large**. From the other end of the room normal is not enough, and up close
+large is in the way; the size multiplies the normal one rather than replacing it, so on a wide
+screen “small” does not become smaller than on a phone. Both choices are remembered
+in each device's browser separately. In the left
+top corner — **⛶** (fullscreen): expands the whole stage, that is, the picture together with the
+lines. The player's native button expands only the video itself, and the lines in this
+mode are not visible, so where the browser allows it (`controlslist`), it is
+hidden. iOS does not know such an attribute: there the native button remains, but there will be no lines in its
+fullscreen mode — you need to expand with your own, **⛶**.
 
-## Включить сеть
+## Enable the network
 
-По умолчанию демон слушает только петлю — `127.0.0.1`, то есть с планшета его не
-видно и это правильно: демон ходит к YouTube по команде клиента, и в открытую сеть
-его выставлять просто так нельзя. Чтобы планшет в другой комнате его достал,
-прописать в `~/.config/yt-trans/config.toml`:
+By default the daemon listens only on loopback — `127.0.0.1`, that is, it is not visible from the tablet
+and that is correct: the daemon talks to YouTube on the client's command, and it cannot simply be exposed
+to the open network. For the tablet in another room to reach it,
+add to `~/.config/yt-trans/config.toml`:
 
 ```toml
 [server]
 host = "0.0.0.0"
 ```
 
-и перезапустить демон — настройки читаются только при старте:
+and restart the daemon — settings are read only at startup:
 
 ```sh
 systemctl --user restart yt-trans
 ```
 
-Демон должен работать и без входа хозяина в систему, иначе после перезагрузки
-страница не откроется. Это `loginctl enable-linger`, подробности и откат —
+The daemon must also work without the owner signing in, otherwise after a reboot
+the page will not open. That is `loginctl enable-linger`, details and rollback —
 [`docs/running.md`](running.md).
 
-## Доступ
+## Access
 
-Токена у демона нет: страница и расширение ходят к нему без ключа. Открыв адрес
-компьютера, страница сразу показывает приложение — никуда ничего вставлять не надо.
+The daemon has no token: the page and the extension talk to it without a key. Having opened the computer's
+address, the page immediately shows the app — nothing needs to be pasted anywhere.
 
-Стережёт демон только Origin. Чужая страница в браузере не может подделать его,
-поэтому сайт из интернета не дёрнет ваш демон через привязку DNS к петле. Запросы
-без Origin — `curl`, `<video>`, приложения вне браузера — проходят всегда, и это
-не дыра, а единственный способ отдать видео: `<video src>` заголовков не шлёт.
+The daemon guards only the Origin. A foreign page in the browser cannot forge it,
+so a site from the internet will not hit your daemon via DNS binding to loopback. Requests
+without Origin — `curl`, `<video>`, non-browser apps — always pass, and this is
+not a hole but the only way to serve video: `<video src>` does not send headers.
 
-Помните: `host = "0.0.0.0"` открывает порт всем в домашней сети. Кто дотянется до
-него не из браузера, тот им и воспользуется — дома это обычно нормально, в чужом
-Wi-Fi ставьте петлю обратно.
+Remember: `host = "0.0.0.0"` opens the port to everyone on the home network. Whoever reaches
+it not from a browser will use it — at home this is usually fine, on someone else's
+Wi-Fi put loopback back.
 
-В сети `/v1/health` отвечает только `{"ok": true}` и ничего больше: на петле он
-показывает имена моделей, размер кэша и состояние заданий — это карта чужой
-машины, и всему домашнему Wi-Fi её знать не нужно.
+On the network `/v1/health` answers only `{"ok": true}` and nothing else: on loopback it
+shows model names, cache size and job state — this is a map of someone else's
+machine, and not the whole home Wi-Fi needs to know it.
 
-## Открыть на планшете
+## Open on the tablet
 
-В браузере планшета набрать адрес компьютера и порт:
+In the tablet's browser type the computer's address and port:
 
 ```
-http://<адрес-компьютера>:8756/
+http://<computer address>:8756/
 ```
 
-Адрес — тот, который компьютер имеет в домашней сети (`hostname -I` на компьютере
-покажет его первым). Так страницу можно смотреть и без всякой установки.
+The address — the one the computer has on the home network (`hostname -I` on the computer
+will show it first). This way the page can be viewed even without any installation.
 
-## Приложение и «Поделиться» из YouTube
+## App and “Share” from YouTube
 
-Чтобы YouTube сам предлагал нашу страницу среди «Поделиться», её надо один раз
-поставить на планшет как приложение. Android пускает в этот диалог только
-установленные приложения, а Chrome ставит сайт лишь с https: обычный http он
-считает небезопасным. Поэтому демону нужен сертификат, причём свой: домашний
-адрес вида `192.168.*` публичному центру сертификации не принадлежит, и выписать
-на него обычный сертификат нельзя.
+For YouTube itself to offer our page among “Share”, it must be installed on the tablet once
+as an app. Android lets only installed apps into this dialog, and Chrome installs a site
+only over https: it considers plain http insecure. Therefore the daemon needs a certificate, and its own:
+a home address like `192.168.*` does not belong to a public certificate authority, and a regular
+certificate cannot be issued for it.
 
-Сертификат выпускается скриптом: свой корневой CA плюс сертификат на адреса этой
-машины (все, кроме контейнерных):
+The certificate is issued by a script: its own root CA plus a certificate for the addresses of this
+machine (all except container ones):
 
 ```sh
 packaging/make-tls.sh
 ```
 
-Скрипт кладёт файлы в `~/.config/yt-trans/tls/` и печатает, что делать дальше.
-Порядок важен:
+The script puts the files in `~/.config/yt-trans/tls/` and prints what to do next.
+Order matters:
 
-1. **Пока демон ещё по http** — открыть на планшете
-   `http://<адрес-компьютера>:8756/ca.crt` и установить скачанный файл:
-   Настройки → Безопасность → Шифрование и учётные данные → Установить
-   сертификат → Сертификат CA. Android попросит подтверждение — это ваш
-   собственный CA, выпущенный на этом компьютере.
-2. Прописать в `~/.config/yt-trans/config.toml`:
+1. **While the daemon is still on http** — open on the tablet
+   `http://<computer address>:8756/ca.crt` and install the downloaded file:
+   Settings → Security → Encryption & credentials → Install a certificate
+   → CA certificate. Android will ask for confirmation — this is your
+   own CA, issued on this computer.
+2. Add to `~/.config/yt-trans/config.toml`:
 
    ```toml
    [server]
@@ -110,81 +109,81 @@ packaging/make-tls.sh
    tls_key = "~/.config/yt-trans/tls/server.key"
    ```
 
-   и перезапустить демон: `systemctl --user restart yt-trans`.
-3. Открыть на планшете `https://<адрес-компьютера>:8756/` — адресная строка без
-   предупреждений. Меню Chrome → «Установить приложение» (на старых версиях —
-   «Добавить на главный экран»).
-4. В приложении YouTube нажать «Поделиться» → **yt-trans**. Откроется наша
-   страница, ссылка добавится к сохранённым, и, если это одиночный ролик, он
-   сразу заиграет. Повторное нажатие «Поделиться» с плейлистом откроет список
-   роликов.
+   and restart the daemon: `systemctl --user restart yt-trans`.
+3. Open on the tablet `https://<computer address>:8756/` — the address bar without
+   warnings. Chrome menu → “Install app” (on older versions —
+   “Add to Home screen”).
+4. In the YouTube app tap “Share” → **yt-trans**. Our
+   page opens, the link is added to the saved ones, and if this is a single video, it
+   immediately starts playing. Tapping “Share” again with a playlist opens the list of
+   videos.
 
-Проверить, что установка удалась, можно в Chrome: меню → «Приложения» (или
-иконка на главном экране). В самом share-диалоге приложение появляется сразу
-после установки; если его там нет — значит, шаг 3 не выполнен или страница
-открыта по http.
+You can check that the installation succeeded in Chrome: menu → “Apps” (or the
+icon on the home screen). In the share dialog itself the app appears immediately
+after installation; if it is not there — then step 3 was not done or the page is
+opened over http.
 
-Отозвать доверие к сертификату можно там же, где он ставился: Настройки →
-Безопасность → Шифрование и учётные данные → Пользовательские сертификаты.
+You can revoke trust in the certificate where it was installed: Settings →
+Security → Encryption & credentials → User certificates.
 
-## Компьютер
+## Computer
 
-С включённым сертификатом демон слушает только https, и расширение на
-компьютере переходит на него вместе с планшетом: в настройках расширения
-выбери протокол **https**. Кнопка «Сохранить и проверить связь» сама пробует
-второй протокол, если выбранный молчит, и запоминает рабочий. Сертификату
-должен доверять и браузер компьютера, иначе запрос упадёт на недоверии к
-сертификату, а не на отказе демона. `ca.crt` из `~/.config/yt-trans/tls/`
-ставится в хранилище сертификатов браузера:
+With the certificate enabled, the daemon listens only over https, and the extension on the
+computer switches to it together with the tablet: in the extension settings
+choose the **https** protocol. The “Save and check the connection” button itself tries the
+second protocol if the selected one is silent, and remembers the working one. The computer's browser
+must also trust the certificate, otherwise the request will fail on distrust of the
+certificate, not on a daemon refusal. `ca.crt` from `~/.config/yt-trans/tls/`
+is installed into the browser's certificate store:
 
-- Chrome: chrome://settings/certificates → «Центры сертификации» → «Импорт».
-- Firefox и Zen: Настройки → Приватность и защита → Сертификаты →
-  «Просмотр сертификатов» → «Центры сертификации» → «Импорт», галочка
-  «Доверять этому CA для идентификации сайтов».
+- Chrome: chrome://settings/certificates → “Authorities” → “Import”.
+- Firefox and Zen: Settings → Privacy & Security → Certificates →
+  “View Certificates” → “Authorities” → “Import”, check
+  “Trust this CA to identify websites”.
 
 
-## Ссылки
+## Links
 
-На главном экране — поле для ссылки и список сохранённых. Сохраняются только адреса
-YouTube: чужой адрес демон не примет, потому что скачивает он именно с YouTube.
-Плейлист раскрывается списком роликов с названием, длительностью и пометками:
-дискета — копия уже лежит на устройстве и заиграет сразу, даже без компьютера,
-спиннер — картинка качается, галочка — перевод уже сделан и ждать нечего. «Не
-скачалось» — попробовать ещё раз, «new» — ролик ещё не готовили и он ждёт своей
-очереди. Иконки в списке различаются цветом: ролик и корзина — красные, дискета —
-голубая, галка — зелёная, плейлист — серый. Метраж строки — тот, что демон
-запомнил при добавлении ссылки; у плейлиста одной цифры нет, и у записей,
-добавленных раньше, её тоже нет — тогда время не показывается. Одиночный ролик
-открывается сразу, без списка из одного пункта. С ролика возвращает обычная
-кнопка браузера «назад».
+On the home screen — a link field and a list of saved ones. Only YouTube addresses are saved:
+the daemon will not accept a foreign address, because it downloads from YouTube.
+A playlist expands into a list of videos with title, duration and marks:
+floppy disk — a copy already lies on the device and will play immediately, even without the computer,
+spinner — the picture is downloading, checkmark — the translation is already done and there is nothing to wait for. “Did not
+download” — try again, “new” — the video has not been prepared yet and is waiting its
+turn. Icons in the list differ by color: video and trash — red, floppy disk —
+blue, checkmark — green, playlist — gray. The duration on the row is the one the daemon
+remembered when the link was added; a playlist has no single number, and records
+added earlier do not have it either — then the time is not shown. A single video
+opens immediately, without a list of one item. From a video, the usual browser
+“back” button returns.
 
-На сцене слева сверху — возврат, **⛶**, «кеш» и строка о ходе работы; справа
-сверху — выключатели строк RU и CNR и список размера строк; посередине — название
-ролика, одной строкой по центру. Строка о ходе работы одна, поверх кадра она не
-лежит, а разные сообщения в ней разделены точками **•**: что готовится, на каком
-языке речь, что не так. Полоса с ней и название ролика гаснут вместе с родными
-контролами плеера — через 2,5 секунды после последнего касания, пока ролик идёт, —
-и возвращаются от касания или движения мыши. На паузе они видны, как и контролы:
-гасить тогда нечего.
+On the stage, top left — back to list, **⛶**, **cache** and a line about the work
+progress; top right — RU and CNR line toggles and the subtitle size list; in the middle — the video
+title, one line in the center. The work-progress line is one, it does not lie over the frame,
+and different messages in it are separated by dots **•**: what is being prepared, in what
+language the speech is, what is wrong. The bar with it and the video title fade together with the native
+player controls — 2.5 seconds after the last touch, while the video is playing, —
+and come back on touch or mouse movement. On pause they are visible, as are the controls:
+there is nothing to fade then.
 
-## Почему видео готовится
+## Why the video is prepared
 
-YouTube не отдаёт готовый mp4: картинка и звук лежат отдельно. Демон скачивает
-H.264 не выше 1080p и звук AAC, склеивает их в mp4 и кладёт на диск — это около
-2 Мбит/с, то есть примерно 400 МБ на 26 минут. Пока склейка идёт, страница пишет
-«готовлю картинку…»; готовый ролик заиграет сам. Профиль выбран потому, что играет
-везде, включая iOS и старые устройства: выше 1080p YouTube отдаёт только VP9 и AV1,
-а их не всякий планшет открывает.
+YouTube does not serve a ready mp4: picture and sound lie separately. The daemon downloads
+H.264 no higher than 1080p and AAC audio, glues them into mp4 and puts them on disk — this is about
+2 Mbit/s, that is, about 400 MB per 26 minutes. While the gluing is going on, the page writes
+“preparing the picture…”; the ready video starts playing by itself. The profile was chosen because it plays
+everywhere, including iOS and old devices: above 1080p YouTube serves only VP9 and AV1,
+and not every tablet opens them.
 
-## Диск
+## Disk
 
-Готовые ролики лежат в `~/.cache/yt-trans/video` и переживают перезапуск демона.
-Потолок — 20 ГиБ: когда кэш его перерастает, демон удаляет самые давние файлы,
-никогда не трогая тот, что скачался последним. Отдельно ничего чистить не нужно;
-если места всё равно жалко, файлы можно удалить руками — следующий просмотр
-скачает ролик заново.
+Ready videos lie in `~/.cache/yt-trans/video` and survive a daemon restart.
+The ceiling is 20 GiB: when the cache grows beyond it, the daemon deletes the oldest files,
+never touching the one downloaded last. Nothing needs to be cleaned separately;
+if you still regret the space, the files can be deleted by hand — the next viewing
+will download the video again.
 
-Каталог и потолок задаются в конфиге:
+The directory and ceiling are set in the config:
 
 ```toml
 [video]
@@ -192,43 +191,43 @@ dir = "/tmp/yt-trans-video"
 max_gib = 4
 ```
 
-`/tmp` — это tmpfs, то есть оперативная память: на диск ролики не пишутся вовсе,
-зато после перезагрузки кэш пуст, и первый просмотр качает заново. Потолок там
-ставят по запасу памяти, а не по свободному месту на диске.
+`/tmp` is tmpfs, that is, RAM: videos are not written to disk at all,
+but after a reboot the cache is empty, and the first viewing downloads again. The ceiling there
+is set by the memory reserve, not by the free space on disk.
 
-## Без компьютера
+## Without the computer
 
-Ролик можно забрать на планшет — вместе с титрами. Для этого на сцене слева сверху,
-рядом с **⛶**, есть кнопка **«кеш»**; по умолчанию она выключена, и до нажатия на
-устройстве не оседает ничего. Нажатая, она начинает копирование, как только демон
-собрал mp4, и копирование идёт, пока открыта страница: закрыл приложение или экран
-уснул — загрузка встала, и кнопку надо нажать заново. Пока идёт загрузка, на кнопке
-виден процент, а по окончании — дискета: копия лежит на устройстве.
+A video can be taken to the tablet — together with subtitles. For this, on the stage at the top left,
+next to **⛶**, there is a **cache** button; by default it is off, and until it is pressed nothing
+settles on the device. Pressed, it starts copying as soon as the daemon
+has assembled the mp4, and copying goes on while the page is open: you closed the app or the screen
+fell asleep — the download stopped, and the button must be pressed again. While the download is going on, the button
+shows a percentage, and at the end — a floppy disk: the copy lies on the device.
 
-На устройстве остаются картинка и те строки, что успели перевестись к концу загрузки;
-титры продолжают дописываться, пока вы смотрите, и запись дополняется по ходу. В
-списке сохранённое помечено дискетой у названия и строкой `на устройстве · 400 МБ`,
-а удаляется кнопкой **удалить** — место на планшете не бесконечное.
+On the device remain the picture and those lines that managed to be translated by the end of the download;
+subtitles continue to be appended while you watch, and the record is supplemented along the way. In
+the list the saved one is marked with a floppy disk next to the name and the line `on device · 400 MB`,
+and is deleted with the **delete** button — space on the tablet is not infinite.
 
-Копия играет и при живом демоне: картинка берётся с устройства, поэтому обрыв связи
-посреди просмотра больше не мешает. Когда демона нет вовсе, домашняя страница
-показывает сохранённое — при открытых ссылках ролики раскрываются под своей ссылкой,
-а ссылки без копий дают сообщение, что демона нет, вместо пустого экрана.
+The copy also plays with the daemon alive: the picture is taken from the device, so a connection drop
+in the middle of viewing no longer interferes. When there is no daemon at all, the home page
+shows the saved ones — with open links the videos expand under their link,
+and links without copies give a message that there is no daemon, instead of an empty screen.
 
-Кеш живёт в хранилище браузера планшета, но не в кэше демона: это отдельное место,
-своё у каждого планшета, и «очистить данные сайта» в браузере стирает его целиком.
-Место он занимает полностью, а не по общему потолку из конфига демона.
+The cache lives in the tablet browser's storage, but not in the daemon's cache: this is a separate place,
+its own for each tablet, and “clear site data” in the browser erases it entirely.
+It occupies its own space entirely, not according to the common ceiling from the daemon config.
 
-## Если не работает
+## If it doesn't work
 
-| Что видно | Причина | Что делать |
+| What is visible | Cause | What to do |
 |---|---|---|
-| страница вообще не открывается | демон слушает петлю, или не включён linger | «Включить сеть» выше, затем `systemctl --user restart yt-trans` |
-| пустой экран | страница не загрузилась целиком или браузер держит старую копию | обновить страницу; кэш — «очистить данные сайта» |
-| «готовлю картинку…» не кончается | скачивание упало или ждёт очереди | `journalctl --user -u yt-trans -f` — там причина |
-| «видео не скачалось» | YouTube отказал: возраст, удалённый ролик, сеть | повторить позже; ролики 18+ требуют аккаунта, см. [`README.md`](../README.md) |
-| 403 в браузере вместо страницы | запрос пришёл с чужого источника | открывать страницу по адресу демона, а не из чужой вкладки |
-| Chrome пишет «Подключение не защищено» | на планшет не поставлен `ca.crt`, или сертификат выпущен не на тот адрес | перевыпустить `packaging/make-tls.sh` с адресом, по которому открываете, и поставить новый `ca.crt` |
-| в «Поделиться» из YouTube нет yt-trans | страница открыта по http или не установлена как приложение | раздел «Приложение и „Поделиться“ из YouTube» |
-| «демона нет, этого ролика на устройстве нет» | ролик не сохранён на планшете | включить «кеш» при следующем просмотре с живым демоном |
-| «копия не сохранилась: …» | кончилось место или браузер отказал | освободить место, удалить ненужное кнопкой «удалить» |
+| the page does not open at all | the daemon listens on loopback, or linger is not enabled | “Enable the network” above, then `systemctl --user restart yt-trans` |
+| empty screen | the page did not load fully or the browser keeps an old copy | refresh the page; cache — “clear site data” |
+| “preparing the picture…” does not end | the download failed or is waiting its turn | `journalctl --user -u yt-trans -f` — the cause is there |
+| “the video did not download” | YouTube refused: age, deleted video, network | retry later; 18+ videos require an account, see [`README.md`](../README.md) |
+| 403 in the browser instead of the page | the request came from a foreign origin | open the page at the daemon's address, not from a foreign tab |
+| Chrome says “Connection is not secure” | `ca.crt` is not installed on the tablet, or the certificate was issued for the wrong address | reissue `packaging/make-tls.sh` with the address you open the page by, and install the new `ca.crt` |
+| yt-trans is missing in “Share” from YouTube | the page is opened over http or not installed as an app | the section “App and ‘Share’ from YouTube” |
+| “no daemon, this video is not on the device” | the video is not saved on the tablet | enable **cache** on the next viewing with the daemon alive |
+| “the copy was not saved: …” | ran out of space or the browser refused | free up space, delete what is not needed with the **delete** button |

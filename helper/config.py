@@ -1,19 +1,21 @@
-"""Конфигурация демона: какие модели использовать и сколько памяти они просят.
+"""Daemon configuration: which models to use and how much memory they ask for.
 
-Модели настраиваются здесь, а не в расширении. Расход видеопамяти и заявка на
-владение моделью — внутренняя механика демона: сторож считает своей ровно ту
-модель, которую демон объявил при старте, и если позволить браузеру менять её
-на лету, демон увидит собственную модель как чужую работу и вытеснит сам себя.
+Models are configured here, not in the extension. VRAM usage and the claim to
+own a model are internal mechanics of the daemon: the watchdog considers as its own
+exactly the model the daemon declared at startup, and if the browser were allowed to
+change it on the fly, the daemon would see its own model as someone else's work and
+evict itself.
 
-Расход памяти привязан к модели неразрывно. `ASR_NEED_MIB = 6144` — это про
-large-v3 в fp16; у turbo он втрое меньше, у переводчика на 12B — вдвое меньше
-17.8 ГБ. Переключив модель и оставив прежнюю цифру, мы получили бы контроль
-допуска, который либо ждёт памяти, которая не нужна, либо пускает задачу туда,
-где она не помещается. Поэтому цифра идёт из справочника вместе с именем.
+Memory usage is tied to the model inseparably. `ASR_NEED_MIB = 6144` is about
+large-v3 in fp16; for turbo it's three times less, for the 12B translator it's half
+of 17.8 GB. Having switched the model and left the old figure, we would get an
+admission check that either waits for memory that isn't needed, or lets a job in
+where it doesn't fit. Therefore the figure comes from the reference table together
+with the name.
 
-Файл читается один раз при старте: смена модели требует перезапуска демона.
-Это намеренно — модель резидентна в ollama, и менять её посреди задания значит
-переоткрывать всю дисциплину свопа.
+The file is read once at startup: changing the model requires a daemon restart.
+This is deliberate — the model is resident in ollama, and changing it in the middle
+of a job means reopening the whole swap discipline.
 """
 
 from __future__ import annotations
@@ -30,9 +32,9 @@ log = logging.getLogger(__name__)
 
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 
-# Замерено на RTX 4090. Числа с запасом: это то, что просит контроль допуска,
-# а не точное потребление. Батчевый режим faster-whisper заметно прожорливее
-# одиночного, поэтому fp16 large-v3 стоит 6 ГБ, а не 4.5 из README.
+# Measured on an RTX 4090. The numbers have headroom: this is what the admission
+# check asks for, not the exact consumption. faster-whisper's batched mode is
+# noticeably hungrier than single, so fp16 large-v3 costs 6 GB, not the 4.5 from the README.
 ASR_VRAM_MIB = {
     ("large-v3", "float16"): 6144,
     ("large-v3", "int8_float16"): 3584,
@@ -41,13 +43,13 @@ ASR_VRAM_MIB = {
     ("distil-large-v3", "float16"): 3584,
 }
 
-# Размеры моделей ollama на этой машине (из `ollama list`), плюс запас на KV-кэш.
+# Sizes of ollama models on this machine (from `ollama list`), plus headroom for the KV cache.
 MT_VRAM_MIB = {
     "qwen3.8:27b": 17800,
     "qwen3-coder:30b": 19100,
     "gemma4:31b": 20400,
     "laguna-xs-2.1:q4_K_M": 20800,
-    # Замерено 2026-09-03: ollama просит 17.1 ГиБ при num_ctx 8192.
+    # Measured 2026-09-03: ollama asks for 17.1 GiB at num_ctx 8192.
     "translategemma:27b": 17600,
     "translategemma:12b": 8700,
     "translategemma:4b": 3800,
@@ -55,23 +57,24 @@ MT_VRAM_MIB = {
 
 
 class ConfigError(RuntimeError):
-    """Конфигурация не даёт однозначно определить, сколько памяти просить."""
+    """The configuration doesn't allow determining unambiguously how much memory to ask for."""
 
 
 @dataclass(frozen=True)
 class AsrConfig:
     model: str = "large-v3"
-    # int8 на GPU не быстрее fp16 — замерено 19.6 с против 19.2 на одном клипе.
-    # Он экономит около гигабайта памяти и стоит скорости, а не наоборот.
+    # int8 on the GPU isn't faster than fp16 — measured 19.6 s versus 19.2 on one clip.
+    # It saves about a gigabyte of memory and costs speed, not the other way around.
     compute_type: str = "float16"
-    # Язык речи. "auto" — решает определитель: он слушает окна по всей длине ролика
-    # и работает всегда, а метка языка от YouTube для него лишь подсказка. Код языка
-    # закрепляет язык для КАЖДОГО ролика: Whisper декодирует с ним, даже если звучит
-    # другое, а определитель только отмечает расхождение. Закреплять стоит, лишь
-    # когда все ролики на одном языке: на чужом звуке поведение декодера не
-    # определено, и он начинает выбирать между переводом, транслитерацией и записью
-    # услышанного чужим алфавитом — заново в каждом тридцатисекундном окне.
-    # load() приводит значение к коду Whisper (helper/language.py), auto остаётся auto.
+    # Speech language. "auto" — decided by the detector: it listens to windows along
+    # the whole length of the video and always runs, and the language label from YouTube
+    # is only a hint for it. A language code pins the language for EVERY video: Whisper
+    # decodes with it even if something else is spoken, and the detector only notes the
+    # discrepancy. Pinning is worth it only when all videos are in one language: on
+    # foreign audio the decoder's behavior is undefined, and it starts choosing between
+    # translation, transliteration and writing what was heard in a foreign alphabet —
+    # anew in every thirty-second window.
+    # load() brings the value to a Whisper code (helper/language.py), auto stays auto.
     language: str = "auto"
     vram_mib: int = 0
 
@@ -85,34 +88,34 @@ class AsrConfig:
             return known
 
         raise ConfigError(
-            f"неизвестен расход памяти для ASR {self.model}/{self.compute_type}. "
-            f"Укажи vram_mib в [asr] файла {CONFIG_PATH} — без него контроль "
-            f"допуска не сможет решить, помещается ли модель."
+            f"unknown memory usage for ASR {self.model}/{self.compute_type}. "
+            f"Specify vram_mib in [asr] of {CONFIG_PATH} — without it the admission "
+            f"check won't be able to decide whether the model fits."
         )
 
 
 @dataclass(frozen=True)
 class TranslatorConfig:
-    # Оба размера translategemma пробовались и отвергнуты. На реальных репликах
-    # они СЛИВАЮТ соседние и уводят вывод, причём дрейф накапливается: замерено
-    # на 160 репликах, у 12b съехало 11%, 32%, 50% и 81% по четырём батчам, и на
-    # пятой позиции субтитр показывал текст десятой. qwen3.8:27b на тех же самых
-    # батчах — ноль съехавших из 122 оценённых.
+    # Both translategemma sizes were tried and rejected. On real utterances they
+    # MERGE neighbouring ones and drift the output, and the drift accumulates: measured
+    # on 160 utterances, for 12b 11%, 32%, 50% and 81% drifted across four batches, and at
+    # the fifth position the subtitle showed the text of the tenth. qwen3.8:27b on the
+    # very same batches — zero drifted out of 122 evaluated.
     #
-    # Причина, судя по всему, структурная, а не в размере модели: translategemma
-    # обучена переводить предложения, а реплики приходят обрывками фраз, и она
-    # честно собирает из обрывков предложения — ровно тем разрушая соответствие
-    # один к одному, на котором держится весь показ. Схема тут ни при чём:
-    # количество ключей грамматика держит, а соответствие ключа исходной
-    # реплике не гарантирует никто.
+    # The reason, apparently, is structural rather than model size: translategemma is
+    # trained to translate sentences, and utterances arrive as fragments of phrases, and
+    # it honestly assembles sentences from fragments — precisely thereby destroying the
+    # one-to-one correspondence the whole display rests on. The schema has nothing to do
+    # with it: the grammar keeps the count of keys, but no one guarantees the
+    # correspondence of a key to the source utterance.
     model: str = "qwen3.8:27b"
     vram_mib: int = 0
-    # Вторая строка субтитров для изучения языка. "cnr" — черногорский,
-    # пустая строка выключает режим и оставляет только перевод на русский.
+    # The second subtitle line for language study. "cnr" — Montenegrin,
+    # an empty string disables the mode and leaves only the translation into Russian.
     #
-    # Обе строки делаются за один проход модели: это вдвое дешевле двух проходов,
-    # и русская строка получается глоссой именно к этой черногорской, а не
-    # независимым переводом — для сопоставления слово к слову нужно именно так.
+    # Both lines are produced in one model pass: it's twice as cheap as two passes,
+    # and the Russian line comes out as a gloss to this very Montenegrin one, rather
+    # than an independent translation — for word-to-word matching that's exactly right.
     study_language: str = "cnr"
 
     def resolved_vram(self) -> int:
@@ -125,19 +128,19 @@ class TranslatorConfig:
             return known
 
         raise ConfigError(
-            f"неизвестен расход памяти для переводчика {self.model}. "
-            f"Укажи vram_mib в [translator] файла {CONFIG_PATH}; посмотреть "
-            f"фактический размер можно через `ollama list`."
+            f"unknown memory usage for translator {self.model}. "
+            f"Specify vram_mib in [translator] of {CONFIG_PATH}; the "
+            f"actual size can be seen via `ollama list`."
         )
 
 
 @dataclass(frozen=True)
 class YoutubeConfig:
-    # Файл cookies (формат Netscape) отдельного аккаунта для роликов 18+. Без него
-    # такие ролики не переводятся: YouTube отдаёт их только вошедшему. Всё прочее
-    # демон качает анонимно и с аккаунтом — никогда. По словам самого yt-dlp,
-    # аккаунт, через который он ходит, YouTube может забанить, поэтому свой
-    # основной сюда не ставят. Как выгрузить cookies — в config.example.toml.
+    # The cookies file (Netscape format) of a separate account for 18+ videos. Without
+    # it such videos aren't translated: YouTube serves them only to a signed-in user.
+    # Everything else the daemon downloads anonymously, and with an account — never.
+    # According to yt-dlp itself, YouTube may ban the account it goes through, so one's
+    # main account isn't put here. How to export cookies — in config.example.toml.
     cookies: str = ""
 
     @property
@@ -147,15 +150,15 @@ class YoutubeConfig:
 
 @dataclass(frozen=True)
 class ServerConfig:
-    # Адрес, на котором слушает демон. По умолчанию петля: демон запускает
-    # запросы к YouTube по команде клиента, и открывать его в сеть «на всякий
-    # случай» нельзя. Планшет в другой комнате — это host = "0.0.0.0":
-    # тогда демон открыт всем в домашней сети, и стережёт его только Origin.
+    # The address the daemon listens on. The default is loopback: the daemon makes
+    # requests to YouTube on the client's command, and exposing it to the network
+    # "just in case" is not allowed. A tablet in another room is host = "0.0.0.0":
+    # then the daemon is open to everyone on the home network, and only Origin guards it.
     host: str = "127.0.0.1"
-    # Сертификат и ключ для HTTPS. Нужны ради планшета: браузер считает
-    # безопасным только https (или петлю), а без этого страницу нельзя поставить
-    # как приложение, и значит нельзя зарегистрировать её в share-диалоге
-    # Android. Пусто — демон работает по http, как раньше.
+    # Certificate and key for HTTPS. Needed for the tablet: a browser considers
+    # only https (or loopback) secure, and without this the page can't be installed
+    # as an app, and therefore can't be registered in the Android share dialog.
+    # Empty — the daemon runs over http, as before.
     tls_cert: str = ""
     tls_key: str = ""
 
@@ -169,13 +172,13 @@ class ServerConfig:
 
 @dataclass(frozen=True)
 class VideoConfig:
-    # Каталог готовых mp4. Пусто — общий кэш проекта (CACHE_DIR/video). Отдельная
-    # настройка нужна ради /tmp: это tmpfs, то есть оперативная память, и там
-    # потолок кэша меряют уже не диском.
+    # Directory of ready mp4 files. Empty — the project's shared cache (CACHE_DIR/video).
+    # A separate setting is needed for /tmp: it's tmpfs, i.e. RAM, and there the cache
+    # cap is no longer measured by disk.
     dir: str = ""
-    # Потолок в гибибайтах. Двадцать — примерно пятьдесят часовых роликов в 1080p;
-    # на диске это лишь защита от бесконечного роста, в памяти — ещё и от давления
-    # на систему, поэтому там его ставят меньше.
+    # Cap in gibibytes. Twenty is about fifty hour-long videos in 1080p; on disk it's
+    # only protection against endless growth, in memory also against pressure on the
+    # system, so there it's set lower.
     max_gib: float = 20.0
 
     @property
@@ -184,9 +187,9 @@ class VideoConfig:
 
     @property
     def max_bytes(self) -> int:
-        # float() до умножения: если в max_gib попало что-то нечисловое, это
-        # должна быть быстрая ошибка, а не «строка × гигабайт», то есть
-        # многогигабайтная строка в памяти.
+        # float() before multiplication: if something non-numeric got into max_gib, that
+        # should be a fast error, not "string × gigabyte", i.e. a multi-gigabyte string
+        # in memory.
         return int(float(self.max_gib) * 1024**3)
 
 
@@ -217,31 +220,32 @@ class Config:
             "translator": {
                 "model": self.translator.model,
                 "vram_mib": self.translator_vram_mib,
-                # Расширение показывает это в диагностике. На кнопку запуска
-                # не годится: она рисуется до связи с демоном, и обещать по
-                # этому флагу вторую строку значило бы врать, пока зритель
-                # не включит её ещё и в настройках браузера.
+                # The extension shows this in diagnostics. It isn't suitable for the
+                # start button: it's drawn before the connection to the daemon, and
+                # promising a second line based on this flag would be lying until the
+                # viewer also enables it in the browser settings.
                 "study_language": self.translator.study_language,
             },
         }
 
 
 def load(path: Path = CONFIG_PATH) -> Config:
-    """Прочитать конфигурацию. Отсутствие файла — не ошибка, берутся значения по умолчанию."""
+    """Read the configuration. A missing file is not an error, defaults are taken."""
     raw: dict = {}
 
     if path.exists():
         try:
             raw = tomllib.loads(path.read_text(encoding="utf-8"))
         except (OSError, tomllib.TOMLDecodeError) as exc:
-            raise ConfigError(f"не читается {path}: {exc}") from exc
+            raise ConfigError(f"cannot read {path}: {exc}") from exc
 
     asr = AsrConfig(**_section(raw, "asr", AsrConfig))
 
-    # Код языка приводится к виду Whisper здесь, один раз: "sh", "SR" и "sr-Latn" — это
-    # sr, и дальше по демону ходит уже код. Незнакомое значение — не ошибка запуска, как
-    # и cookies: демон поднимается, а каждое новое задание получает отказ той же фразой
-    # (JobRunner._pin). str() — на случай числа вместо строки.
+    # The language code is brought to Whisper's form here, once: "sh", "SR" and
+    # "sr-Latn" are sr, and further along the daemon the code already travels. An
+    # unfamiliar value is not a startup error, just like cookies: the daemon comes up,
+    # and every new job gets a refusal with the same phrase (JobRunner._pin). str() —
+    # in case of a number instead of a string.
     try:
         asr = replace(asr, language=language.normalize(str(asr.language)) or "auto")
     except language.UnknownLanguage as exc:
@@ -256,17 +260,17 @@ def load(path: Path = CONFIG_PATH) -> Config:
         asr=asr, translator=translator, youtube=youtube, server=server, video=video
     )
 
-    # Потолок кэша читается при каждом решении о вытеснении, поэтому мусор здесь
-    # всплыл бы только через час работы, посреди просмотра. Пусть падает при старте.
+    # The cache cap is read at every eviction decision, so garbage here would surface
+    # only after an hour of work, in the middle of viewing. Let it fail at startup.
     try:
         if config.video.max_bytes <= 0:
-            raise ConfigError(f"[video] max_gib должен быть больше нуля: {video.max_gib!r}")
+            raise ConfigError(f"[video] max_gib must be greater than zero: {video.max_gib!r}")
     except (TypeError, ValueError) as exc:
-        raise ConfigError(f"[video] max_gib не число: {video.max_gib!r}") from exc
+        raise ConfigError(f"[video] max_gib is not a number: {video.max_gib!r}") from exc
 
-    # Половина пары — не «почти https»: uvicorn поднял бы обычный http, и зритель
-    # искал бы причину в планшете. Отсутствие файла тоже лучше увидеть при старте,
-    # а не при первом открытии страницы.
+    # Half of a pair is not "almost https": uvicorn would bring up plain http, and the
+    # viewer would look for the cause on the tablet. A missing file is also better seen
+    # at startup, not at the first opening of the page.
     tls = config.server.tls_files
 
     if tls is not None:
@@ -274,21 +278,21 @@ def load(path: Path = CONFIG_PATH) -> Config:
 
         if not (config.server.tls_cert and config.server.tls_key):
             missing = "tls_key" if config.server.tls_cert else "tls_cert"
-            raise ConfigError(f"[server] {missing} не задан: для https нужны оба файла")
+            raise ConfigError(f"[server] {missing} is not set: https needs both files")
 
         for path, name in ((cert, "tls_cert"), (key, "tls_key")):
             if not path.is_file():
-                raise ConfigError(f"[server] {name}: файла {path} нет")
+                raise ConfigError(f"[server] {name}: file {path} does not exist")
 
-    # Не ошибка запуска: без файла не откроются только ролики 18+, а остальное
-    # работает. Зритель такого ролика получит ту же причину в отказе.
+    # Not a startup error: without the file only 18+ videos won't open, and the rest
+    # works. The viewer of such a video will get the same reason in the refusal.
     cookies = youtube.cookies_path
 
     if cookies is not None and not cookies.is_file():
-        log.warning("[youtube] cookies: файла %s нет, ролики 18+ открываться не будут", cookies)
+        log.warning("[youtube] cookies: file %s does not exist, 18+ videos will not open", cookies)
 
-    # Разрешаем расход памяти сразу, при старте. Ошибка в конфиге должна падать
-    # на запуске демона, а не через минуту работы посреди первого задания.
+    # Resolve the memory usage right away, at startup. An error in the config must fail
+    # at daemon startup, not a minute into work in the middle of the first job.
     config.asr_vram_mib
     config.translator_vram_mib
 
@@ -296,12 +300,12 @@ def load(path: Path = CONFIG_PATH) -> Config:
 
 
 def _section(raw: dict, name: str, kind: type) -> dict:
-    """Поля секции, отбрасывая незнакомые ключи с предупреждением."""
+    """Fields of a section, discarding unknown keys with a warning."""
     section = raw.get(name) or {}
     allowed = {f for f in kind.__dataclass_fields__}
     unknown = set(section) - allowed
 
     if unknown:
-        log.warning("в секции [%s] игнорирую неизвестные ключи: %s", name, ", ".join(sorted(unknown)))
+        log.warning("in section [%s] ignoring unknown keys: %s", name, ", ".join(sorted(unknown)))
 
     return {k: v for k, v in section.items() if k in allowed}

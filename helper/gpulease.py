@@ -1,17 +1,17 @@
-"""Единственный пропуск на работу с GPU.
+"""The single pass for working with the GPU.
 
-На этой карте 24 ГБ, из которых десктоп держит 4–6, а переводчик 17.3. Свободного
-остаётся 1–3 ГБ, поэтому две модели одновременно не помещаются — не «туго», а вообще.
-Отсюда весь модуль: любая работа с картой берёт один и тот же семафор, а между фазами
-модель выгружается.
+On this card there are 24 GB, of which the desktop holds 4–6 and the translator 17.3.
+There remain 1–3 GB free, so two models don't fit at the same time — not "tightly", but
+at all. Hence the whole module: any work with the card takes the same semaphore, and
+between phases the model is unloaded.
 
-Второе назначение — не быть враждебным соседом. Пользователь работает со своей ollama
-на той же карте, и у ollama нет никакого механизма реакции на внешнее давление VRAM:
-пока модель резидентна, свободная память не перечитывается вообще. Чужой аллокатор
-получает жёсткий OOM (system-memory fallback на Linux не поддерживается), а при
-runtime-OOM срабатывает expireRunnersForRuntimeOOM и выгружает ВСЕ модели разом,
-убивая чужую сессию. Поэтому перед захватом идёт admission control, а пока пропуск
-удерживается — сторож, который отдаёт карту при первых признаках чужой работы.
+The second purpose is not to be a hostile neighbour. The user works with their own ollama
+on the same card, and ollama has no mechanism for reacting to external VRAM pressure:
+while a model is resident, free memory isn't re-read at all. Someone else's allocator
+gets a hard OOM (system-memory fallback isn't supported on Linux), and on a runtime-OOM
+expireRunnersForRuntimeOOM triggers and unloads ALL models at once, killing someone
+else's session. Therefore admission control precedes capture, and while the pass is held —
+a watchdog that gives up the card at the first signs of someone else's work.
 """
 
 from __future__ import annotations
@@ -29,48 +29,48 @@ log = logging.getLogger(__name__)
 
 OLLAMA_URL = os.environ.get("YT_TRANS_OLLAMA", "http://127.0.0.1:11434")
 
-# Запас сверх заявленной потребности — только на запаздывание отчётности CUDA
-# (ollama признаёт его в собственных комментариях) и на рост десктопа, пока мы
-# работаем: Chrome декодирует видео именно в это время.
+# Headroom beyond the declared need — only for the lag of CUDA reporting
+# (ollama acknowledges it in its own comments) and for the growth of the desktop while
+# we work: Chrome decodes video exactly then.
 #
-# Раньше здесь стояло 2048, и это был двойной учёт: цифры в helper/config.py уже
-# содержат собственный запас над замером. На карте 24564 МиБ требование под
-# переводчика выходило 17800 + 2048 = 19848 при десктопе в 5007 МиБ, то есть
-# больше, чем на этой машине вообще бывает свободно. Перевод не мог стартовать
-# никогда: задание ждало 120 секунд и уходило в паузу.
+# Previously 2048 stood here, and it was double counting: the figures in helper/config.py
+# already contain their own headroom over the measurement. On a card of 24564 MiB the
+# requirement for the translator came out as 17800 + 2048 = 19848 with the desktop at
+# 5007 MiB, i.e. more than ever becomes free on this machine. Translation could never
+# start: the job waited 120 seconds and went into a pause.
 GUARD_MIB = 768
 
 WATCHDOG_INTERVAL = 1.0
 
-# Сколько подряд чистых опросов нужно, чтобы вернуться к работе ПОСЛЕ вытеснения.
-# Без гистерезиса мы бились бы о чужой keep_alive, захватывая и отдавая карту по кругу.
-# На свободной карте не применяется: там пропуск выдаётся сразу.
+# How many clean polls in a row are needed to return to work AFTER eviction.
+# Without hysteresis we would fight someone else's keep_alive, capturing and giving up
+# the card in a circle. Not applied on a free card: there the pass is issued immediately.
 REARM_POLLS = 10
 
-# Предел ожидания допуска. Ждать бесконечно нельзя: ожидание идёт под семафором,
-# поэтому застрявшее задание заморозило бы все остальные, а снаружи это выглядело бы
-# как зависшая стадия без единого события. По истечении срока задание уходит
-# в PAUSED с внятной причиной и возобновляется при следующем обращении.
+# The admission wait limit. Waiting forever is not allowed: the wait happens under the
+# semaphore, so a stuck job would freeze all the rest, and from outside it would look
+# like a hung stage without a single event. After the period expires the job goes
+# into PAUSED with a clear reason and resumes on the next request.
 ADMISSION_TIMEOUT = 120.0
 
-# Порог, отделяющий чужую вычислительную задачу от десктопа. NVML числит
-# compute-процессами Chrome, VSCode, Telegram, gnome-shell и прочих — они используют
-# CUDA для композитинга и декодирования видео. Замерено на этой машине: самый
-# прожорливый из них берёт 938 МиБ, тогда как любая ML-задача берёт гигабайты.
-# Без этого порога «карта занята» было бы истинно всегда.
+# The threshold separating someone else's compute job from the desktop. NVML counts as
+# compute processes Chrome, VSCode, Telegram, gnome-shell and others — they use
+# CUDA for compositing and video decoding. Measured on this machine: the most
+# voracious of them takes 938 MiB, whereas any ML job takes gigabytes.
+# Without this threshold "the card is busy" would be true always.
 FOREIGN_MIB = 2048
 
-# Раннеры ollama. Их нельзя опознавать по PID: раннер порождается службой ollama,
-# нашим потомком не является и занимает всю память модели — поэтому наша собственная
-# загруженная модель выглядела бы чужой вычислительной задачей, и демон вытеснял бы
-# сам себя сразу после загрузки переводчика (ровно это и произошло на первом сквозном
-# прогоне). Принадлежность моделей ollama определяется точно и по имени, через /api/ps,
-# так что из проверки по процессам они исключаются целиком.
+# ollama runners. They can't be identified by PID: the runner is spawned by the ollama
+# service, isn't our descendant and takes all the memory of the model — therefore our own
+# loaded model would look like someone else's compute job, and the daemon would evict
+# itself immediately after loading the translator (exactly this happened on the first
+# end-to-end run). The ownership of ollama models is determined precisely and by name,
+# via /api/ps, so they're excluded entirely from the process check.
 OLLAMA_RUNNERS = frozenset({"llama-server", "ollama", "ollama_llama_server", "ollama-runner"})
 
 
 class Preempted(Exception):
-    """Карту пришлось отдать: пользователь начал свою работу."""
+    """The card had to be given up: the user started their own work."""
 
 
 @dataclass
@@ -99,7 +99,7 @@ def _nvml():
 
 
 class GpuLease:
-    """Один пропуск на всю работу с картой."""
+    """One pass for all work with the card."""
 
     def __init__(self, ollama_url: str = OLLAMA_URL, guard_mib: int = GUARD_MIB) -> None:
         self._semaphore = asyncio.Semaphore(1)
@@ -110,11 +110,11 @@ class GpuLease:
         self._own_models: set[str] = set()
 
     def claim_model(self, name: str) -> None:
-        """Пометить модель как свою, чтобы сторож не принял её за чужую."""
+        """Mark a model as one's own so the watchdog doesn't mistake it for someone else's."""
         self._own_models.add(name)
 
     def state(self) -> GpuState:
-        """Снимок карты: сколько свободно и не работает ли кто-то ещё."""
+        """A snapshot of the card: how much is free and whether someone else is working."""
         free_mib = 0
         foreign_pids: list[int] = []
 
@@ -126,18 +126,19 @@ class GpuLease:
                 for proc in self._nvml.nvmlDeviceGetComputeRunningProcesses(handle):
                     used_mib = (proc.usedGpuMemory or 0) // (1024 * 1024)
 
-                    # Десктоп отсеиваем по объёму, свой ASR-воркер — по родословной,
-                    # раннеры ollama — по имени: их принадлежность решается точнее
-                    # через /api/ps, где видно, чья именно модель загружена.
+                    # Screen the desktop by volume, our own ASR worker — by lineage,
+                    # ollama runners — by name: their ownership is decided more precisely
+                    # via /api/ps, where it's visible whose model is loaded exactly.
                     if used_mib < FOREIGN_MIB or _process_name(proc.pid) in OLLAMA_RUNNERS:
                         continue
 
                     if proc.pid != self._own_pid and not _is_descendant(proc.pid, self._own_pid):
                         foreign_pids.append(proc.pid)
             except Exception as exc:
-                # Не глотаем: пустой снимок неотличим от «карта свободна», а по
-                # документированному правилу ослепший сторож обязан уступать карту.
-                log.warning("NVML недоступен: %s", exc)
+                # Don't swallow: an empty snapshot is indistinguishable from "the card is
+                # free", and by the documented rule a blinded watchdog is obliged to give
+                # up the card.
+                log.warning("NVML is unavailable: %s", exc)
                 raise
 
         loaded = self._loaded_models()
@@ -149,12 +150,12 @@ class GpuLease:
         )
 
     def _loaded_models(self) -> list[str]:
-        """Что сейчас загружено в ollama.
+        """What's loaded in ollama right now.
 
-        Ошибку намеренно не глотаем. Это единственный канал, по которому видна работа
-        пользователя: раннеры ollama исключены из проверки по процессам, поэтому
-        трактовать недоступность /api/ps как «моделей нет» означало бы докладывать
-        «карта свободна» ровно тогда, когда мы ослепли.
+        The error is deliberately not swallowed. This is the only channel through which
+        the user's work is visible: ollama runners are excluded from the process check, so
+        treating an unavailable /api/ps as "there are no models" would mean reporting
+        "the card is free" exactly when we have gone blind.
         """
         response = httpx.get(f"{self._ollama_url}/api/ps", timeout=3.0)
         response.raise_for_status()
@@ -162,19 +163,19 @@ class GpuLease:
         return [m.get("name", "") for m in response.json().get("models", [])]
 
     def is_resident(self, model: str) -> bool:
-        """Загружена ли уже эта модель. Ошибку опроса считаем за «нет»."""
+        """Whether this model is already loaded. A poll error counts as "no"."""
         try:
             return model in self._loaded_models()
         except Exception:
             return False
 
     def unload(self, model: str) -> None:
-        """Выгрузить свою модель из ollama немедленно.
+        """Unload one's own model from ollama immediately.
 
-        keep_alive: 0 — единственный способ освободить VRAM сразу. Отрицательное
-        значение использовать нельзя ни при каких условиях: планировщик ollama
-        сортирует кандидатов на выгрузку по sessionDuration, приведённой к uint64,
-        поэтому -1 сортируется последним и делает модель невыгружаемой.
+        keep_alive: 0 — the only way to free VRAM right away. A negative
+        value must not be used under any circumstances: ollama's scheduler
+        sorts unloading candidates by sessionDuration reduced to uint64,
+        so -1 sorts last and makes the model unloadable.
         """
         with contextlib.suppress(Exception):
             httpx.post(
@@ -185,13 +186,13 @@ class GpuLease:
 
     @contextlib.asynccontextmanager
     async def acquire(self, need_mib: int, *, model: str | None = None, wait: bool = True):
-        """Взять пропуск под задачу, которой нужно need_mib видеопамяти.
+        """Take a pass for a job that needs need_mib of VRAM.
 
-        Возвращает объект с флагом `preempted`: долгие операции обязаны его
-        проверять и сворачиваться, когда он поднят.
+        Returns an object with the `preempted` flag: long operations must
+        check it and wind down when it's raised.
         """
         if not wait and self._semaphore.locked():
-            raise Preempted("карта занята другой задачей демона")
+            raise Preempted("the card is occupied by another daemon job")
 
         async with self._semaphore:
             await self._await_admission(need_mib, model)
@@ -207,12 +208,12 @@ class GpuLease:
                     await watchdog
 
     async def _await_admission(self, need_mib: int, model: str | None = None) -> None:
-        """Дождаться, пока карта действительно свободна.
+        """Wait until the card is truly free.
 
-        Если наша собственная модель уже резидентна, память под неё просить не надо:
-        ollama её не перезагружает. Без этой поправки фаза перевода требовала бы
-        17.8 ГБ свободных ровно тогда, когда 17.3 из них уже заняты нашим же
-        переводчиком, и допуск не прошёл бы никогда.
+        If our own model is already resident, there's no need to ask for memory for it:
+        ollama doesn't reload it. Without this correction the translation phase would
+        require 17.8 GB free exactly when 17.3 of them are already occupied by our own
+        translator, and admission would never pass.
         """
         needed = 0 if model and self.is_resident(model) else need_mib
         clean = 0
@@ -224,44 +225,46 @@ class GpuLease:
                 state = await asyncio.to_thread(self.state)
                 free_enough = state.free_mib >= needed + self._guard_mib
                 busy = state.busy
-                detail = f"свободно {state.free_mib} МиБ, модели {state.foreign_models}"
+                detail = f"free {state.free_mib} MiB, models {state.foreign_models}"
             except Exception as exc:
-                # Неизвестное состояние карты — это «занято», а не «свободно».
-                log.warning("состояние GPU неизвестно, жду: %s", exc)
-                free_enough, busy, detail = False, True, f"состояние неизвестно ({exc})"
+                # An unknown card state is "busy", not "free".
+                log.warning("GPU state unknown, waiting: %s", exc)
+                free_enough, busy, detail = False, True, f"state unknown ({exc})"
 
             if free_enough and not busy:
                 clean += 1
 
-                # На свободной карте ждать нечего. Гистерезис нужен только чтобы
-                # не биться о чужой keep_alive после того, как нас уже вытеснили.
+                # On a free card there's nothing to wait for. Hysteresis is needed only
+                # so as not to fight someone else's keep_alive after we've already been
+                # evicted.
                 if not contended or clean >= REARM_POLLS:
                     return
             else:
                 if clean:
-                    log.info("карта снова занята, счётчик чистых опросов сброшен")
+                    log.info("the card is busy again, the clean poll counter reset")
 
                 contended = True
                 clean = 0
 
-            # Ждать вечно нельзя: ожидание идёт под семафором, поэтому одно
-            # застрявшее задание заморозило бы все остальные, а клиент видел бы
-            # стадию без единого события. Отдаём семафор и сообщаем причину.
+            # Waiting forever is not allowed: the wait happens under the semaphore, so one
+            # stuck job would freeze all the rest, and the client would see a stage without
+            # a single event. We give up the semaphore and report the reason.
             if time.monotonic() >= deadline:
                 raise Preempted(
-                    f"карта не освободилась под {needed} МиБ за "
-                    f"{ADMISSION_TIMEOUT:.0f} с: {detail}"
+                    f"the card didn't free up for {needed} MiB in "
+                    f"{ADMISSION_TIMEOUT:.0f} s: {detail}"
                 )
 
             await asyncio.sleep(WATCHDOG_INTERVAL)
 
     async def _watch(self, holder: _Holder) -> None:
-        """Пока пропуск удерживается — следить, не появился ли рядом пользователь.
+        """While the pass is held — watch whether the user has appeared nearby.
 
-        Любая ошибка внутри трактуется как повод уступить карту. Сторож — это и есть
-        механизм безопасности, и если он ослеп, продолжать работу вслепую хуже, чем
-        лишний раз отдать карту: неизвестное состояние здесь означает риск чужого OOM,
-        а он у ollama выгружает все модели разом и убивает сессию пользователя.
+        Any error inside is treated as a reason to give up the card. The watchdog is the
+        safety mechanism itself, and if it goes blind, continuing to work blindly is worse
+        than one more time giving up the card: an unknown state here means the risk of
+        someone else's OOM, and that in ollama unloads all models at once and kills the
+        user's session.
         """
         try:
             while True:
@@ -270,7 +273,7 @@ class GpuLease:
 
                 if state.busy:
                     log.info(
-                        "уступаю карту: процессы %s, модели %s",
+                        "giving up the card: processes %s, models %s",
                         state.foreign_pids,
                         state.foreign_models,
                     )
@@ -280,12 +283,12 @@ class GpuLease:
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("сторож GPU упал — уступаю карту на всякий случай")
+            log.exception("the GPU watchdog crashed — giving up the card just in case")
             holder.preempt()
 
 
 class _Holder:
-    """Ручка удерживаемого пропуска."""
+    """Handle of a held pass."""
 
     def __init__(self) -> None:
         self._event = asyncio.Event()
@@ -298,16 +301,16 @@ class _Holder:
         self._event.set()
 
     def check(self) -> None:
-        """Бросить Preempted, если карту пора отдать."""
+        """Raise Preempted if it's time to give up the card."""
         if self.preempted:
-            raise Preempted("пользователь начал свою работу на GPU")
+            raise Preempted("the user started their own work on the GPU")
 
     async def wait_preempted(self) -> None:
         await self._event.wait()
 
 
 def _process_name(pid: int) -> str:
-    """Короткое имя процесса из /proc. Пустая строка, если процесс уже исчез."""
+    """Short process name from /proc. An empty string if the process has already disappeared."""
     try:
         with open(f"/proc/{pid}/comm", encoding="utf-8") as handle:
             return handle.read().strip()
@@ -316,14 +319,14 @@ def _process_name(pid: int) -> str:
 
 
 def _is_descendant(pid: int, ancestor: int) -> bool:
-    """Является ли pid потомком ancestor. Нужно, чтобы не принять свой ASR-воркер за чужого."""
+    """Whether pid is a descendant of ancestor. Needed so as not to mistake our own ASR worker for someone else's."""
     seen = 0
 
     while pid > 1 and seen < 20:
         try:
             with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
-                # Четвёртое поле — PPID, но имя процесса в скобках может содержать пробелы,
-                # поэтому режем по последней закрывающей скобке.
+                # The fourth field is PPID, but the process name in parentheses may
+                # contain spaces, so we cut at the last closing parenthesis.
                 fields = handle.read().rsplit(")", 1)[1].split()
                 pid = int(fields[1])
         except (OSError, IndexError, ValueError):

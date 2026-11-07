@@ -1,142 +1,132 @@
-# Демон выдерживает второго клиента — план реализации
+# The daemon survives a second client — implementation plan
 
-## Как сделано
+## How it was done
 
-Сводка на 2026-11-01, ветка `worktree-daemon-second-client`. Текст задач ниже —
-исходный план, он не переписан; где построенное разошлось с ним, верно сказанное
-здесь. Решения, принятые по ходу работы, записаны здесь по существу: журнал, в
-котором их принимали, в репозиторий не входит.
+Summary as of 2026-11-01, branch `worktree-daemon-second-client`. The task text below
+is the original plan, it has not been rewritten; where what was built diverged from it,
+what is said here holds. The decisions made along the way are recorded here on the merits:
+the log in which they were made is not part of the repository.
 
-**Архитектура.** Не «решает первый подписавшийся»: задание ключуется парой (ролик,
-`use_author_track`). «Первый решает» сломал переключатель дорожки автора в
-расширении: оно рассчитывает, что опрос уносит настройку на каждом витке и
-сменённый признак даёт другое задание, а при «первом решающем» переключение не
-делало ничего, пока задание не вытеснят, не сбросят или не перезапустят демон.
-`targetLang` в ключ не входит, остаётся за первым обратившимся и виден в снимке.
-Каждый журнал событий начинается со случайного 48-битного основания, а не с нуля:
-курсор чужого журнала (другого варианта, сброшенного задания) не попадает в
-диапазон этого и получает снимок обычной веткой `Job.poll`. 48 бит — чтобы курсор
-оставался точным целым в JavaScript (до 2^53): расширение носит его числом JSON.
-Цена ключа по паре: два клиента с разным признаком — два конвейера на ролик, а
-переключение посреди идущего задания оставляет прежний вариант держать карту до
-конца, и выбранный ждёт.
+**Architecture.** Not “the first subscriber decides”: a job is keyed by the pair (video,
+`use_author_track`). “First decides” broke the author-track switch in the
+extension: it expects a poll to carry the setting on every round and a changed flag to
+yield a different job, but under “first decides” the switch did
+nothing until the job was evicted, reset, or the daemon restarted.
+`targetLang` is not part of the key, it stays with the first caller and is visible in the snapshot.
+Each event journal starts from a random 48-bit base rather than zero:
+a cursor from a foreign journal (another variant, a reset job) does not fall into
+the range of this one and gets a snapshot through the ordinary `Job.poll` branch. 48 bits — so that
+the cursor remains an exact integer in JavaScript (up to 2^53): the
+extension carries it as a JSON number. The price of the pair key: two clients with
+different flags — two pipelines per video, and
+a switch in the middle of a running job leaves the previous variant holding the GPU until
+the end, while the chosen one waits.
 
-- **Задача 2.** Клиенты с разными признаками получают два задания, а не одно:
-  вместо `second is first` тесты проверяют, что у каждого варианта своё задание,
-  запущенное ровно один раз, и что сто расходящихся опросов дают ровно два
-  задания. Курсор впереди журнала получает снимок с `ahead["cursor"] ==
-  job.journal_end`, а не 0: `journal_end` — конец журнала с учётом основания.
-  Ветка повторяемого отказа снимает только своё задание (`_remove`), а не весь
-  ролик через `drop`: соседний вариант может идти у другого клиента. Пересозданное
-  после отказа получает `generation` на единицу больше прежнего; после `/drop`
-  счёт снова с 0. Где ролик назван без признака: `get` и снимок
-  `GET /v1/jobs/{id}` берут самый недавно тронутый вариант, позиция просмотра и
-  `unwatch` идут на все варианты, сброс без ключа отменяет все.
-- **Задача 3.** `authorTrack` в теле `POST /v1/jobs` и в `watch` обязан быть
-  настоящим boolean: нет его — `true`, всё остальное (`null`, `"false"`, 0, 1) —
-  отказ без задания: 400 у `POST`, у `watch` событие `state` со стадией `error` и
-  `retryable: false`. Иначе не-boolean лёг бы в ключ призрачным третьим вариантом.
-  Сокет следит не больше чем за одним вариантом ролика: `watch` с другим
-  признаком переносит его очередь на тот вариант.
-- **Задача 4.** Вместо «пустой набор → 0.0»: когда записи всех клиентов
-  просрочены, `aim()` отдаёт самую свежую позицию среди них, иначе замороженная
-  фоновая вкладка единственного зрителя дёрнула бы окно перевода к началу ролика;
-  0.0 — только когда записей нет вовсе. `playhead` — взгляд без хода: что `aim()`
-  отдаст следующим, без поворота круга (в плане он был самим `aim()`). Живость
-  решает одно место, `Job.live_slots()`, и запись ровно `PLAYHEAD_TTL` секунд от
-  роду ещё жива.
-- **Задача 5.** `/drop` принимает запрос вовсе без тела — так шлёт расширение.
-  Негодный `clientId` (пустой, не строка, длиннее 64 знаков) — это клиент
-  `"legacy"`: снимает только его запись и чужую работу не отменяет. `clientId: null`
-  или его отсутствие — отмена всех вариантов, как раньше. Регистрация — живая
-  запись позиции: подписавшийся, но не сообщивший позицию клиент от чужого сброса
-  не защищён. Тело, которое не JSON-объект (список, текст, форма), — 422.
-- **Задача 6.** Предел — 16, а не 4: это защита от злоупотребления, а не глубина
-  очереди, и пятая вкладка обычного вечера отказа получать не должна. Отказ —
-  `CapacityError`, а не `PermanentJobError`: переполнение проходит само, а
-  `PermanentJobError` бегун помечает неповторяемым. Отказывают все три пути, что
-  создают задание, а не два: `POST /v1/jobs` — 429 с фразой; `watch` — событие
-  `state` со стадией `error` и `retryable: true`, без подписки;
-  `/events?create=true`, единственный путь, которым задания заводит расширение, —
-  200 со снимком в стадии `error` и с курсором клиента, как прислан (на ответ не
-  200 расширение пишет «демон ответил …» и повторяет, а снимок с `error`
-  показывает фразой и опрос останавливает). Брошенная пауза — `PAUSED`, задачи
-  нет, никто не обращался дольше `PAUSED_AUDIO_TTL` — в счёт не идёт; признак один
-  на счёт мест и на уборку её звука (`Job.is_stale_pause`). Упавшее задание с
-  остывшим отказом при пределе отдаётся как есть, а не пересоздаётся: снять его и
-  отказать значило бы потерять номер поколения и подписчиков. Бюджет звука убирает
-  файлы по старшинству и, когда файл числится за заданием, — через его
-  `discard_audio()`. Тестовые идентификаторы — 11 знаков (`f"video{i:05d}a"`), как
-  у настоящих. При пределе отказ получает и ролик, чья дорожка уже в кэше. Уборка
-  звука ошибкой диска запрос не роняет (добавлено финальной правкой).
-- **Задача 7.** Только документ, `docs/running.md`. Lingering с привязкой звука и
-  ай-трекера к сеансу через вставки (`ConditionEnvironment`, `PartOf`) пробовали и
-  откатили: юнит, пропущенный по условию, свои `Wants=`/`Requires=` всё равно
-  тянет. Сейчас `Linger=no`, `packaging/yt-trans.service` не менялся; как
-  запускать демон без сеанса, решает хозяин — варианты в `docs/running.md`.
+- **Task 2.** Clients with different flags get two jobs, not one:
+  instead of `second is first` the tests check that each variant has its own job,
+  started exactly once, and that a hundred diverging polls produce exactly two
+  jobs. A cursor ahead of the journal gets a snapshot with `ahead["cursor"] ==
+  job.journal_end`, not 0: `journal_end` is the end of the journal including the base.
+  The repeatable-failure branch removes only its own job (`_remove`), not the whole
+  video via `drop`: the neighbouring variant may be running for another client. A job
+  recreated after a failure gets `generation` one higher than before; after `/drop`
+  the count starts from 0 again. Where the video is named without a flag: `get` and the
+  `GET /v1/jobs/{id}` snapshot take the most recently touched variant, the playhead and
+  `unwatch` go to all variants, a reset without a key cancels all.
+- **Task 3.** `authorTrack` in the body of `POST /v1/jobs` and in `watch` must be
+  a real boolean: absent — `true`, anything else (`null`, `"false"`, 0, 1) —
+  a refusal without a job: 400 on `POST`, on `watch` a `state` event with stage `error` and
+  `retryable: false`. Otherwise a non-boolean would land in the key as a phantom third variant.
+  A socket watches no more than one variant of a video: a `watch` with a different
+  flag moves its queue to that variant.
+- **Task 4.** Instead of “empty set → 0.0”: when the records of all clients
+  are stale, `aim()` returns the freshest position among them, otherwise a frozen
+  background tab of the only viewer would yank the translation window to the start of the video;
+  0.0 — only when there are no records at all. `playhead` — a look without a turn: what
+  `aim()` will return next, without turning the wheel (in the plan it was
+  `aim()` itself). Liveness is decided in one place, `Job.live_slots()`, and a record exactly
+  `PLAYHEAD_TTL` seconds old is still alive.
+- **Task 5.** `/drop` accepts a request with no body at all — that is how the
+  extension sends it. An invalid `clientId` (empty, not a string, longer than 64
+  characters) is the client `"legacy"`: it removes only its record and does not cancel
+  someone else's work. `clientId: null` or its absence — cancels all variants, as
+  before. Registration is a live position record: a client that subscribed but did not
+  report a position is not protected from someone else's reset. A body that is not
+  a JSON object (a list, text, a form) — 422.
+- **Task 6.** The limit is 16, not 4: it is protection against abuse, not the depth of
+  the queue, and the fifth tab of an ordinary evening must not get a refusal. The refusal —
+  `CapacityError`, not `PermanentJobError`: overflow passes by itself, while
+  `PermanentJobError` is marked non-retryable by the runner. All three paths that
+  create a job refuse, not two: `POST /v1/jobs` — 429 with a phrase; `watch` — a `state`
+  event with stage `error` and `retryable: true`, without a subscription;
+  `/events?create=true`, the only path by which the extension creates jobs —
+  200 with a snapshot in stage `error` and with the client's cursor as sent (on a response that is not
+  200 the extension writes “демон ответил …” and retries, while a snapshot with
+  `error` shows the phrase and stops the poll). An abandoned pause — `PAUSED`, no job,
+  nobody has touched it for longer than `PAUSED_AUDIO_TTL` — does not count; one flag
+  for both the slot count and the cleanup of its audio (`Job.is_stale_pause`). A failed
+  job with a cooled-down refusal at the limit is returned as is, not recreated: removing
+  it and refusing would mean losing the generation number and the subscribers. The
+  audio budget removes files by age and, when a file is accounted to a job, through its
+  `discard_audio()`. Test identifiers are 11 characters (`f"video{i:05d}a"`), like
+  the real ones. At the limit, a video whose track is already in the cache also gets
+  a refusal. Audio cleanup with a disk error does not fail the request (added by
+  a final edit).
+- **Task 7.** Documentation only, `docs/running.md`. Lingering with the audio and
+  AI tracker bound to the session via drop-ins (`ConditionEnvironment`, `PartOf`) was
+  tried and rolled back: a unit skipped by condition still pulls its `Wants=`/`Requires=`.
+  Currently `Linger=no`, `packaging/yt-trans.service` unchanged; how to run
+  the daemon without a session is decided by the owner — options in `docs/running.md`.
 
-Что отложено — в разделе «Отложено в следующий план».
+What is deferred — in the section “Deferred to the next plan”.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** сделать так, чтобы появление второго клиента на одном ролике не пересоздавало задание, не отменяло чужую работу и не загоняло перевод в гонку за плейхедом.
+**Goal:** make it so that the appearance of a second client on the same video does not recreate the job, does not cancel someone else's work, and does not drive the translation into a race for the playhead.
 
-**Architecture:** правки внутри `helper/jobs.py` и `helper/app.py`. Тождество задания перестаёт зависеть от настроек клиента (первый подписавшийся решает, расхождение видно в снимке). Плейхед и подписка становятся величинами на клиента, ключ — необязательный `clientId`; клиент, который его не присылает, ведёт себя ровно как сегодня, поэтому расширение не трогается. Плюс пределы на незавершённые задания и на отложенный звук.
+**Architecture:** changes inside `helper/jobs.py` and `helper/app.py`. Job identity stops depending on the client's settings (the first subscriber decides, the divergence is visible in the snapshot). The playhead and the subscription become per-client quantities, the key is an optional `clientId`; a client that does not send it behaves exactly as today, so the extension is untouched. Plus limits on unfinished jobs and on deferred audio.
 
 **Tech Stack:** Python 3.14, FastAPI, pytest + pytest-asyncio, httpx ASGITransport.
 
-**Spec:** `docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md` (разделы «Что надо починить до начала» и «Две дырки, которые замысел пропустил»).
+**Spec:** `docs/superpowers/specs/2026-10-30-tablet-subtitles-design.md` (sections “What needs fixing before we start” and “Two holes the design missed”).
 
 ## Global Constraints
 
-- Изменения протокола **только добавляющие**. Новых значений `Stage` не вводить: расширение сверяется с известным списком стадий, незнакомая оставит его с устаревшей надписью и опросом, который никогда не остановится.
-- `extension/` не меняется ни строкой.
-- Клиент без `clientId` сохраняет сегодняшнее поведение во всех путях.
-- Тесты не касаются сети, карты и реальных путей кэша. `YT_TRANS_CACHE` и `YT_TRANS_CONFIG` переопределяются **до** первого импорта `helper.*`: `JobManager.__init__` выполняет `shutil.rmtree(PAUSED_AUDIO_DIR)`, то есть прогон без изоляции удалит отложенный звук пользователя.
-- Русский язык в комментариях и сообщениях об отказах, как во всём репозитории.
+- Protocol changes are **additive only**. Do not introduce new `Stage` values: the extension checks against a known list of stages, an unfamiliar one would leave it with a stale caption and a poll that never stops.
+- `extension/` does not change by a single line.
+- A client without `clientId` keeps today's behaviour on all paths.
+- Tests do not touch the network, the GPU or real cache paths. `YT_TRANS_CACHE` and `YT_TRANS_CONFIG` are overridden **before** the first `helper.*` import: `JobManager.__init__` runs `shutil.rmtree(PAUSED_AUDIO_DIR)`, that is, a run without isolation would delete the user's deferred audio.
+- Russian in comments and refusal messages, as throughout the repository.
 
-## Отложено в следующий план
+## Deferred to the next plan
 
-Из списка предусловий замысла здесь намеренно нет двух пунктов: ограничения
-частоты создания заданий по обратившемуся и `proxy_headers=False` у uvicorn.
-Оба осмысленны только когда порт доступен из сети, и оба опираются на адрес
-обратившегося, которого при привязке к петле не существует. Они входят в план
-про вывод демона в сеть.
+Deliberately absent here are two items from the design's list of preconditions:
+rate limiting of job creation per caller and `proxy_headers=False` on uvicorn.
+Both make sense only when the port is reachable from the network, and both rely on
+the caller's address, which does not exist when bound to the loopback. They belong to
+the plan for exposing the daemon to the network.
 
-Отложено по ходу работы (2026-11-01):
+Deferred along the way (2026-11-01):
 
-- **Граница готовности на проводе** (до какой секунды перевод доведён) и вид «ещё
-  не готово» — в план страницы для планшета.
-- **Поле «сейчас переводим для другого устройства»** — туда же: в демоне его пока
-  нет.
-- **Регистрация на вариант, а не на ролик.** Позиция приходит без признака дорожки
-  и ложится на все варианты, так что сброс с ключом не отменит вариант, который
-  никто не смотрит, пока смотрят соседний. Работа лишняя, но не потерянная.
-- **Прежний вариант при переключении — в паузу.** Сейчас он держит карту до конца,
-  а выбранный ждёт. При создании варианта идущий соседний стоит переводить в
-  `PAUSED`, откуда он продолжится при следующем обращении; отменять его нельзя —
-  это и давало шторм.
-- **Готовые ролики мимо предела.** При пределе отказ получает и ролик, чья дорожка
-  в кэше: дешёвой проверки при создании нет, ключу нужны длительность и отпечаток
-  дорожки. План предзагрузки должен пускать готовое мимо предела и не тратить
-  места зрителя.
-- **Осиротевший yt-dlp при отмене.** `cancel` не останавливает загрузку, уже идущую
-  в `asyncio.to_thread`. Шторм, который это умножал, ушёл, но дыра осталась.
-- **Запуск без сеанса.** Lingering не включён: сначала юниты звука и ай-трекера
-  надо привязать к сеансу в их источнике (`system-config`, `tobii`). Решает
-  хозяин, варианты в `docs/running.md`.
+- **The readiness boundary on the wire** (up to which second the translation has been carried) and the “not ready yet” view — to the tablet page plan.
+- **A “currently translating for another device” field** — there too: the daemon does not have it yet.
+- **Registration per variant rather than per video.** A position arrives without the track flag and lands on all variants, so a reset with a key will not cancel a variant nobody is watching while the neighbouring one is being watched. The work is extra, but not lost.
+- **The previous variant on a switch — into a pause.** Now it holds the GPU until the end, while the chosen one waits. When a variant is created, the running neighbouring one should be moved to `PAUSED`, from where it will continue on the next request; it cannot be cancelled — that is what produced the storm.
+- **Ready videos past the limit.** At the limit, a video whose track is already in the cache also gets a refusal: there is no cheap check at creation time, the key needs the duration and the track fingerprint. The prefetch plan should let a finished one past the limit and not spend the viewer's slots.
+- **An orphaned yt-dlp on cancel.** `cancel` does not stop a download already running in `asyncio.to_thread`. The storm that multiplied this is gone, but the hole remains.
+- **Starting without a session.** Lingering is not enabled: first the audio and AI-tracker units must be bound to the session at their source (`system-config`, `tobii`). The owner decides; options in `docs/running.md`.
 
 ## Review Focus
 
-- Два клиента с разным `targetLang` на одном ролике: второй молча получает язык первого, и в снимке об этом нечего прочитать. Тест в задаче 2.
-- Клиент исчез без `/drop` (вкладку убили): его плейхед остаётся в наборе навсегда и продолжает рулить переводом. Тест в задаче 4.
-- `clientId` отсутствует, пустой, не строка или абсурдно длинный — он идёт ключом в словарь. Тест в задаче 4.
-- Курсор опроса впереди журнала: клиент обязан получить один снимок и дальше идти нормально, а не крутить плотный цикл. Тест в задаче 2.
-- `/drop` по ролику, у которого задания нет. Тест в задаче 5.
+- Two clients with different `targetLang` on the same video: the second silently gets the first's language, and there is nothing to read about it in the snapshot. Test in task 2.
+- A client disappeared without `/drop` (the tab was killed): its playhead stays in the set forever and keeps steering the translation. Test in task 4.
+- `clientId` missing, empty, not a string or absurdly long — it goes as a key into the dictionary. Test in task 4.
+- A poll cursor ahead of the journal: the client must get one snapshot and then proceed normally, not spin a tight loop. Test in task 2.
+- `/drop` on a video that has no job. Test in task 5.
 
 ---
 
-### Task 1: Тестовая оснастка
+### Task 1: Test harness
 
 **Files:**
 - Create: `requirements-dev.txt`
@@ -145,10 +135,10 @@
 - Test: `tests/test_harness.py`
 
 **Interfaces:**
-- Consumes: ничего.
-- Produces: фикстура `manager` → `helper.jobs.JobManager` на временных путях; фикстура `client` → `httpx.AsyncClient` поверх `helper.app.app` с действующим токеном.
+- Consumes: nothing.
+- Produces: fixture `manager` → `helper.jobs.JobManager` on temporary paths; fixture `client` → `httpx.AsyncClient` over `helper.app.app` with a valid token.
 
-- [ ] **Step 1: Написать падающий тест**
+- [ ] **Step 1: Write the failing test**
 
 ```python
 # tests/test_harness.py
@@ -165,26 +155,26 @@ def test_manager_fixture_builds(manager):
     assert manager.stats()["jobs"] == 0
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падает**
+- [ ] **Step 2: Run and make sure it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_harness.py -v`
-Expected: FAIL — `pytest: command not found` либо `fixture 'manager' not found`
+Expected: FAIL — `pytest: command not found` or `fixture 'manager' not found`
 
-- [ ] **Step 3: Завести оснастку**
+- [ ] **Step 3: Set up the harness**
 
-`requirements-dev.txt`: `pytest`, `pytest-asyncio`. `pytest.ini`: секция `[pytest]` с `asyncio_mode = auto` и `testpaths = tests`.
+`requirements-dev.txt`: `pytest`, `pytest-asyncio`. `pytest.ini`: a `[pytest]` section with `asyncio_mode = auto` and `testpaths = tests`.
 
-`tests/conftest.py` задаёт `os.environ["YT_TRANS_CACHE"]` и `["YT_TRANS_CONFIG"]` через `tempfile.mkdtemp()` **на уровне модуля, до любого импорта `helper.*`** — фикстура `tmp_path_factory` для этого не годится, она доступна только внутри фикстур, а conftest импортируется раньше тестовых модулей. Затем фикстуры:
+`tests/conftest.py` sets `os.environ["YT_TRANS_CACHE"]` and `["YT_TRANS_CONFIG"]` via `tempfile.mkdtemp()` **at module level, before any `helper.*` import** — the `tmp_path_factory` fixture is not suitable for this, it is available only inside fixtures, while conftest is imported before the test modules. Then the fixtures:
 
-- `manager` — `JobManager(config=...)`, где конфигурация собрана в памяти через `helper.config.Config` без чтения диска;
-- `client` — `httpx.AsyncClient(transport=ASGITransport(app=helper.app.app), base_url="http://test")`, заголовок `Authorization: Bearer <helper.app.TOKEN>`.
+- `manager` — `JobManager(config=...)`, where the configuration is assembled in memory via `helper.config.Config` without reading the disk;
+- `client` — `httpx.AsyncClient(transport=ASGITransport(app=helper.app.app), base_url="http://test")`, header `Authorization: Bearer <helper.app.TOKEN>`.
 
-- [ ] **Step 4: Запустить и убедиться, что проходит**
+- [ ] **Step 4: Run and make sure it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_harness.py -v`
 Expected: PASS, 2 passed
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add requirements-dev.txt pytest.ini tests/
@@ -193,17 +183,17 @@ git commit -m "Оснастка для тестов на временных пу
 
 ---
 
-### Task 2: Признак дорожки автора не пересоздаёт живое задание
+### Task 2: The author-track flag does not recreate a live job
 
 **Files:**
 - Modify: `helper/jobs.py:1245-1261` (`JobManager.get_or_create`), `helper/jobs.py:306-320` (`Job.snapshot`)
 - Test: `tests/test_job_identity.py`
 
 **Interfaces:**
-- Consumes: фикстура `manager` из задачи 1.
-- Produces: `Job.snapshot()` дополнительно отдаёт `"authorTrack": bool`, `"targetLang": str`, `"generation": int`. `Job.generation` — счётчик, растущий при каждом пересоздании задания по тому же ролику.
+- Consumes: fixture `manager` from task 1.
+- Produces: `Job.snapshot()` additionally returns `"authorTrack": bool`, `"targetLang": str`, `"generation": int`. `Job.generation` — a counter that grows on every recreation of a job for the same video.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_job_identity.py
@@ -252,25 +242,25 @@ async def test_cursor_ahead_of_the_journal_resyncs_once(manager):
     assert "snapshot" not in again
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_job_identity.py -v`
-Expected: FAIL — первый тест на `second is first`, остальные на отсутствующих ключах снимка
+Expected: FAIL — the first test on `second is first`, the rest on the missing snapshot keys
 
-- [ ] **Step 3: Убрать ветку пересоздания и дополнить снимок**
+- [ ] **Step 3: Remove the recreation branch and extend the snapshot**
 
-В `get_or_create` удалить ветку `if job is not None and job.use_author_track != use_author_track` целиком вместе с `drop`/`replaced`. Ветку повторяемого отказа (`Stage.ERROR` + `RETRY_COOLDOWN`) сохранить без изменений — она про другое.
+In `get_or_create` delete the branch `if job is not None and job.use_author_track != use_author_track` entirely, together with `drop`/`replaced`. Keep the repeatable-failure branch (`Stage.ERROR` + `RETRY_COOLDOWN`) unchanged — it is about something else.
 
-Добавить `self.generation = 0` в `Job.__init__` и увеличивать его в `get_or_create`, когда задание пересоздаётся по отказу. В `Job.snapshot()` добавить три ключа.
+Add `self.generation = 0` in `Job.__init__` and increment it in `get_or_create` when a job is recreated after a failure. In `Job.snapshot()` add three keys.
 
-Заменить комментарий у снятой ветки на объяснение правила: решает первый подписавшийся, расхождение настроек видно клиенту по `authorTrack`/`targetLang` в снимке, а повторный прогон с другой настройкой — это явный `/drop` и новая подписка, а не молчаливое пересоздание под чужим опросом.
+Replace the comment at the removed branch with an explanation of the rule: the first subscriber decides, a settings divergence is visible to the client via `authorTrack`/`targetLang` in the snapshot, and a rerun with a different setting is an explicit `/drop` and a new subscription, not a silent recreation under someone else's poll.
 
-- [ ] **Step 4: Запустить и убедиться, что проходят**
+- [ ] **Step 4: Run and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_job_identity.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add helper/jobs.py tests/test_job_identity.py
@@ -279,17 +269,17 @@ git commit -m "Решает первый подписавшийся: расхо�
 
 ---
 
-### Task 3: Оба создающих пути передают настоящий признак
+### Task 3: Both creating paths pass the real flag
 
 **Files:**
-- Modify: `helper/app.py:140` (`create_job`), `helper/app.py:290` (операция `watch` в `websocket`)
+- Modify: `helper/app.py:140` (`create_job`), `helper/app.py:290` (the `watch` operation in `websocket`)
 - Test: `tests/test_create_paths.py`
 
 **Interfaces:**
-- Consumes: фикстура `client` из задачи 1; правило «первый решает» из задачи 2.
-- Produces: `POST /v1/jobs` принимает `authorTrack: bool` (умолчание `true`); операция `watch` принимает `authorTrack` в том же смысле.
+- Consumes: fixture `client` from task 1; the “first decides” rule from task 2.
+- Produces: `POST /v1/jobs` accepts `authorTrack: bool` (default `true`); the `watch` operation accepts `authorTrack` in the same sense.
 
-- [ ] **Step 1: Написать падающий тест**
+- [ ] **Step 1: Write the failing test**
 
 ```python
 # tests/test_create_paths.py
@@ -305,21 +295,21 @@ async def test_post_jobs_defaults_author_track_to_true(client, manager):
     assert manager.get("abcdefghijk").use_author_track is True
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падает**
+- [ ] **Step 2: Run and make sure it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_create_paths.py -v`
-Expected: FAIL — первый тест: `use_author_track` равен `True`, потому что значение зашито умолчанием
+Expected: FAIL — the first test: `use_author_track` is `True`, because the value is hardcoded by default
 
-- [ ] **Step 3: Прокинуть признак**
+- [ ] **Step 3: Pass the flag through**
 
-В `create_job` читать `(payload or {}).get("authorTrack", True)` и передавать третьим аргументом. В операции `watch` читать `message.get("authorTrack", True)` и передавать так же. Нигде не менять умолчание: `true` сохраняет сегодняшнее поведение.
+In `create_job` read `(payload or {}).get("authorTrack", True)` and pass it as the third argument. In the `watch` operation read `message.get("authorTrack", True)` and pass it the same way. Do not change the default anywhere: `true` preserves today's behaviour.
 
-- [ ] **Step 4: Запустить и убедиться, что проходит**
+- [ ] **Step 4: Run and make sure it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_create_paths.py -v`
 Expected: PASS, 2 passed
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add helper/app.py tests/test_create_paths.py
@@ -328,18 +318,18 @@ git commit -m "POST /v1/jobs и watch передают признак дорож
 
 ---
 
-### Task 4: Плейхед на клиента, с очередью по кругу
+### Task 4: Playhead per client, with a round-robin queue
 
 **Files:**
-- Modify: `helper/jobs.py:193` (`Job.__init__`), `helper/jobs.py:1151` (`_next_batch`), `helper/app.py:221-230` (`set_playhead`), `helper/app.py:296-302` (операция `playhead`)
+- Modify: `helper/jobs.py:193` (`Job.__init__`), `helper/jobs.py:1151` (`_next_batch`), `helper/app.py:221-230` (`set_playhead`), `helper/app.py:296-302` (the `playhead` operation)
 - Test: `tests/test_playhead.py`
 
 **Interfaces:**
-- Consumes: фикстура `manager`.
-- Produces: `Job.report_playhead(client_id: str | None, t: float) -> None`; `Job.aim() -> float` — позиция, вокруг которой берётся следующий батч, по кругу между различными плейхедами; `Job.forget_client(client_id: str | None) -> None`. Атрибут `Job.playhead` сохраняется как свойство только для чтения и равен `aim()`.
-- `POST /v1/jobs/{id}/playhead` и операция `playhead` принимают необязательный `clientId: str`. Отсутствие ключа означает единственного клиента `"legacy"` — поведение расширения не меняется.
+- Consumes: fixture `manager`.
+- Produces: `Job.report_playhead(client_id: str | None, t: float) -> None`; `Job.aim() -> float` — the position around which the next batch is taken, round-robin between distinct playheads; `Job.forget_client(client_id: str | None) -> None`. The `Job.playhead` attribute is kept as a read-only property and equals `aim()`.
+- `POST /v1/jobs/{id}/playhead` and the `playhead` operation accept an optional `clientId: str`. Absence of the key means the single client `"legacy"` — the extension's behaviour does not change.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_playhead.py
@@ -393,29 +383,29 @@ def test_absurd_client_id_is_refused_not_stored(manager):
     assert job.aim() == 6.0
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_playhead.py -v`
 Expected: FAIL — `AttributeError: 'Job' object has no attribute 'report_playhead'`
 
-- [ ] **Step 3: Реализовать**
+- [ ] **Step 3: Implement**
 
-В `Job.__init__` заменить `self.playhead = 0.0` на `self._playheads: dict[str, tuple[float, float]]` (позиция и монотонное время) и `self._turn = 0`. Константа `PLAYHEAD_TTL = 120.0` рядом с `PAUSED_AUDIO_TTL`.
+In `Job.__init__` replace `self.playhead = 0.0` with `self._playheads: dict[str, tuple[float, float]]` (position and monotonic time) and `self._turn = 0`. The constant `PLAYHEAD_TTL = 120.0` next to `PAUSED_AUDIO_TTL`.
 
-`report_playhead` нормализует ключ: пустой, не строка или длиннее 64 символов — считается `"legacy"`; хранит `(t, time.monotonic())`. `aim()` отбрасывает записи старше `PLAYHEAD_TTL`, берёт различные позиции в порядке ключей и выдаёт следующую по кругу через `self._turn`, увеличивая счётчик; пустой набор даёт `0.0`. `playhead` — свойство, возвращающее `aim()`.
+`report_playhead` normalises the key: empty, not a string or longer than 64 characters — counts as `"legacy"`; stores `(t, time.monotonic())`. `aim()` drops records older than `PLAYHEAD_TTL`, takes distinct positions in key order and returns the next one round-robin via `self._turn`, incrementing the counter; an empty set gives `0.0`. `playhead` — a property returning `aim()`.
 
-Правило «по кругу» выбрано вместо «самый отстающий»: при двух зрителях на второй и двадцатой минуте минимум заставил бы второго ждать весь ролик, а перевод и так обгоняет зрителя примерно в двадцать раз, так что половина скорости остаётся десятикратным запасом.
+The round-robin rule was chosen instead of “the lagging one”: with two viewers at the second and twentieth minute, the minimum would make the second wait for the whole video, while the translation overtakes the viewer roughly twentyfold anyway, so half the speed remains a tenfold margin.
 
-В `_next_batch` заменить `job.playhead` на `job.aim()` — один вызов на батч, иначе счётчик круга провернётся лишний раз.
+In `_next_batch` replace `job.playhead` with `job.aim()` — one call per batch, otherwise the round counter would be turned an extra time.
 
-В `set_playhead` и в операции `playhead` читать `clientId` и звать `report_playhead`.
+In `set_playhead` and in the `playhead` operation read `clientId` and call `report_playhead`.
 
-- [ ] **Step 4: Запустить и убедиться, что проходят**
+- [ ] **Step 4: Run and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_playhead.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add helper/jobs.py helper/app.py tests/test_playhead.py
@@ -424,17 +414,17 @@ git commit -m "Плейхед на клиента: окно перевода и�
 
 ---
 
-### Task 5: `/drop` отменяет только своё
+### Task 5: `/drop` cancels only its own
 
 **Files:**
 - Modify: `helper/app.py:233-237` (`drop_job`), `helper/jobs.py:1464-1468` (`JobManager.drop`)
 - Test: `tests/test_drop.py`
 
 **Interfaces:**
-- Consumes: `Job.forget_client` из задачи 4.
-- Produces: `JobManager.drop(video_id: str, client_id: str | None = None) -> bool` — возвращает, было ли задание отменено. `POST /v1/jobs/{id}/drop` принимает необязательный `clientId` и отвечает `{"dropped": <video_id>, "cancelled": bool}`.
+- Consumes: `Job.forget_client` from task 4.
+- Produces: `JobManager.drop(video_id: str, client_id: str | None = None) -> bool` — returns whether the job was cancelled. `POST /v1/jobs/{id}/drop` accepts an optional `clientId` and responds `{"dropped": <video_id>, "cancelled": bool}`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_drop.py
@@ -473,25 +463,25 @@ async def test_drop_endpoint_reports_whether_it_cancelled(client, manager):
     assert response.json() == {"dropped": "abcdefghijk", "cancelled": True}
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_drop.py -v`
 Expected: FAIL — `drop() takes 2 positional arguments but 3 were given`
 
-- [ ] **Step 3: Реализовать**
+- [ ] **Step 3: Implement**
 
-`JobManager.drop` с `client_id`: при переданном ключе снять его регистрацию через `job.forget_client`; отменять и вынимать задание из реестра только когда живых регистраций не осталось. Без ключа — отменять, как сегодня.
+`JobManager.drop` with `client_id`: when the key is passed, remove its registration via `job.forget_client`; cancel and remove the job from the registry only when no live registrations remain. Without a key — cancel, as today.
 
-Это намеренно оставляет расширению возможность отменить задание планшета, если расширение подписалось без ключа: добавляющее изменение не может отнять у старого клиента то, что он уже умеет. Записать это комментарием, чтобы правило не выглядело недоделкой.
+This deliberately leaves the extension the ability to cancel the tablet's job if the extension subscribed without a key: an additive change cannot take away from an old client what it already can do. Record this in a comment so the rule does not look like an oversight.
 
-`drop_job` читает `clientId` из тела и отдаёт `cancelled`.
+`drop_job` reads `clientId` from the body and returns `cancelled`.
 
-- [ ] **Step 4: Запустить и убедиться, что проходят**
+- [ ] **Step 4: Run and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_drop.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add helper/app.py helper/jobs.py tests/test_drop.py
@@ -500,17 +490,17 @@ git commit -m "Отмена задания снимает регистрацию
 
 ---
 
-### Task 6: Пределы на незавершённые задания и на отложенный звук
+### Task 6: Limits on unfinished jobs and on deferred audio
 
 **Files:**
-- Modify: `helper/jobs.py:73` (константы), `helper/jobs.py:1432-1460` (`_evict`), `helper/jobs.py:1245` (`get_or_create`)
+- Modify: `helper/jobs.py:73` (constants), `helper/jobs.py:1432-1460` (`_evict`), `helper/jobs.py:1245` (`get_or_create`)
 - Test: `tests/test_limits.py`
 
 **Interfaces:**
-- Consumes: фикстура `manager`.
-- Produces: `MAX_ACTIVE_JOBS = 4`, `PAUSED_AUDIO_MAX_BYTES = 4 * 1024**3`. `get_or_create` поднимает `PermanentJobError` при переполнении; `create_job` и операция `watch` превращают его в отказ с человеческой фразой.
+- Consumes: fixture `manager`.
+- Produces: `MAX_ACTIVE_JOBS = 4`, `PAUSED_AUDIO_MAX_BYTES = 4 * 1024**3`. `get_or_create` raises `PermanentJobError` on overflow; `create_job` and the `watch` operation turn it into a refusal with a human phrase.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [ ] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_limits.py
@@ -547,7 +537,7 @@ def test_paused_audio_over_budget_is_discarded_oldest_first(manager):
 
     for i, name in enumerate(("old.f32", "middle.f32", "fresh.f32")):
         path = PAUSED_AUDIO_DIR / name
-        with path.open("wb") as handle:        # разреженный файл: места не занимает
+        with path.open("wb") as handle:        # sparse file: takes no space
             handle.truncate(half)
         os.utime(path, (1000 + i, 1000 + i))
         made.append(path)
@@ -559,25 +549,25 @@ def test_paused_audio_over_budget_is_discarded_oldest_first(manager):
     assert sum(f.stat().st_size for f in PAUSED_AUDIO_DIR.iterdir()) <= PAUSED_AUDIO_MAX_BYTES
 ```
 
-- [ ] **Step 2: Запустить и убедиться, что падают**
+- [ ] **Step 2: Run and make sure they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_limits.py -v`
 Expected: FAIL — `DID NOT RAISE PermanentJobError`
 
-- [ ] **Step 3: Реализовать**
+- [ ] **Step 3: Implement**
 
-`MAX_ACTIVE_JOBS = 4` рядом с `MAX_RETAINED_JOBS`: четыре — это столько одновременных заданий, сколько имеет смысл при одном пропуске на карту, остальные всё равно стояли бы в очереди. Проверка в `get_or_create` перед созданием, по числу заданий с `finished is False`; отказ — `PermanentJobError` с фразой о том, сколько роликов уже в работе.
+`MAX_ACTIVE_JOBS = 4` next to `MAX_RETAINED_JOBS`: four is as many simultaneous jobs as make sense with one slot on the GPU, the rest would queue anyway. The check in `get_or_create` before creation, by the number of jobs with `finished is False`; refusal — `PermanentJobError` with a phrase about how many videos are already in progress.
 
-`PAUSED_AUDIO_MAX_BYTES = 4 * 1024**3`: в `_evict`, после нынешней чистки по времени, сложить размеры файлов в `PAUSED_AUDIO_DIR` и удалять самые старые, пока сумма выше предела. Трёхчасовой ролик даёт около 659 МиБ float32, так что четыре гигабайта — это примерно шесть заданий в паузе.
+`PAUSED_AUDIO_MAX_BYTES = 4 * 1024**3`: in `_evict`, after the current time-based cleanup, sum the sizes of the files in `PAUSED_AUDIO_DIR` and delete the oldest until the sum is below the limit. A three-hour video gives about 659 MiB of float32, so four gigabytes is roughly six paused jobs.
 
-В `create_job` и в операции `watch` обернуть вызов и отдать `HTTPException(status_code=429, detail=...)` соответственно отказ в событиях.
+In `create_job` and in the `watch` operation wrap the call and return `HTTPException(status_code=429, detail=...)` and, respectively, a refusal in events.
 
-- [ ] **Step 4: Запустить и убедиться, что проходят**
+- [ ] **Step 4: Run and make sure they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_limits.py -v`
 Expected: PASS, 3 passed
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add helper/jobs.py helper/app.py tests/test_limits.py
@@ -586,36 +576,36 @@ git commit -m "Предел на незавершённые задания и б
 
 ---
 
-### Task 7: Демон живёт без графического сеанса
+### Task 7: The daemon lives without a graphical session
 
 **Files:**
 - Create: `docs/running.md`
 - Modify: `packaging/yt-trans.service`
-- Test: проверка командой, автотеста нет — это состояние системы, а не код.
+- Test: verification by command, no automated test — this is a system state, not code.
 
 **Interfaces:**
-- Consumes: ничего.
-- Produces: документированная предпосылка запуска.
+- Consumes: nothing.
+- Produces: a documented startup precondition.
 
-- [ ] **Step 1: Проверить нынешнее состояние**
+- [ ] **Step 1: Check the current state**
 
 Run: `loginctl show-user "$USER" | grep Linger`
-Expected: `Linger=no` — юнит существует только внутри графического сеанса, то есть при выходе хозяина демон пропадает
+Expected: `Linger=no` — the unit exists only inside the graphical session, that is, when the owner logs out the daemon disappears
 
-- [ ] **Step 2: Включить**
+- [ ] **Step 2: Enable it**
 
 Run: `loginctl enable-linger "$USER"`
 
-- [ ] **Step 3: Убедиться**
+- [ ] **Step 3: Make sure**
 
 Run: `loginctl show-user "$USER" | grep Linger`
 Expected: `Linger=yes`
 
-- [ ] **Step 4: Записать в `docs/running.md`**
+- [ ] **Step 4: Write it into `docs/running.md`**
 
-Почему это нужно: планшет обращается к демону из другой комнаты, и компьютер в это время может стоять на экране входа. Без `linger` пользовательский юнит не поднимется, а отказ будет выглядеть как «нет связи с демоном» — то же, что даёт обрыв на петле, так что перепутать легко. Там же проверить, что в `packaging/yt-trans.service` нет зависимости от графического сеанса (`WantedBy=default.target`).
+Why this is needed: the tablet accesses the daemon from another room, and the computer may be sitting at the login screen at that time. Without `linger` the user unit will not start, and the refusal will look like “no connection to the daemon” — the same thing a loopback break gives, so it is easy to confuse. There also check that `packaging/yt-trans.service` has no dependency on the graphical session (`WantedBy=default.target`).
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add docs/running.md packaging/yt-trans.service

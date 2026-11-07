@@ -1,7 +1,7 @@
-"""Всё, что мы берём у YouTube: метаданные, ручные дорожки субтитров, аудио.
+"""Everything we take from YouTube: metadata, manual subtitle tracks, audio.
 
-Один источник вместо самописного InnerTube-клиента: yt-dlp и так нужен ради аудио,
-а его сопровождают люди, которые следят за изменениями YouTube за нас.
+One source instead of a hand-written InnerTube client: yt-dlp is needed for audio anyway,
+and it's maintained by people who track YouTube's changes for us.
 """
 
 from __future__ import annotations
@@ -25,61 +25,61 @@ from helper.language import is_bcms
 
 SAMPLE_RATE = 16000
 
-# Аудио-only, от самого дешёвого к запасным. Сеть — узкое место, а не декодирование:
-# itag 249 (opus ~50k) примерно втрое меньше 140/251 при том же качестве речи.
-# `^=` обязателен: на роликах с несколькими дорожками id становятся 249-0, 251-3 и т.д.
+# Audio-only, from the cheapest to the spares. The network is the bottleneck, not decoding:
+# itag 249 (opus ~50k) is about three times smaller than 140/251 at the same speech quality.
+# `^=` is mandatory: on videos with several tracks the ids become 249-0, 251-3, etc.
 AUDIO_FORMAT = (
     "ba[format_id^=249][protocol=https]/"
     "ba[format_id^=250][protocol=https]/"
     "ba[protocol=https]/ba"
 )
 
-# Картинка и звук отдельными дорожками, потому что склеенных 1080p у YouTube нет.
-# Сначала mp4 с H.264 — он играет везде; при отсутствии берём любой H.264 (в контейнере
-# webm склейка всё равно уйдёт в mp4 при -c copy); в конце — что угодно, чтобы ролик
-# не пропадал из-за одного редкого кодека.
+# Picture and sound as separate tracks, because YouTube has no pre-muxed 1080p.
+# First mp4 with H.264 — it plays everywhere; failing that we take any H.264 (in a webm
+# container the merge will still go to mp4 with -c copy); at the end — anything, so the video
+# doesn't disappear because of one rare codec.
 VIDEO_FORMAT = (
     "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/"
     "bv*[vcodec^=avc1]+ba/"
     "b[ext=mp4]/b"
 )
 
-# Идентификатор ролика: ровно 11 символов. Проверять обязательно — идентификатор
-# приходит из расширения, а yt-dlp выкусывает первый похожий кусок из чего угодно
-# и молча возвращает результат для не того ролика.
+# Video identifier: exactly 11 characters. Checking is mandatory — the identifier
+# comes from the extension, and yt-dlp bites the first similar chunk out of anything
+# and silently returns the result for the wrong video.
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
-# Отказы делятся на три рода, и путать их дорого. Разбор идёт по тексту ошибки,
-# потому что другого yt-dlp наружу не отдаёт: код возврата у всех сбоев один.
-# Формулировки сверены с исходниками yt-dlp 2026.08.19, а не взяты по памяти;
-# фразы вроде «Video unavailable» и «Private video» — это текст самого YouTube,
-# который yt-dlp пробрасывает как есть.
+# Refusals fall into three kinds, and confusing them is costly. Parsing goes by the
+# error text, because yt-dlp gives out nothing else: the return code is the same for all failures.
+# The wordings were checked against the yt-dlp 2026.08.19 sources, not taken from memory;
+# phrases like "Video unavailable" and "Private video" are YouTube's own text,
+# which yt-dlp passes through as is.
 #
-# Ограничение частоты проверяется ПЕРВЫМ. YouTube отдаёт его как
-# «Video unavailable. This content isn't available, try again later», и по первым
-# словам это неотличимо от удалённого ролика, хотя проходит само за час.
-# Немедленно повторять такое нельзя: частые запросы его и вызвали, и каждый
-# следующий продлевает запрет. Но и навсегда отказ прилипать не должен —
-# поэтому он не временный и не окончательный, а третий случай.
+# Rate limiting is checked FIRST. YouTube gives it as
+# "Video unavailable. This content isn't available, try again later", and by the first
+# words it's indistinguishable from a removed video, although it passes by itself within an hour.
+# Retrying it immediately must not be done: frequent requests caused it, and every
+# next one extends the ban. But the refusal mustn't stick forever either —
+# so it's neither transient nor permanent, but a third case.
 THROTTLED = re.compile(
     r"HTTP Error 429|Too Many Requests|not a bot|rate-limited|try again later|captcha",
     re.IGNORECASE,
 )
 
-# Возрастное ограничение. Анонимно оно окончательное, но, в отличие от прочих,
-# снимается входом в аккаунт — поэтому отдельным выражением: по нему задание
-# решает, идти ли за роликом ещё раз с аккаунтом из настроек. «Sign in to
-# confirm you’re not a bot» сюда не относится: это проверка на бота, она
-# в THROTTLED, и аккаунт под неё подставлять нельзя.
+# Age restriction. Anonymously it's final, but, unlike the others,
+# it's lifted by signing in to an account — hence a separate expression: by it the job
+# decides whether to go for the video once more with the account from the settings. "Sign in to
+# confirm you're not a bot" doesn't belong here: it's a bot check, it's
+# in THROTTLED, and an account mustn't be substituted for it.
 AGE_RESTRICTED = re.compile(
     r"confirm your age|age-restricted|inappropriate for some users",
     re.IGNORECASE,
 )
 
-# Окончательные: ролика нет, он закрыт, платный, с возрастным ограничением,
-# недоступен из этой страны или ещё не вышел в эфир. Ничего из этого не пройдёт
-# само, сколько ни повторяй. Файл cookies, который yt-dlp не смог разобрать,
-# тоже: пока его не заменят, каждая попытка упадёт так же.
+# Permanent: the video is gone, closed, paid, age-restricted,
+# unavailable from this country or not yet aired. None of this will pass
+# by itself, however much you retry. A cookies file that yt-dlp couldn't parse,
+# too: until it's replaced, every attempt will fail the same way.
 PERMANENT = re.compile(
     r"Video unavailable|This video is (?:unavailable|not available|private)|Private video"
     r"|has been removed|no longer available|account .{0,80}terminated"
@@ -92,23 +92,23 @@ PERMANENT = re.compile(
     re.IGNORECASE,
 )
 
-# Временные: сеть моргнула или googlevideo отказал именно этой ссылке. Такое
-# стоит повторить сразу, со свежим извлечением.
+# Transient: the network blinked or googlevideo refused exactly this link. It's
+# worth retrying at once, with a fresh extraction.
 #
-# 403 здесь сознательно. Без cookies и PO-токена yt-dlp качает только через
-# visionos, и googlevideo изредка отвечает 403 на только что выданную ссылку —
-# следующая ссылка при этом качается. Сам yt-dlp 4xx не повторяет никогда.
-# Ошибки сети yt-dlp называет по-разному в зависимости от места: «Connection
-# aborted», «Read timed out», «Failed to resolve», «N bytes read, M more
-# expected», а у экстрактора — «Unable to download webpage: … (caused by
-# TransportError(…))». Все сетевые сбои запросов к API плеера он превращает
-# в предупреждения, и наружу выходит одно «Failed to extract any player response».
+# 403 here is deliberate. Without cookies and a PO token yt-dlp downloads only via
+# visionos, and googlevideo occasionally answers 403 to a just-issued link —
+# the next link meanwhile downloads. yt-dlp itself never retries 4xx.
+# yt-dlp names network errors differently depending on the place: "Connection
+# aborted", "Read timed out", "Failed to resolve", "N bytes read, M more
+# expected", and for the extractor — "Unable to download webpage: … (caused by
+# TransportError(…))". All network failures of requests to the player API it turns
+# into warnings, and what comes out is a single "Failed to extract any player response".
 #
-# Посреди загрузки звука, исчерпав свои повторы, загрузчик пишет причину без
-# всякой обёртки: голый текст TLS («[SSL: UNEXPECTED_EOF_WHILE_READING] EOF
-# occurred in violation of protocol»), «Connection broken: …» от urllib3,
-# а тело, закрытое чисто, но короче обещанного, — «Downloaded N bytes, expected
-# M bytes». Совсем пустое тело — «Did not get any data blocks».
+# In the middle of downloading audio, having exhausted its retries, the downloader writes the reason without
+# any wrapper: bare TLS text ("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF
+# occurred in violation of protocol"), "Connection broken: …" from urllib3,
+# and a body closed cleanly but shorter than promised — "Downloaded N bytes, expected
+# M bytes". A completely empty body — "Did not get any data blocks".
 TRANSIENT = re.compile(
     r"HTTP Error (?:403|5\d\d)"
     r"|Connection (?:reset|refused|aborted)|Connection(?:Reset|Refused|Aborted)Error"
@@ -124,25 +124,25 @@ TRANSIENT = re.compile(
     re.IGNORECASE,
 )
 
-# Подписанная ссылка на поток. Целиком она в журнал не попадает никогда: пока
-# не истекла, по ней скачивается ролик от нашего имени и с нашего адреса.
+# A signed stream link. It never goes into the log whole: while it hasn't
+# expired, the video is downloaded through it in our name and from our address.
 MEDIA_URL = re.compile(r"https?://[^\s\"']*googlevideo\.com/[^\s\"']*")
 
-# Сколько вывода yt-dlp держать для разбора сбоя. С -v он пишет много, а нужно
-# немного: строки ERROR и WARNING и то, что шло прямо перед отказом.
+# How much of yt-dlp's output to keep for parsing a failure. With -v it writes a lot, and
+# little is needed: ERROR and WARNING lines and what went right before the refusal.
 TRACE_LINES = 20
 TRACE_TAIL = 12
 
 
 class YtDlpError(RuntimeError):
-    """yt-dlp не смог отдать то, что просили.
+    """yt-dlp couldn't give what was asked.
 
-    transient — сбой, который стоит повторить сразу же, в том же задании.
-    permanent — отказ, который сам не пройдёт, и повторять его бессмысленно
-    ни сейчас, ни через минуту. Оба False — ни то ни другое: например,
-    ограничение частоты, которое сразу повторять вредно, а позже можно.
-    age_restricted — ролик 18+: анонимно окончательно, с аккаунтом может пройти.
-    diagnostics — подробности для журнала, не для зрителя.
+    transient — a failure worth retrying right away, in the same job.
+    permanent — a refusal that won't pass by itself, and retrying it is pointless
+    neither now nor in a minute. Both False — neither: for example
+    rate limiting, which is harmful to retry at once but possible later.
+    age_restricted — an 18+ video: anonymously final, with an account it may pass.
+    diagnostics — details for the log, not for the viewer.
     """
 
     def __init__(
@@ -162,26 +162,26 @@ class YtDlpError(RuntimeError):
 
 
 def _failure(message: str, detail: str, diagnostics: str = "") -> YtDlpError:
-    """Отказ yt-dlp с родом, определённым по тексту его ошибки."""
+    """A yt-dlp refusal with the kind determined by the text of its error."""
     transient, permanent = _classify(detail)
 
     return YtDlpError(
         message,
         transient=transient,
         permanent=permanent,
-        # Только среди окончательных: ограничение частоты разбирается первым,
-        # и подставлять под него аккаунт нельзя, даже если в тексте нашлось бы и то и другое.
+        # Among the permanent only: rate limiting is parsed first,
+        # and an account mustn't be substituted for it, even if both were found in the text.
         age_restricted=permanent and bool(AGE_RESTRICTED.search(detail)),
         diagnostics=diagnostics,
     )
 
 
 def _classify(detail: str) -> tuple[bool, bool]:
-    """(временный, окончательный) по тексту ошибки yt-dlp.
+    """(transient, permanent) by the text of the yt-dlp error.
 
-    Разбирать надо только строки ERROR. Предупреждения говорят о другом:
-    «This video is age-restricted; some formats may be missing» печатается
-    и тогда, когда звук потом прекрасно скачивается.
+    Only ERROR lines must be parsed. Warnings say something else:
+    "This video is age-restricted; some formats may be missing" is printed
+    also when the audio then downloads perfectly.
     """
     if THROTTLED.search(detail):
         return False, False
@@ -225,14 +225,14 @@ def _ytdlp_cmd(
     cookies: Path | None = None,
     playlist: bool = False,
 ) -> list[str]:
-    """Вызов yt-dlp. cookies — аккаунт, и только для роликов 18+: всё прочее анонимно.
+    """A yt-dlp call. cookies — the account, and only for 18+ videos: everything else anonymously.
 
-    Аккаунт, которым ходит yt-dlp, YouTube может забанить, поэтому он отдельный,
-    а не зрителя, и подставляется лишь туда, где без него никак. yt-dlp при выходе
-    дописывает в файл обновлённые cookies — так сессия и живёт дольше.
+    YouTube may ban the account yt-dlp goes through, so it's separate,
+    not the viewer's, and is substituted only where it's impossible without it. On exit yt-dlp
+    appends the updated cookies to the file — that's how the session lives longer.
 
-    playlist=True — только для страницы ссылок, где человек даёт адрес списка
-    воспроизведения целиком. Всё остальное по-прежнему берёт один ролик.
+    playlist=True — only for the links page, where a person gives the whole playlist address.
+    Everything else still takes a single video.
     """
     YTDLP_CACHE.mkdir(parents=True, exist_ok=True)
 
@@ -240,17 +240,17 @@ def _ytdlp_cmd(
         sys.executable,
         "-m",
         "yt_dlp",
-        # Предупреждения нужны только загрузке звука, где по ним разбирают сбой.
-        # Метаданным и дорожкам они лишь засоряют текст ошибки, который целиком
-        # уходит в сообщение зрителю.
+        # Warnings are needed only for audio download, where a failure is parsed by them.
+        # For metadata and tracks they only clutter the error text, which goes
+        # entirely into the viewer's message.
         *([] if warnings else ["--no-warnings"]),
         *(["--yes-playlist"] if playlist else ["--no-playlist"]),
-        # Deno на этой машине нет, а без JS-рантайма клиент `web` молча выпадает
-        # из дефолтов и извлечение деградирует до одного visionos.
+        # Deno isn't on this machine, and without a JS runtime the `web` client silently drops
+        # out of the defaults and extraction degrades to visionos alone.
         "--js-runtimes",
         "node",
-        # Держит player JS и решённый nsig между вызовами — без этого каждый
-        # запуск платит 1.5–4 с холодного извлечения.
+        # Keeps the player JS and the solved nsig between calls — without this every
+        # run pays 1.5–4 s of cold extraction.
         "--cache-dir",
         str(YTDLP_CACHE),
         *(["--cookies", str(cookies)] if cookies else []),
@@ -260,7 +260,7 @@ def _ytdlp_cmd(
 
 def _check_id(video_id: str) -> str:
     if not VIDEO_ID.match(video_id):
-        raise YtDlpError(f"неправильный идентификатор ролика: {video_id!r}", permanent=True)
+        raise YtDlpError(f"invalid video identifier: {video_id!r}", permanent=True)
 
     return video_id
 
@@ -269,10 +269,10 @@ def _run(cmd: list[str], timeout: float) -> str:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        # Своим типом, а не TimeoutExpired: конвейер ловит YtDlpError, и дорожка
-        # автора, не скачавшаяся за отведённое время, должна уводить в распознавание,
-        # а не ронять задание. Процесс subprocess.run к этому моменту уже убил.
-        raise YtDlpError(f"yt-dlp не уложился в {timeout} с") from None
+        # With our own type, not TimeoutExpired: the pipeline catches YtDlpError, and the author's
+        # track that didn't download within the allotted time must lead into recognition,
+        # not crash the job. subprocess.run has already killed the process by this point.
+        raise YtDlpError(f"yt-dlp didn't finish within {timeout} s") from None
 
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip() or "yt-dlp failed"
@@ -300,14 +300,14 @@ def _caption_tracks(raw: dict, key: str) -> list[CaptionTrack]:
 
 
 def probe(video_id: str, timeout: float = 90.0, *, cookies: Path | None = None) -> VideoInfo:
-    """Метаданные ролика одним вызовом: дорожки, заголовок, описание, теги, главы.
+    """The video's metadata in one call: tracks, title, description, tags, chapters.
 
-    `skip=translated_subs` оставлен как страховка от смены версии yt-dlp, а не ради
-    скорости: в 2026.08.19 машинные переводы дорожек строятся, только когда просят
-    автосубтитры (--write-auto-subs или --list-subs), и ложатся в automatic_captions,
-    а не в subtitles, так что ни на этот вызов, ни на fetch_manual_track флаг не
-    влияет. Перевод, который автор загрузил сам, — обычная ручная дорожка, и флаг его
-    не отсекает: от оригинала её отличает только язык речи (см. usable_manual_track).
+    `skip=translated_subs` is kept as insurance against a yt-dlp version change, not for
+    speed: in 2026.08.19 machine translations of tracks are built only when automatic subtitles
+    are requested (--write-auto-subs or --list-subs), and land in automatic_captions,
+    not in subtitles, so the flag affects neither this call nor fetch_manual_track.
+    A translation the author uploaded themselves is an ordinary manual track, and the flag doesn't
+    screen it out: only the speech language distinguishes it from the original (see usable_manual_track).
     """
     out = _run(
         _ytdlp_cmd(
@@ -340,28 +340,28 @@ def probe(video_id: str, timeout: float = 90.0, *, cookies: Path | None = None) 
 
 
 def usable_manual_track(info: VideoInfo, pin: str | None = None) -> CaptionTrack | None:
-    """Ручная дорожка сербского семейства, если она есть и хозяин её не отменил.
+    """A manual track of the Serbian family, if it exists and the owner hasn't cancelled it.
 
-    Годится только ручная дорожка сербского семейства в любой записи метки: sr,
-    sr-Latn, sr-Cyrl, SR, sh, cnr, hr, bs. Сверяется семья через is_bcms, а не строка:
-    точное сравнение не узнавало ни cnr, ни sr_Latn. live_chat (чат повтора эфира)
-    и метки, которых нет среди кодов Whisper, не годятся никогда.
+    Only a manual track of the Serbian family is suitable, in any spelling of the label: sr,
+    sr-Latn, sr-Cyrl, SR, sh, cnr, hr, bs. The family is checked via is_bcms, not the string:
+    an exact comparison recognized neither cnr nor sr_Latn. live_chat (a replay chat)
+    and labels not among Whisper codes are never suitable.
 
-    Других языков здесь нет намеренно: метку надо сверять с речью, а определителя
-    без карты нет — на диске только large-v3 и turbo, — и зонд на карте отнял бы
-    у дорожки автора её смысл. Без сверки английская дорожка забрала бы ролик, где
-    YouTube назвал сербскую речь английской (Juske).
+    There are deliberately no other languages here: the label must be checked against the speech, and there's
+    no detector without the card — only large-v3 and turbo are on disk — and a probe on the card would take
+    away the author's track's meaning. Without the check an English track would take a video where
+    YouTube called Serbian speech English (Juske).
 
-    pin — закрепление хозяина ([asr] language). Вне сербского семейства оно значит
-    «речь не сербская», и сербская дорожка у такого ролика — перевод, а не оригинал.
-    Метаданные YouTube (audio_language) в выборе не участвуют: именно они однажды
-    и соврали.
+    pin — the owner's pin ([asr] language). Outside the Serbian family it means
+    "the speech isn't Serbian", and a Serbian track on such a video is a translation, not the original.
+    YouTube metadata (audio_language) doesn't participate in the choice: it was exactly what once
+    lied.
 
-    Прежний довод остаётся: македонский, болгарский, словацкий и русский —
-    акустические соседи сербского, и наличие дорожки не равно её пригодности.
+    The previous argument remains: Macedonian, Bulgarian, Slovak and Russian —
+    acoustic neighbours of Serbian, and the presence of a track doesn't equal its suitability.
 
-    automatic_captions сюда не попадают по построению: probe кладёт в manual_tracks
-    только ключ subtitles.
+    automatic_captions doesn't get here by construction: probe puts into manual_tracks
+    only the subtitles key.
     """
     if pin is not None and not is_bcms(pin):
         return None
@@ -373,9 +373,9 @@ def usable_manual_track(info: VideoInfo, pin: str | None = None) -> CaptionTrack
     return None
 
 
-# Условности вещательных субтитров, которые YouTube пропускает в дорожки:
-# >> смена говорящего, >>> смена темы, [Music] и подобные пометки. В переводчик
-# они попадать не должны — модель начнёт их переводить.
+# Broadcast subtitle conventions that YouTube lets into tracks:
+# >> speaker change, >>> topic change, [Music] and similar marks. They mustn't
+# get into the translator — the model will start translating them.
 SPEAKER_MARKER = re.compile(r"(^|\s)>{2,}\s*")
 SOUND_MARKER = re.compile(r"\[[^\]]{1,30}\]")
 
@@ -383,12 +383,12 @@ SOUND_MARKER = re.compile(r"\[[^\]]{1,30}\]")
 def fetch_manual_track(
     video_id: str, lang: str, timeout: float = 120.0, *, cookies: Path | None = None
 ) -> list[dict]:
-    """Скачать авторскую дорожку субтитров и разобрать в реплики.
+    """Download the author's subtitle track and parse it into utterances.
 
-    Качаем через сам yt-dlp, а не прямым запросом по baseUrl: у ссылки со страницы
-    стоит POT-гейт, и запрос возвращает HTTP 200 с ПУСТЫМ телом — не 403, не 401.
-    Проверка `response.ok` на таком ответе проходит, и наружу уходят пустые субтитры.
-    yt-dlp разбирается с клиентами и токенами сам, а мы его и так вызываем ради аудио.
+    We download via yt-dlp itself, not by a direct request to baseUrl: the link from the page
+    has a POT gate, and the request returns HTTP 200 with an EMPTY body — not 403, not 401.
+    The `response.ok` check on such a response passes, and empty subtitles go out.
+    yt-dlp deals with clients and tokens itself, and we call it for audio anyway.
     """
     import tempfile
 
@@ -414,26 +414,26 @@ def fetch_manual_track(
         files = list(Path(tmp).glob("*.json3")) or list(Path(tmp).glob("*.json"))
 
         if not files:
-            raise YtDlpError(f"дорожка {lang} не скачалась для {video_id}")
+            raise YtDlpError(f"track {lang} didn't download for {video_id}")
 
         raw = files[0].read_text(encoding="utf-8")
 
-    # Пустое тело — подпись POT-гейта. Проверять обязательно: без этого дальше
-    # по конвейеру уходит дорожка из нуля реплик, и выглядит это как «у ролика
-    # просто нет субтитров», а не как отказ.
+    # An empty body — the signature of the POT gate. Checking is mandatory: without it further
+    # down the pipeline goes a track of zero utterances, and it looks like "the video
+    # simply has no subtitles", not like a refusal.
     if not raw.strip():
-        raise YtDlpError(f"дорожка {lang} пришла пустой (POT-гейт?)")
+        raise YtDlpError(f"track {lang} came back empty (POT gate?)")
 
     cues = _parse_json3(raw)
 
     if not cues:
-        raise YtDlpError(f"в дорожке {lang} не нашлось ни одной реплики")
+        raise YtDlpError(f"not a single utterance was found in track {lang}")
 
     return cues
 
 
 def _parse_json3(raw: str) -> list[dict]:
-    """Разобрать json3 в реплики вида {start, end, text}."""
+    """Parse json3 into utterances of the form {start, end, text}."""
     events = json.loads(raw).get("events") or []
     cues: list[dict] = []
 
@@ -452,16 +452,16 @@ def _parse_json3(raw: str) -> list[dict]:
                 "start": start,
                 "end": start + (event.get("dDurationMs") or 0) / 1000,
                 "text": text,
-                # Пословных таймингов на этом пути не бывает: замерено, что
-                # tOffsetMs в выдаче отсутствует. Границы реплик авторские,
-                # и пересобирать их не нужно.
+                # There are no word timings on this path: it's been measured that
+                # tOffsetMs is absent from the output. The utterance boundaries are the author's,
+                # and there's no need to rebuild them.
                 "words": [],
             }
         )
 
-    # Реплики автосубтитров перекрываются по устройству — окно распознавания
-    # скользит. У авторских так бывает реже, но проверять дешевле, чем потом
-    # рисовать две реплики одновременно.
+    # Automatic subtitle utterances overlap by design — the recognition window
+    # slides. With author ones it happens less often, but checking is cheaper than later
+    # drawing two utterances simultaneously.
     for previous, current in zip(cues, cues[1:]):
         previous["end"] = min(previous["end"], current["start"])
 
@@ -472,11 +472,11 @@ _VIDEO_IN_PATH = {"shorts", "embed", "live", "v"}
 
 
 def video_id_in(url: str) -> str:
-    """id ролика из адреса YouTube — без похода в сеть.
+    """The video id from a YouTube address — without a network trip.
 
-    Списку ссылок готовность картинки нужна сразу, а она считается по id:
-    у ссылки на ролик он уже есть в самом адресе, и ждать yt-dlp незачем.
-    Пустая строка — адрес не про один ролик (плейлист, чужой хост, мусор).
+    The links list needs picture readiness at once, and it's computed by id:
+    for a video link it's already in the address itself, and there's no need to wait for yt-dlp.
+    An empty string — the address isn't about one video (playlist, foreign host, garbage).
     """
     try:
         parts = urlsplit(url)
@@ -503,11 +503,11 @@ def video_id_in(url: str) -> str:
 
 
 def _media_summary(url: str) -> str:
-    """Что из подписанной ссылки нужно для разбора отказа — без самой подписи.
+    """What's needed from the signed link for parsing a failure — without the signature itself.
 
-    Клиент (c=) показывает, через кого yt-dlp получил ссылку, ip= — с какого
-    адреса она выдана, pot= — был ли PO-токен. Именно по этим трём и отличают
-    отказ googlevideo конкретной ссылке от блокировки адреса или клиента.
+    The client (c=) shows through whom yt-dlp got the link, ip= — from which
+    address it was issued, pot= — whether there was a PO token. It's exactly by these three that one
+    distinguishes a googlevideo refusal to a specific link from a block of the address or the client.
     """
     parts = urlsplit(url)
     query = parse_qs(parts.query)
@@ -518,23 +518,23 @@ def _media_summary(url: str) -> str:
 
     return (
         f"googlevideo host={parts.hostname} c={first('c')} itag={first('itag')} "
-        f"ip={first('ip')} pot={'да' if pot else 'нет'}"
+        f"ip={first('ip')} pot={'yes' if pot else 'no'}"
     )
 
 
 class _Trace:
-    """stderr yt-dlp, прочитанный параллельно с загрузкой.
+    """yt-dlp's stderr, read in parallel with the download.
 
-    Читать его обязательно отдельным потоком и сразу. С -v yt-dlp пишет в stderr
-    много, и если никто не читает, он упирается в буфер канала и встаёт посреди
-    загрузки: ffmpeg ждёт данных от yt-dlp, yt-dlp ждёт, пока освободится stderr,
-    а мы ждём ffmpeg — все девятьсот секунд таймаута.
+    Reading it in a separate thread and at once is mandatory. With -v yt-dlp writes a lot
+    to stderr, and if nobody reads, it hits the pipe buffer and stalls in the middle of the
+    download: ffmpeg waits for data from yt-dlp, yt-dlp waits for stderr to free up,
+    and we wait for ffmpeg — all nine hundred seconds of the timeout.
 
-    Хранится только ограниченное: строки ERROR и WARNING, сводка по ссылке
-    и короткий хвост. Хвост обрывается на первой ERROR: с -v за ней идёт
-    трассировка Python, и она вытеснила бы из хвоста всё, что было перед
-    отказом, — а нужно именно это. Если же yt-dlp упал, не успев напечатать
-    ERROR, в хвосте останется сама трассировка, и это тоже то, что нужно.
+    Only a limited amount is kept: ERROR and WARNING lines, the summary by the link
+    and a short tail. The tail is cut at the first ERROR: with -v a Python traceback
+    follows it, and it would push out of the tail everything that was before
+    the refusal — and that's exactly what's needed. If yt-dlp crashed without managing to print
+    ERROR, the traceback itself remains in the tail, and that's also what's needed.
     """
 
     def __init__(self, stream) -> None:
@@ -548,9 +548,9 @@ class _Trace:
     def _drain(self, stream) -> None:
         with stream:
             for raw in stream:
-                # \r убирается, а не считается переводом строки: исчерпав свои
-                # повторы, yt-dlp печатает «ERROR: \r[download] Got error: …»,
-                # и разрезанная пополам строка потеряла бы свой ERROR.
+                # \r is removed, not treated as a line break: having exhausted its
+                # retries, yt-dlp prints "ERROR: \r[download] Got error: …",
+                # and a line split in half would lose its ERROR.
                 line = raw.decode(errors="replace").replace("\r", "").rstrip()
 
                 if not line:
@@ -573,45 +573,45 @@ class _Trace:
                     self.warnings.append(line)
 
     def join(self, timeout: float = 10.0) -> None:
-        # С ограничением: stderr может держать открытым внук yt-dlp, и тогда
-        # EOF не придёт, пока жив он. Потерять хвост лучше, чем повиснуть.
+        # With a limit: yt-dlp's grandchild may hold stderr open, and then
+        # EOF won't come while it's alive. Losing the tail is better than hanging.
         self._thread.join(timeout)
 
     def diagnostics(self) -> str:
-        lines = [self.media or "googlevideo: ссылка не выдавалась", *self.warnings]
+        lines = [self.media or "googlevideo: no link was issued", *self.warnings]
 
         if self.tail:
-            lines += ["последние строки:", *(f"  {line}" for line in self.tail)]
+            lines += ["last lines:", *(f"  {line}" for line in self.tail)]
 
         return "\n".join(lines)
 
 
 def audio_pcm(video_id: str, timeout: float = 900.0, *, cookies: Path | None = None) -> np.ndarray:
-    """Аудиодорожка ролика как float32 mono 16 кГц, без промежуточных файлов.
+    """The video's audio track as float32 mono 16 kHz, without intermediate files.
 
-    Пайп `yt-dlp -o - | ffmpeg` намеренно выбран вместо передачи прямого URL в ffmpeg:
-    yt-dlp сам режет загрузку на куски по 10 МиБ, и это его антитроттлинг. Один длинный
-    GET по прямому URL YouTube придушивает до скорости воспроизведения.
+    The `yt-dlp -o - | ffmpeg` pipe is deliberately chosen over passing a direct URL to ffmpeg:
+    yt-dlp itself cuts the download into 10 MiB chunks, and that's its anti-throttling. One long
+    GET by a direct YouTube URL gets throttled to playback speed.
     """
     ydl = subprocess.Popen(
         _ytdlp_cmd(
             "-f",
             AUDIO_FORMAT,
-            # Сортировка обязана начинаться с lang, иначе на роликах с автодубляжом
-            # выберется самая маленькая дорожка — то есть чужой язык.
+            # The sorting must start with lang, otherwise on videos with auto-dubbing
+            # the smallest track will be chosen — i.e. a foreign language.
             "-S",
             "lang,+size",
             "--no-part",
             "--no-progress",
-            # -v и предупреждения ради разбора отказов: без них от 403 googlevideo
-            # остаётся одна строка и ни слова о том, какой клиент выдал ссылку,
-            # с какого адреса и был ли у неё PO-токен. Потоку это не вредит —
-            # при -o - всё служебное yt-dlp пишет в stderr, stdout остаётся звуком.
+            # -v and warnings for parsing refusals: without them, of a googlevideo 403
+            # there remains one line and not a word about which client issued the link,
+            # from which address and whether it had a PO token. It doesn't hurt the stream —
+            # with -o - everything service-related yt-dlp writes to stderr, stdout remains audio.
             "-v",
-            # Вдвое короче умолчания в 20 с. Загрузка идёт под пропуском на карту,
-            # одним на весь демон, и мёртвое соединение, которое yt-dlp до десяти
-            # раз ждёт по таймауту, держало бы чужие фазы минутами. Живой
-            # googlevideo отвечает за доли секунды, так что запас остаётся большой.
+            # Twice shorter than the default 20 s. The download goes under the pass to the card,
+            # one for the whole daemon, and a dead connection that yt-dlp waits for up to ten
+            # times by timeout would hold other phases for minutes. A live
+            # googlevideo answers in fractions of a second, so the headroom remains large.
             "--socket-timeout",
             "10",
             "-o",
@@ -650,7 +650,7 @@ def audio_pcm(video_id: str, timeout: float = 900.0, *, cookies: Path | None = N
         stderr=subprocess.PIPE,
     )
 
-    # Иначе ffmpeg не получит EOF, когда yt-dlp закончит.
+    # Otherwise ffmpeg won't get EOF when yt-dlp finishes.
     ydl.stdout.close()
 
     try:
@@ -660,32 +660,32 @@ def audio_pcm(video_id: str, timeout: float = 900.0, *, cookies: Path | None = N
         ff.kill()
         trace.join()
 
-        # Не временный: повторять сразу пятнадцать минут ожидания незачем.
-        # Задание при этом остаётся повторяемым — следующая попытка через минуту.
+        # Not transient: there's no point retrying fifteen minutes of waiting at once.
+        # The job meanwhile remains retryable — the next attempt in a minute.
         raise YtDlpError(
-            f"загрузка аудио {video_id} не уложилась в {timeout} с",
+            f"audio download {video_id} didn't finish within {timeout} s",
             diagnostics=trace.diagnostics(),
         ) from None
 
     ydl_code = ydl.wait()
     trace.join()
 
-    # Код возврата yt-dlp проверять обязательно. При обрыве посреди загрузки
-    # (403 на протухшем URL, исчерпанные повторы, потеря сети) он просто закрывает
-    # stdout — ffmpeg видит чистый EOF, отдаёт уже раскодированное и выходит с нулём.
-    # Без этой проверки обрезанное аудио неотличимо от целого: оно распознаётся,
-    # переводится и уходит в кэш под полную длительность ролика.
+    # Checking yt-dlp's return code is mandatory. On a break in the middle of the download
+    # (403 on an expired URL, exhausted retries, network loss) it simply closes
+    # stdout — ffmpeg sees a clean EOF, outputs what was already decoded and exits with zero.
+    # Without this check the truncated audio is indistinguishable from the whole: it's recognized,
+    # translated and goes into the cache under the video's full duration.
     if ydl_code != 0 or ff.returncode != 0 or not pcm_bytes:
-        # Зрителю — только строки ERROR: остальной вывод -v это сотни строк
-        # отладки, и в сообщении под роликом ему не место. Он идёт в журнал.
+        # To the viewer — only ERROR lines: the rest of the -v output is hundreds of lines
+        # of debugging, and it has no place in the message under the video. It goes to the log.
         detail = (
             "\n".join(trace.errors)
             or ff_err.decode(errors="replace").strip()
-            or f"yt-dlp вышел с кодом {ydl_code}, ffmpeg с кодом {ff.returncode}"
+            or f"yt-dlp exited with code {ydl_code}, ffmpeg with code {ff.returncode}"
         )
 
         raise _failure(
-            f"не удалось получить аудио {video_id}: {detail}",
+            f"failed to get audio {video_id}: {detail}",
             detail,
             trace.diagnostics(),
         )
@@ -696,11 +696,11 @@ def audio_pcm(video_id: str, timeout: float = 900.0, *, cookies: Path | None = N
 def fetch_video(
     video_id: str, target: Path, timeout: float = 1800.0, *, cookies: Path | None = None
 ) -> Path:
-    """Скачать ролик и склеить в mp4 без перекодирования. Возвращает путь к файлу.
+    """Download the video and merge into mp4 without re-encoding. Returns the path to the file.
 
-    Временный каталог создаётся рядом с целью, а не в /tmp: os.replace атомарен
-    только внутри одной файловой системы. Готовый файл появляется под своим именем
-    целиком — недокачанного mp4 под именем, которое отдают зрителю, не бывает.
+    The temporary directory is created next to the target, not in /tmp: os.replace is atomic
+    only within one filesystem. The finished file appears under its name
+    whole — there's never a partially downloaded mp4 under the name served to the viewer.
     """
     _check_id(video_id)
 
@@ -712,15 +712,15 @@ def fetch_video(
             _ytdlp_cmd(
                 "-f",
                 VIDEO_FORMAT,
-                # Первым делом потолок разрешения, затем родной язык звука и лишь
-                # потом размер: -S lang обязана идти раньше +size, иначе на ролике
-                # с автодубляжом возьмётся самая маленькая дорожка — то есть чужая.
+                # First the resolution cap, then the native audio language and only
+                # then the size: -S lang must go before +size, otherwise on a video
+                # with auto-dubbing the smallest track will be taken — i.e. a foreign one.
                 "-S",
                 "res:1080,lang,+size",
                 "--merge-output-format",
                 "mp4",
-                # Без faststart индекс лежит в конце файла, и браузер ждёт полной
-                # загрузки, прежде чем показать первый кадр и дать перемотать.
+                # Without faststart the index lies at the end of the file, and the browser waits
+                # for the full download before showing the first frame and allowing a seek.
                 "--postprocessor-args",
                 "Merger+ffmpeg:-movflags +faststart",
                 "--no-progress",
@@ -735,7 +735,7 @@ def fetch_video(
         produced = Path(work) / "video.mp4"
 
         if not produced.exists():
-            raise YtDlpError("yt-dlp не оставил склеенного файла", permanent=True)
+            raise YtDlpError("yt-dlp left no merged file", permanent=True)
 
         os.replace(produced, target)
 
@@ -743,10 +743,10 @@ def fetch_video(
 
 
 def probe_url(url: str, timeout: float = 60.0, *, cookies: Path | None = None) -> dict:
-    """Что лежит по ссылке: один ролик или плейлист, плоским списком без захода в каждый.
+    """What lies at the link: a single video or a playlist, as a flat list without entering each.
 
-    --flat-playlist берёт только то, что YouTube отдал в самом ответе: для списка
-    воспроизведения это пачка id и названий, один запрос вместо сотни.
+    --flat-playlist takes only what YouTube gave in the response itself: for a playlist
+    it's a pack of ids and titles, one request instead of a hundred.
     """
     raw = json.loads(
         _run(

@@ -1,14 +1,14 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d0d0f">
-<title>yt-trans — субтитры на планшете</title>
-<!-- Манифест делает страницу устанавливаемым приложением: имя, экран запуска,
-     иконки и share_target — то, по чему Android открывает нас из «Поделиться».
-     В share-диалог пускают только установленные приложения, поэтому одной
-     ссылки в манифесте мало — страницу надо поставить на главный экран. -->
+<title>yt-trans — subtitles on the tablet</title>
+<!-- The manifest makes the page an installable app: a name, a launch screen,
+     icons and a share_target — what Android opens us from "Share" by. Only
+     installed apps are allowed into the share dialog, so a link in the
+     manifest is not enough — the page must be added to the home screen. -->
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/icon-192.png">
@@ -21,63 +21,67 @@
   <section id="home">
     <form id="link-form">
       <input id="link-url" type="url" inputmode="url" autocomplete="off"
-        placeholder="Ссылка на ролик или плейлист YouTube">
-      <button type="submit">Добавить</button>
+        placeholder="Link to a YouTube video or playlist">
+      <button type="submit">Add</button>
     </form>
 
-    <!-- Поиск по сохранённым: список растёт, и найти в нём нужный ролик
-         прокруткой со временем становится дольше, чем набрать пару букв.
-         Пока ссылок нет, поле спрятано. -->
+    <!-- Search across saved ones: the list grows, and finding the right video
+         by scrolling eventually takes longer than typing a couple of letters.
+         While there are no links, the field is hidden. -->
     <input id="links-filter" type="search" autocomplete="off" hidden
-      placeholder="Поиск по названию">
+      placeholder="Search by title">
 
-    <!-- Прокручивается только эта часть: поле ссылки и поиск выше остаются
-         на экране, сколько бы ссылок ни накопилось. -->
+    <!-- Only this part scrolls: the link field and search above stay on
+         screen no matter how many links accumulate. -->
     <div id="library">
       <ul id="links"></ul>
     </div>
   </section>
 
   <section id="stage" hidden>
-    <!-- controls обязательны: браузер не даёт запустить звук вне нажатия, и
-         автозапуск после ответа демона отклоняется молча. Со своими кнопками
-         зритель в любом случае может начать, встать на паузу и перемотать.
-         controlslist убирает родную кнопку «во весь экран»: она разворачивает
-         только ролик, а строки — соседний слой, и в этом режиме их не видно.
-         Вместо неё — своя кнопка, которая разворачивает всю сцену. -->
+    <!-- controls are mandatory: the browser does not allow starting sound
+         outside a press, and autoplay after the daemon's answer is rejected
+         silently. With its own buttons the viewer can in any case start,
+         pause and seek. controlslist removes the native "fullscreen" button:
+         it expands only the video, while the lines are a neighbouring layer,
+         and in that mode they are not visible. Instead there is our own
+         button, which expands the whole stage. -->
     <video id="video" controls controlslist="nofullscreen" playsinline preload="metadata"></video>
     <div id="overlay"></div>
-    <!-- Выключатели строк: планшет смотрят и без русского перевода, когда
-         важнее черногорский текст, и без черногорского — когда нужен только
-         перевод. Рядом — размер строк: с другого конца комнаты обычный мелковат,
-         а вплотную к экрану крупный мешает. -->
+    <!-- Line switches: the tablet is watched also without the Russian
+         translation, when the Montenegrin text matters more, and without the
+         Montenegrin one — when only the translation is needed. Next to them —
+         the line size: from the far end of the room the usual one is a bit
+         small, and up close to the screen the large one gets in the way. -->
     <div id="lines">
       <button id="toggle-target" type="button" aria-pressed="true"
-        aria-label="русский перевод" title="русский перевод">RU</button>
+        aria-label="Russian translation" title="Russian translation">RU</button>
       <button id="toggle-study" type="button" aria-pressed="true"
-        aria-label="черногорская строка" title="черногорская строка">CNR</button>
-      <select id="font-size" aria-label="размер субтитров" title="размер субтитров">
-        <option value="tiny">очень мелкий</option>
-        <option value="small">мелкий</option>
-        <option value="normal" selected>обычный</option>
-        <option value="large">крупный</option>
+        aria-label="Montenegrin line" title="Montenegrin line">CNR</button>
+      <select id="font-size" aria-label="subtitle size" title="subtitle size">
+        <option value="tiny">very small</option>
+        <option value="small">small</option>
+        <option value="normal" selected>normal</option>
+        <option value="large">large</option>
       </select>
     </div>
-    <!-- Слева сверху: возврат к списку, ⛶ и кеш. Все три — про весь кадр, а не
-         про строки, которые идут справа. Стрелка первая: уход со сцены — самое
-         частое действие, а браузерной кнопки «назад» на планшете не найти.
-         «Кеш» по умолчанию выключен: без нажатия на устройстве не оседает
-         ничего. Иконки рисует app.js — страница не тянет их из сети.
-         Статус и название стоят в этой же полосе, а не поверх кадра: там
-         они спорили с субтитрами. Название — посередине, одной строкой. -->
+    <!-- Top left: return to the list, ⛶ and cache. All three are about the
+         whole frame, not about the lines that go on the right. The arrow comes
+         first: leaving the stage is the most frequent action, and the browser's
+         "back" button is not to be found on a tablet. "Cache" is off by
+         default: without a press nothing settles on the device. The icons are
+         drawn by app.js — the page does not pull them from the network.
+         The status and the title stand in this same bar rather than over the
+         frame: there they argued with the subtitles. The title is in the
+         middle, on one line. -->
     <div id="stage-bar">
-      <button id="back" type="button" aria-label="к списку" title="к списку"
+      <button id="back" type="button" aria-label="to the list" title="to the list"
         data-icon="back"></button>
-      <button id="fullscreen" type="button" aria-label="во весь экран"
-        title="во весь экран">⛶</button>
+      <button id="fullscreen" type="button" aria-label="fullscreen"
+        title="fullscreen">⛶</button>
       <button id="cache" type="button" aria-pressed="false"
-        aria-label="копировать ролик на устройство"
-        title="копировать ролик на устройство"></button>
+        aria-label="copy the video to the device"
+        title="copy the video to the device"></button>
       <div id="status" role="status"></div>
       <div id="title"></div>
     </div>
