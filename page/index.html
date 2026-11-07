@@ -48,44 +48,50 @@
          button, which expands the whole stage. -->
     <video id="video" controls controlslist="nofullscreen" playsinline preload="metadata"></video>
     <div id="overlay"></div>
-    <!-- Line switches: the tablet is watched also without the Russian
-         translation, when the Montenegrin text matters more, and without the
-         Montenegrin one — when only the translation is needed. Next to them —
-         the line size: from the far end of the room the usual one is a bit
-         small, and up close to the screen the large one gets in the way. -->
-    <div id="lines">
-      <button id="toggle-target" type="button" aria-pressed="true"
-        aria-label="Russian translation" title="Russian translation">RU</button>
-      <button id="toggle-study" type="button" aria-pressed="true"
-        aria-label="Montenegrin line" title="Montenegrin line">CNR</button>
-      <select id="font-size" aria-label="subtitle size" title="subtitle size">
-        <option value="tiny">very small</option>
-        <option value="small">small</option>
-        <option value="normal" selected>normal</option>
-        <option value="large">large</option>
-      </select>
-    </div>
-    <!-- The bar, left to right: the way back and the title attached to it, then
-         everything about the whole frame on the right. The arrow comes first —
-         leaving the stage is the most frequent action, and the browser's "back"
-         button is not to be found on a tablet. "Cache" is off by default:
-         without a press nothing settles on the device. The icons are drawn by
-         app.js — the page does not pull them from the network.
-         The status and the title stand in this same bar rather than over the
-         frame: there they argued with the subtitles. The status sits left of
-         the two buttons, so their place does not move with the length of a
-         message, and the title takes the rest of the left. -->
-    <div id="stage-bar">
-      <button id="back" type="button" aria-label="to the list" title="to the list"
-        data-icon="back"></button>
-      <div id="title"></div>
-      <div id="stage-actions">
-        <div id="status" role="status"></div>
-        <button id="fullscreen" type="button" aria-label="fullscreen"
-          title="fullscreen">⛶</button>
-        <button id="cache" type="button" aria-pressed="false"
-          aria-label="copy the video to the device"
-          title="copy the video to the device"></button>
+    <!-- The top of the stage is one row: the bar fills it from the left, the
+         line switches end it at the right. No reserve is left between them —
+         the copy button and the language toggles stand in the same row, so no
+         empty stretch opens up before the switches. -->
+    <div id="stage-top">
+      <!-- The bar, left to right: the way back and the title attached to it,
+           then everything about the whole frame on the right. The arrow comes
+           first — leaving the stage is the most frequent action, and the
+           browser's "back" button is not to be found on a tablet. "Cache" is
+           off by default: without a press nothing settles on the device. The
+           icons are drawn by app.js — the page does not pull them from the
+           network. The status and the title stand in this same bar rather than
+           over the frame: there they argued with the subtitles. The status
+           sits left of the buttons, so their place does not move with the
+           length of a message, and the title takes the rest of the left. -->
+      <div id="stage-bar">
+        <button id="back" type="button" aria-label="to the list" title="to the list"
+          data-icon="back"></button>
+        <div id="title"></div>
+        <div id="stage-actions">
+          <div id="status" role="status"></div>
+          <button id="cache" type="button" aria-pressed="false"
+            aria-label="copy the video to the device"
+            title="copy the video to the device"></button>
+          <button id="fullscreen" type="button" aria-label="fullscreen"
+            title="fullscreen">⛶</button>
+        </div>
+      </div>
+      <!-- Line switches: the tablet is watched also without the Russian
+           translation, when the Montenegrin text matters more, and without the
+           Montenegrin one — when only the translation is needed. Next to them —
+           the line size: from the far end of the room the usual one is a bit
+           small, and up close to the screen the large one gets in the way. -->
+      <div id="lines">
+        <button id="toggle-target" type="button" aria-pressed="true"
+          aria-label="Russian translation" title="Russian translation">RU</button>
+        <button id="toggle-study" type="button" aria-pressed="true"
+          aria-label="Montenegrin line" title="Montenegrin line">CNR</button>
+        <select id="font-size" aria-label="subtitle size" title="subtitle size">
+          <option value="tiny">very small</option>
+          <option value="small">small</option>
+          <option value="normal" selected>normal</option>
+          <option value="large">large</option>
+        </select>
       </div>
     </div>
   </section>

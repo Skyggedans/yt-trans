@@ -19,8 +19,8 @@ Next to them — subtitle size selection: **very small**, **small**, **normal**,
 **large**. From the other end of the room normal is not enough, and up close
 large is in the way; the size multiplies the normal one rather than replacing it, so on a wide
 screen “small” does not become smaller than on a phone. Both choices are remembered
-in each device's browser separately. In the right
-top corner — **⛶** (fullscreen): expands the whole stage, that is, the picture together with the
+in each device's browser separately. In the top bar, on the right — **⛶**
+(fullscreen): expands the whole stage, that is, the picture together with the
 lines. The player's native button expands only the video itself, and the lines in this
 mode are not visible, so where the browser allows it (`controlslist`), it is
 hidden. iOS does not know such an attribute: there the native button remains, but there will be no lines in its
@@ -158,9 +158,10 @@ opens immediately, without a list of one item. From a video, the usual browser
 “back” button returns.
 
 On the stage, top left — back to list, with the video title right next to it;
-top right — **⛶**, **cache** and a line about the work progress; further right — RU and
-CNR line toggles and the subtitle size list. The title takes one line and is cut off
-with an ellipsis when the name is long. The work-progress line is one, it does not lie over the frame,
+from there the row goes right without a pause: the work-progress line, **cache**,
+**⛶**, and at the end the RU and CNR line toggles with the subtitle size list.
+The title takes one line and is cut off with an ellipsis when the name is long.
+The work-progress line is one, it does not lie over the frame,
 and different messages in it are separated by dots **•**: what is being prepared, in what
 language the speech is, what is wrong. The bar and the video title fade together with the native
 player controls — 2.5 seconds after the last touch, while the video is playing, —

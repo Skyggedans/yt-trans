@@ -389,14 +389,12 @@ input {
   pointer-events: none;
 }
 
-/* The two line switches — in the top right corner: below they are covered by
-   the player's own controls. */
+/* The two line switches — at the right end of the top row: below they are
+   covered by the player's own controls. */
 #lines {
-  position: absolute;
-  top: calc(12px + env(safe-area-inset-top, 0px));
-  right: 12px;
   display: flex;
   gap: 8px;
+  flex: none;
 }
 
 /* The top bar must not eat the frame: here the buttons are smaller than the
@@ -445,18 +443,29 @@ input {
   --overlay-scale: 1.3;
 }
 
-/* The bar: on the left the way back with the title attached to it, on the
-   right the status and the whole-frame buttons. To the right sit the line
-   switches, so the bar does not reach them: a long status is cut off rather
-   than creeping under the buttons. */
-#stage-bar {
+/* The top of the stage is one row: the bar takes the free space from the left,
+   the line switches close it on the right. Nothing is reserved between them:
+   the copy button and the switches stand in the same row, and the bar's last
+   button ends where the language toggles begin. */
+#stage-top {
   position: absolute;
   left: 12px;
-  right: calc(268px + env(safe-area-inset-right, 0px));
+  right: 12px;
   top: calc(12px + env(safe-area-inset-top, 0px));
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* The bar: on the left the way back with the title attached to it, on the
+   right the status and the whole-frame buttons. The title gives way first, so
+   a long status is cut off rather than creeping under the switches. */
+#stage-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 /* The right-hand group is pressed to the bar's edge: the buttons stand where

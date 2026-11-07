@@ -14,7 +14,7 @@ def ids_the_page_looks_for():
 
 
 def stage_bar(html):
-    """The stage's top bar together with the nested blocks: status and title."""
+    """The stage's top bar and the rest of the top row: status, title, switches."""
 
     start = html.index('id="stage-bar"')
 
@@ -135,13 +135,40 @@ def test_the_buttons_and_the_status_are_pinned_to_the_right():
     assert 'id="cache"' in actions
     assert 'id="status"' in actions
     # The buttons keep the outer edge, so their place does not move with the
-    # length of a message; the status grows to the left of them.
-    assert actions.index('id="status"') < actions.index('id="fullscreen"')
+    # length of a message; the status grows to the left of them. The last of
+    # them is ⛶: after the copy comes the whole-frame switch.
+    assert actions.index('id="status"') < actions.index('id="cache"')
+    assert actions.index('id="cache"') < actions.index('id="fullscreen"')
 
     css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
 
     assert re.search(r"#stage-bar \{[^}]*display: flex", css, re.S)
     assert re.search(r"#stage-actions \{[^}]*margin-left: auto", css, re.S)
+
+
+def test_the_switches_close_the_top_row_without_a_reserve():
+    # The bar used to reserve a fixed strip for the line switches and left a
+    # void before them. Now both live in one row: the last button of the bar
+    # ends where the toggles begin.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    start = html.index('id="stage-top"')
+    row = html[start:html.index("</section>", start)]
+
+    assert 'id="stage-bar"' in row
+    assert 'id="lines"' in row
+    assert row.index('id="stage-bar"') < row.index('id="lines"')
+
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    assert re.search(r"#stage-top \{[^}]*display: flex", css, re.S)
+
+    bar = re.search(r"#stage-bar \{(.*?)\}", css, re.S).group(1)
+
+    # No absolute placement and no 268 px strip for the switches: the bar takes
+    # the space that is left, and the title gives way first.
+    assert "position: absolute" not in bar
+    assert "right:" not in bar
+    assert "flex: 1" in bar
 
 
 def test_the_players_fullscreen_turns_into_the_whole_stage():
