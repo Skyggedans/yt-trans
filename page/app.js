@@ -122,10 +122,14 @@ let expandedKeys = [];
 // Cards that the search opened itself and the viewer collapsed back. It lives
 // until the query changes: otherwise the chevron on a found card would do nothing.
 let searchClosed = new Set();
-// Playlist videos: they are asked of the daemon when the card expands and live
-// until a reload. A request error is remembered too — otherwise the card would
-// stay silent about it.
+// Playlist videos: they are read from the device at startup and from the
+// daemon when it answers. Storing them is what lets a playlist open without
+// the daemon. `askedVideos` marks the ones the daemon was asked for in this
+// session, so a redraw or an expansion does not ask YouTube twice; a
+// connection failure is not marked — the daemon may come back. A request
+// error is remembered too, otherwise the card would stay silent.
 const linkVideos = new Map();
+const askedVideos = new Set();
 const loadingVideos = new Set();
 // Which lines to show is per device too: a tablet in another room must not
 // change what is set up on the computer.
@@ -664,11 +668,48 @@ function openCard(link) {
 }
 
 /**
+ * Playlist videos from the daemon, written to the device at once: without them
+ * a silent daemon leaves the playlist a title with nothing under it.
+ */
+async function fetchVideos(id) {
+  const data = await api(`/v1/links/${encodeURIComponent(id)}/videos`);
+  const videos = Array.isArray(data.videos) ? data.videos : [];
+
+  linkVideos.set(id, { videos });
+  askedVideos.add(id);
+  await saveVideos();
+
+  return { ...data, videos };
+}
+
+/**
+ * What was read from the daemon, by link. The list survives a reload and the
+ * daemon going away; an error is not knowledge and is not written.
+ */
+async function saveVideos() {
+  if (!db) {
+    return;
+  }
+
+  const stored = {};
+
+  for (const [linkId, entry] of linkVideos) {
+    if (entry && Array.isArray(entry.videos)) {
+      stored[linkId] = entry.videos;
+    }
+  }
+
+  await putMeta(db, "videos", stored).catch(() => {});
+}
+
+/**
  * Playlist videos are requested on expansion, not on every draw: the daemon
  * goes to YouTube for the answer, and the list must not do that for nothing.
+ * A daemon answer refreshes what was read before; without one the device's
+ * copy stays on screen.
  */
 async function loadVideos(link) {
-  if (linkVideos.has(link.id) || loadingVideos.has(link.id) || !daemonAlive) {
+  if (loadingVideos.has(link.id) || !daemonAlive || askedVideos.has(link.id)) {
     return;
   }
 
@@ -676,13 +717,39 @@ async function loadVideos(link) {
   drawLinks(knownLinks, "");
 
   try {
-    const data = await api(`/v1/links/${encodeURIComponent(link.id)}/videos`);
-    linkVideos.set(link.id, { videos: Array.isArray(data.videos) ? data.videos : [] });
+    await fetchVideos(link.id);
   } catch (error) {
-    linkVideos.set(link.id, { error: daemonAlive ? error.message : "no daemon" });
+    // A failed refresh does not erase what already lay on the device: a list
+    // read yesterday is better than an error row about a list we still have.
+    if (!linkVideos.has(link.id)) {
+      linkVideos.set(link.id, { error: daemonAlive ? error.message : "no daemon" });
+    }
+
+    // A refusal is not repeated by every redraw; a lost connection is, because
+    // the daemon may come back before the viewer does.
+    if (daemonAlive) {
+      askedVideos.add(link.id);
+    }
   } finally {
     loadingVideos.delete(link.id);
     drawLinks(knownLinks, "");
+  }
+}
+
+/**
+ * The videos of every playlist are stored the first time the list is seen, not
+ * when a card happens to be expanded: a playlist must open without the daemon.
+ * One at a time — the daemon goes to YouTube for each answer.
+ */
+async function prefetchVideos(links) {
+  for (const link of links) {
+    if (!daemonAlive) {
+      return;
+    }
+
+    if (link.kind === "playlist" && !linkVideos.has(link.id)) {
+      await loadVideos(link);
+    }
   }
 }
 
@@ -741,6 +808,11 @@ async function loadLinks() {
   }
 
   drawLinks(links, workerNote());
+
+  // The children of every playlist are stored right away, not when a card is
+  // opened: without them the playlist is a title with nothing under it as
+  // soon as the daemon goes away.
+  queueMicrotask(() => prefetchVideos(links));
 }
 
 /** Saved videos of this link, freshest first. */
@@ -829,6 +901,7 @@ async function dropLink(link) {
   // The link is gone — so is everything that lay under it. Otherwise the
   // playlist videos would stay on the device without a row to see them from.
   linkVideos.delete(link.id);
+  await saveVideos();
 
   for (const record of saved) {
     await forgetCopy(record.videoId);
@@ -1007,8 +1080,32 @@ function episodeLabel(video) {
   return parts.join(" · ");
 }
 
+/**
+ * A playlist whose videos lie on the device opens without the daemon: that is
+ * what they are kept on the device for. Returns whether the card was opened.
+ */
+function openStored(id) {
+  const link = knownLinks.find((item) => item.id === id);
+
+  if (!link || link.kind !== "playlist" || !linkVideos.has(id)) {
+    return false;
+  }
+
+  if (!expandedKeys.includes(linkKey(id))) {
+    expandedKeys = toggleExpanded(expandedKeys, linkKey(id));
+  }
+
+  drawLinks(knownLinks, "");
+
+  return true;
+}
+
 async function openLink(id) {
   if (!daemonAlive) {
+    if (openStored(id)) {
+      return;
+    }
+
     // Videos come from the daemon, and it is gone: but copies of this link
     // could already lie on the device, and the list shows them.
     const saved = savedForLink(id);
@@ -1023,10 +1120,15 @@ async function openLink(id) {
   let data;
 
   try {
-    data = await api(`/v1/links/${encodeURIComponent(id)}/videos`);
+    data = await fetchVideos(id);
   } catch (error) {
     if (!daemonAlive) {
+      if (openStored(id)) {
+        return;
+      }
+
       const saved = savedForLink(id);
+
       drawLinks(knownLinks, saved.length
         ? "no daemon — the list shows the saved videos of this link"
         : "no daemon, this link's videos are not on the device");
@@ -1039,8 +1141,7 @@ async function openLink(id) {
     return;
   }
 
-  const videos = Array.isArray(data.videos) ? data.videos : [];
-  linkVideos.set(id, { videos });
+  const videos = data.videos;
 
   // A single video is not a list but viewing right away: a button with one
   // item would only make you press twice.
@@ -1397,6 +1498,22 @@ async function openCache() {
     }
   } catch {
     // The list was not read — the copy will still try to save.
+  }
+
+  try {
+    const stored = await getMeta(db, "videos");
+
+    // The playlist videos were read while the daemon was alive: they stay on
+    // the device, and a silent daemon leaves them under their link.
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      for (const [linkId, videos] of Object.entries(stored)) {
+        if (Array.isArray(videos)) {
+          linkVideos.set(linkId, { videos });
+        }
+      }
+    }
+  } catch {
+    // The playlist videos were not read — the daemon will answer for them.
   }
 }
 

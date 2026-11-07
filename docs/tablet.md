@@ -157,6 +157,9 @@ added earlier do not have it either — then the time is not shown. A single vid
 opens immediately, without a list of one item. From a video, the usual browser
 “back” button returns.
 
+The videos of a playlist are read from the daemon once and kept on the tablet: the
+list opens without the daemon, and with it the card is refreshed when it is expanded.
+
 On the stage, top left — back to list, with the video title right next to it;
 from there the row goes right without a pause: the work-progress line, **cache**,
 **⛶**, and at the end the RU and CNR line toggles with the subtitle size list.
@@ -213,8 +216,9 @@ and is deleted with the **delete** button — space on the tablet is not infinit
 
 The copy also plays with the daemon alive: the picture is taken from the device, so a connection drop
 in the middle of viewing no longer interferes. When there is no daemon at all, the home page
-shows the saved ones — with open links the videos expand under their link,
-and links without copies give a message that there is no daemon, instead of an empty screen.
+shows the saved ones: open links expand under their link, a playlist keeps the list
+of its videos that was read earlier, and a link with neither copies nor a read list
+gives a message that there is no daemon, instead of an empty screen.
 
 The cache lives in the tablet browser's storage, but not in the daemon's cache: this is a separate place,
 its own for each tablet, and “clear site data” in the browser erases it entirely.

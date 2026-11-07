@@ -767,6 +767,77 @@ def test_a_playlist_keeps_its_videos_inside_the_card():
     assert 'id="episodes"' not in html
 
 
+def test_a_playlist_keeps_its_videos_on_the_device():
+    # The videos used to live in the page's memory until a reload. A silent
+    # daemon then left the playlist a title with nothing under it, and the
+    # videos could not be watched offline. Now they are written to the device
+    # as soon as the daemon gives them.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    fetch = source[source.index("async function fetchVideos"):source.index("async function saveVideos")]
+    assert "linkVideos.set(" in fetch
+    assert "await saveVideos()" in fetch
+
+    save = source[source.index("async function saveVideos"):source.index("async function loadVideos")]
+    assert 'putMeta(db, "videos"' in save
+    # An error is not knowledge: only a list that was actually read is stored.
+    assert "Array.isArray(entry.videos)" in save
+
+
+def test_the_stored_playlist_is_read_before_the_daemon_answers():
+    # The device's copy comes off the disk before the first request: the list
+    # is usable while the daemon is silent, not only after its answer.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    opened = source[source.index("async function openCache"):source.index("function drawCacheButton")]
+
+    assert 'getMeta(db, "videos")' in opened
+    assert "linkVideos.set(" in opened
+
+    start = source[source.index("async function start()"):source.index("async function consumeShare")]
+    assert start.index("openCache()") < start.index("loadLinks()")
+
+
+def test_every_playlist_is_stored_whole_when_the_list_arrives():
+    # "Store everything at once": the children are requested right after the
+    # list of links arrives, not when a card happens to be expanded.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    links = source[source.index("async function loadLinks"):source.index("function savedForLink")]
+
+    assert "prefetchVideos(links)" in links
+
+    prefetch = source[source.index("async function prefetchVideos"):source.index("function cardNote")]
+
+    assert 'link.kind === "playlist"' in prefetch
+    # What already lies on the device is not asked for again; one playlist at
+    # a time, because the daemon goes to YouTube for each answer.
+    assert "!linkVideos.has(link.id)" in prefetch
+    assert "await loadVideos(link)" in prefetch
+
+
+def test_a_failed_refresh_keeps_the_stored_playlist():
+    # A list read yesterday is better than an error row about a list that is
+    # still on the device: an error is written only where there is nothing.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function loadVideos"):source.index("async function prefetchVideos")]
+
+    assert "if (!linkVideos.has(link.id))" in body
+
+
+def test_a_stored_playlist_opens_without_the_daemon():
+    # Clicking a playlist title offline used to end with a message. The videos
+    # lie on the device, so the card opens instead.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+    body = source[source.index("async function openLink"):source.index("// --- Stage")]
+
+    assert "openStored(" in body
+
+    helper = source[source.index("function openStored"):source.index("async function openLink")]
+
+    assert "linkVideos.has(" in helper
+    assert "toggleExpanded(" in helper
+    assert "drawLinks(knownLinks" in helper
+
+
 def test_the_playlist_trash_takes_its_copies_with_it():
     # The card's trash removes both the link and everything under it: otherwise
     # a deleted playlist would leave its videos on the device with no way to
@@ -779,6 +850,10 @@ def test_the_playlist_trash_takes_its_copies_with_it():
     # list must not diverge because of two different deletion paths.
     assert "forgetCopy(record.videoId)" in body
     assert "deleteVideo(" in source[source.index("async function forgetCopy"):source.index("async function dropLink")]
+    # The stored videos go with the link as well: otherwise they would still be
+    # on the device under an id that nothing points to.
+    assert "linkVideos.delete(" in body
+    assert "saveVideos()" in body
 
 
 def test_every_trash_asks_before_deleting():
