@@ -1401,20 +1401,29 @@ async function openCache() {
 }
 
 /**
- * Cache button: a download icon, and a floppy for a finished copy. The word
- * "cache" and the size are not written here: on the stage they argued with the
- * frame, and the size is visible in the list.
+ * Cache button: a download icon, and a floppy with its megabytes for a finished
+ * copy — the same size the list shows, so the viewer does not go back to the
+ * list to check. While the copy is under way the caption is its state: a
+ * percentage, a wait or a failure.
  */
 function drawCacheButton() {
   const mine = copy && copy.videoId === state.videoId ? copy : null;
   const saved = savedVideos.get(state.videoId);
 
-  const label = copyState({
-    waiting: Boolean(mine && mine.waiting),
-    active: Boolean(mine),
-    percent: mine ? percent(mine.seen, mine.total) : 0,
-    failed: copyFailure === state.videoId,
-  });
+  let label = "";
+
+  if (mine) {
+    label = copyState({
+      waiting: Boolean(mine.waiting),
+      active: true,
+      percent: percent(mine.seen, mine.total),
+      failed: false,
+    });
+  } else if (copyFailure === state.videoId && !saved) {
+    label = copyState({ failed: true });
+  } else if (saved) {
+    label = formatBytes(saved.size);
+  }
 
   // A finished copy is the same floppy as in the list: both icons say one
   // thing — "the video lies on the device".
@@ -1630,7 +1639,9 @@ async function finishCopy(blob) {
   drawLinks(knownLinks, "");
 
   if (state.videoId === record.videoId) {
-    note("saved on the device");
+    // No message here: the floppy now carries the size, which says the video
+    // is on the device better than a word, and the status line stays for what
+    // changes.
     // The copy is ready in the middle of viewing — pick it up without losing the position.
     switchToCopy(record);
     // The translation goes on: saved cues are appended while the viewer is here.

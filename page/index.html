@@ -65,25 +65,28 @@
         <option value="large">large</option>
       </select>
     </div>
-    <!-- Top left: return to the list, ⛶ and cache. All three are about the
-         whole frame, not about the lines that go on the right. The arrow comes
-         first: leaving the stage is the most frequent action, and the browser's
-         "back" button is not to be found on a tablet. "Cache" is off by
-         default: without a press nothing settles on the device. The icons are
-         drawn by app.js — the page does not pull them from the network.
+    <!-- The bar, left to right: the way back and the title attached to it, then
+         everything about the whole frame on the right. The arrow comes first —
+         leaving the stage is the most frequent action, and the browser's "back"
+         button is not to be found on a tablet. "Cache" is off by default:
+         without a press nothing settles on the device. The icons are drawn by
+         app.js — the page does not pull them from the network.
          The status and the title stand in this same bar rather than over the
-         frame: there they argued with the subtitles. The title is in the
-         middle, on one line. -->
+         frame: there they argued with the subtitles. The status sits left of
+         the two buttons, so their place does not move with the length of a
+         message, and the title takes the rest of the left. -->
     <div id="stage-bar">
       <button id="back" type="button" aria-label="to the list" title="to the list"
         data-icon="back"></button>
-      <button id="fullscreen" type="button" aria-label="fullscreen"
-        title="fullscreen">⛶</button>
-      <button id="cache" type="button" aria-pressed="false"
-        aria-label="copy the video to the device"
-        title="copy the video to the device"></button>
-      <div id="status" role="status"></div>
       <div id="title"></div>
+      <div id="stage-actions">
+        <div id="status" role="status"></div>
+        <button id="fullscreen" type="button" aria-label="fullscreen"
+          title="fullscreen">⛶</button>
+        <button id="cache" type="button" aria-pressed="false"
+          aria-label="copy the video to the device"
+          title="copy the video to the device"></button>
+      </div>
     </div>
   </section>
 

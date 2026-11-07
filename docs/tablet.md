@@ -19,7 +19,7 @@ Next to them — subtitle size selection: **very small**, **small**, **normal**,
 **large**. From the other end of the room normal is not enough, and up close
 large is in the way; the size multiplies the normal one rather than replacing it, so on a wide
 screen “small” does not become smaller than on a phone. Both choices are remembered
-in each device's browser separately. In the left
+in each device's browser separately. In the right
 top corner — **⛶** (fullscreen): expands the whole stage, that is, the picture together with the
 lines. The player's native button expands only the video itself, and the lines in this
 mode are not visible, so where the browser allows it (`controlslist`), it is
@@ -157,11 +157,12 @@ added earlier do not have it either — then the time is not shown. A single vid
 opens immediately, without a list of one item. From a video, the usual browser
 “back” button returns.
 
-On the stage, top left — back to list, **⛶**, **cache** and a line about the work
-progress; top right — RU and CNR line toggles and the subtitle size list; in the middle — the video
-title, one line in the center. The work-progress line is one, it does not lie over the frame,
+On the stage, top left — back to list, with the video title right next to it;
+top right — **⛶**, **cache** and a line about the work progress; further right — RU and
+CNR line toggles and the subtitle size list. The title takes one line and is cut off
+with an ellipsis when the name is long. The work-progress line is one, it does not lie over the frame,
 and different messages in it are separated by dots **•**: what is being prepared, in what
-language the speech is, what is wrong. The bar with it and the video title fade together with the native
+language the speech is, what is wrong. The bar and the video title fade together with the native
 player controls — 2.5 seconds after the last touch, while the video is playing, —
 and come back on touch or mouse movement. On pause they are visible, as are the controls:
 there is nothing to fade then.
@@ -197,12 +198,12 @@ is set by the memory reserve, not by the free space on disk.
 
 ## Without the computer
 
-A video can be taken to the tablet — together with subtitles. For this, on the stage at the top left,
+A video can be taken to the tablet — together with subtitles. For this, on the stage at the top right,
 next to **⛶**, there is a **cache** button; by default it is off, and until it is pressed nothing
 settles on the device. Pressed, it starts copying as soon as the daemon
 has assembled the mp4, and copying goes on while the page is open: you closed the app or the screen
 fell asleep — the download stopped, and the button must be pressed again. While the download is going on, the button
-shows a percentage, and at the end — a floppy disk: the copy lies on the device.
+shows a percentage, and at the end — a floppy disk with the size of the copy: the video lies on the device.
 
 On the device remain the picture and those lines that managed to be translated by the end of the download;
 subtitles continue to be appended while you watch, and the record is supplemented along the way. In

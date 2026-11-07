@@ -350,14 +350,19 @@ input {
   display: none;
 }
 
-/* The status lives in the top bar next to the buttons, on one line: over the
+/* The status lives in the top bar left of the buttons, on one line: over the
    frame it argued with the subtitles, and separate lines took more room than
-   they said. render() puts the dots between messages. */
+   they said. render() puts the dots between messages. It is right-aligned
+   against the buttons: a longer message grows to the left, and the buttons
+   keep their place under the finger. */
 #status {
   min-width: 0;
+  max-width: min(46vw, 480px);
+  flex: 0 1 auto;
   overflow: hidden;
   color: var(--muted);
   font-size: 15px;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-shadow: 0 1px 2px #000;
@@ -368,15 +373,16 @@ input {
   display: none;
 }
 
-/* The title is in the top bar, on one line in the middle of the free space
-   between the buttons. Below it hung over the frame exactly where the
-   subtitles run. */
+/* The title is attached to the back arrow: the viewer came for the video, and
+   its name belongs next to the way home. It takes the rest of the left side
+   and is cut off rather than pushing the buttons. Below it hung over the
+   frame exactly where the subtitles run. */
 #title {
   flex: 1;
   min-width: 0;
   color: var(--muted);
   font-size: 14px;
-  text-align: center;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -439,7 +445,8 @@ input {
   --overlay-scale: 1.3;
 }
 
-/* The bar on the left top: back, ⛶, cache and status. To the right — the line
+/* The bar: on the left the way back with the title attached to it, on the
+   right the status and the whole-frame buttons. To the right sit the line
    switches, so the bar does not reach them: a long status is cut off rather
    than creeping under the buttons. */
 #stage-bar {
@@ -450,6 +457,18 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* The right-hand group is pressed to the bar's edge: the buttons stand where
+   the thumb looks for them whatever the length of the message. On a narrow
+   screen it gives way: the status shrinks, the buttons do not. */
+#stage-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
 }
 
 #stage-bar button {

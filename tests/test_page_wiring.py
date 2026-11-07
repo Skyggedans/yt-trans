@@ -103,6 +103,47 @@ def test_the_stage_goes_back_to_the_list_by_its_own_arrow():
     assert "history.back()" in source
 
 
+def test_the_title_is_attached_to_the_back_arrow_on_the_left():
+    # On the left of the bar only the arrow and the video's title remain: the
+    # title is what the viewer came for, so it sits right next to the way back.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    bar = stage_bar(html)
+
+    assert 'id="title"' in bar
+    assert bar.index('id="back"') < bar.index('id="title"')
+    assert bar.index('id="title"') < bar.index('id="stage-actions"')
+
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+    title = re.search(r"#title \{(.*?)\}", css, re.S).group(1)
+
+    assert "text-align: left" in title
+    assert "white-space: nowrap" in title
+    assert "text-overflow: ellipsis" in title
+    # The title no longer hangs over the frame: its place is in the top bar.
+    assert "position: absolute" not in title
+    assert "bottom:" not in title
+
+
+def test_the_buttons_and_the_status_are_pinned_to_the_right():
+    # The whole-frame buttons and the status text live on the right: the left
+    # half of the bar belongs to the way back and the title.
+    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
+    bar = stage_bar(html)
+    actions = bar[bar.index('id="stage-actions"'):]
+
+    assert 'id="fullscreen"' in actions
+    assert 'id="cache"' in actions
+    assert 'id="status"' in actions
+    # The buttons keep the outer edge, so their place does not move with the
+    # length of a message; the status grows to the left of them.
+    assert actions.index('id="status"') < actions.index('id="fullscreen"')
+
+    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
+
+    assert re.search(r"#stage-bar \{[^}]*display: flex", css, re.S)
+    assert re.search(r"#stage-actions \{[^}]*margin-left: auto", css, re.S)
+
+
 def test_the_players_fullscreen_turns_into_the_whole_stage():
     # The native fullscreen mode expands the <video> itself, while the line
     # layer is a neighbouring element: without switching to the stage the
@@ -406,10 +447,10 @@ def test_the_stage_has_a_cache_switch_next_to_fullscreen():
     assert 'aria-pressed="false"' in bar
 
 
-def test_the_cache_switch_is_an_icon_that_says_only_what_changes():
+def test_the_cache_switch_is_an_icon_that_says_the_state_or_the_size():
     # On the stage the "cache" caption argued with the frame. Downloading is an
-    # icon; when the copy lies on the device, only the floppy remains on the
-    # button.
+    # icon; when the copy lies on the device, the floppy stays with its size on
+    # the button.
     source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
     body = source[source.index("function drawCacheButton"):source.index("function toggleCache")]
 
@@ -419,10 +460,10 @@ def test_the_cache_switch_is_an_icon_that_says_only_what_changes():
     # same thing.
     assert "saved ? ICON_DISK : ICON_DOWNLOAD" in body
     assert "ICON_CHECK" not in body
-    # The size of a ready copy is not written: the floppy says the video is on
-    # the device, and megabytes on the stage argued with the frame.
-    assert "saved.size" not in body
-    # The caption still comes from logic.js: percentages and waiting.
+    # A ready copy writes its size next to the floppy: the same megabytes the
+    # list shows, so the viewer does not go back to the list to check.
+    assert "formatBytes(saved.size)" in body
+    # The state still comes from logic.js: percentages, waiting, failure.
     assert "copyState(" in body
     # An icon without a word: the name for the finger and the hint change
     # together with the copy.
@@ -494,6 +535,14 @@ def test_the_stage_bar_holds_both_buttons():
     assert re.search(r"#stage-bar \{[^}]*display: flex", css, re.S)
 
 
+def test_the_copy_confirmation_does_not_repeat_the_floppy():
+    # The floppy with megabytes already says the video is on the device, and
+    # the status line stays for what changes.
+    source = (ROOT / "page" / "app.js").read_text(encoding="utf-8")
+
+    assert 'note("saved on the device")' not in source
+
+
 def test_the_status_is_one_bulleted_line_in_the_top_bar():
     # The status hung over the frame in separate lines and argued with the
     # subtitles. Now it is in the top bar next to the buttons, and dots divide
@@ -530,25 +579,6 @@ def test_the_bar_and_the_title_hide_like_the_players_controls():
     assert "keydown" in source
     assert re.search(r"#stage\.idle #stage-bar", css)
     assert re.search(r"#stage\.idle #title", css)
-
-
-def test_the_title_stands_in_the_top_bar_in_one_centred_line():
-    # The title hung below over the frame, where the subtitles cover it anyway.
-    # Now it is in the top bar, on one line centred between the buttons.
-    html = (ROOT / "page" / "index.html").read_text(encoding="utf-8")
-    bar = stage_bar(html)
-
-    assert 'id="title"' in bar
-
-    css = (ROOT / "page" / "style.css").read_text(encoding="utf-8")
-    title = re.search(r"#title \{(.*?)\}", css, re.S).group(1)
-
-    assert "text-align: center" in title
-    assert "white-space: nowrap" in title
-    assert "text-overflow: ellipsis" in title
-    # The title no longer hangs over the frame: its place is in the top bar.
-    assert "position: absolute" not in title
-    assert "bottom:" not in title
 
 
 def test_the_list_icons_are_told_apart_by_colour():
