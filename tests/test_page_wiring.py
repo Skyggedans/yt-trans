@@ -307,6 +307,12 @@ def test_the_list_rereads_the_picture_state_on_the_way_back():
 
     assert "loadLinks(" in body
 
+    # Копию могли удалить в другой вкладке или через DevTools: дискета теперь
+    # ставится по копии, и список копий в памяти должен перечитываться, иначе
+    # он обещал бы «на устройстве» то, чего там уже нет.
+    assert "openCache()" in body
+    assert "drawLinks(knownLinks" in body
+
 
 def test_cards_start_collapsed_every_time():
     # Всё по умолчанию свёрнуто: раскрытие — действие на этот просмотр, а не
