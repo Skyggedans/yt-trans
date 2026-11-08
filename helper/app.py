@@ -126,13 +126,20 @@ def same_origin(origin: str, host: str | None) -> bool:
     return parts.scheme in ("http", "https") and parts.netloc.lower() == host.lower()
 
 
-def check_origin(origin: str | None, host: str | None = None) -> None:
-    """We let extensions, our own page and requests without Origin (curl) through, but not foreign sites.
+def origin_allowed(origin: str | None, host: str | None = None) -> bool:
+    """Extensions, our own page and requests without Origin (curl) pass; foreign sites don't.
 
     A page in a browser can't forge Origin, so this is a working defense
     against an arbitrary site pulling the daemon via DNS binding to loopback.
     """
-    if origin and not origin.startswith(ALLOWED_ORIGIN_SCHEMES) and not same_origin(origin, host):
+    if not origin:
+        return True
+
+    return origin.startswith(ALLOWED_ORIGIN_SCHEMES) or same_origin(origin, host)
+
+
+def check_origin(origin: str | None, host: str | None = None) -> None:
+    if not origin_allowed(origin, host):
         raise HTTPException(status_code=403, detail="origin is not allowed")
 
 
@@ -149,16 +156,24 @@ async def guard(
 
 
 @app.get("/v1/health")
-async def health() -> dict:
+async def health(request: Request, origin: str | None = Header(default=None)) -> dict:
     """Open to all: the extension uses it to find the daemon, and a person — to diagnose.
 
-    On loopback it tells about models and the card — only the owner hears it there. On the
-    network it answers a single "alive": anyone on the home network can get this answer,
-    and model names, job state, cache size and the path to settings with the
-    user's name — that's a map of someone else's machine. There were no secrets here before
-    either, but on the network even this is a lot.
+    "Alive" goes out to everyone. Models, the card, the cache and the job count go only
+    to the owner: to a client on the machine itself, and not to a page from the internet
+    that DNS rebinding brought to loopback. Model names, job state, cache size and the
+    path to settings with the user's name are a map of someone else's machine: the home
+    network does not need it, and a foreign page must not have it.
+
+    Who asks is the peer address, not the bind address. [server] host = "0.0.0.0" is set
+    for the tablet in the next room — and it used to hide the models from the extension
+    on the same machine, which printed "undefined" in the settings instead.
     """
-    if HOST not in LOOPBACK_HOSTS:
+    peer = request.client
+    if peer is None or peer.host not in LOOPBACK_HOSTS:
+        return {"ok": True}
+
+    if not origin_allowed(origin, request.headers.get("host")):
         return {"ok": True}
 
     state = await asyncio.to_thread(manager.lease.state)

@@ -62,9 +62,12 @@ Remember: `host = "0.0.0.0"` opens the port to everyone on the home network. Who
 it not from a browser will use it — at home this is usually fine, on someone else's
 Wi-Fi put loopback back.
 
-On the network `/v1/health` answers only `{"ok": true}` and nothing else: on loopback it
-shows model names, cache size and job state — this is a map of someone else's
-machine, and not the whole home Wi-Fi needs to know it.
+To a client on another machine `/v1/health` answers only `{"ok": true}` and nothing else.
+To a client on the machine itself it shows model names, cache size and job state — that is
+a map of someone else's machine, and not the whole home Wi-Fi needs to know it. Who asks is
+the peer address, not `host = "0.0.0.0"`: the browser extension lives on the machine that runs
+the daemon and reads the full answer even when the tablet can reach the port. A page from
+the internet that DNS rebinding brought to loopback is refused the map by its `Origin`.
 
 ## Open on the tablet
 

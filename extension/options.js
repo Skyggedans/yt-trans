@@ -8,6 +8,8 @@
  * same protocol this diagnostic probes.
  */
 
+import { diagnostics } from "./diagnostics.js";
+
 const api = globalThis.browser ?? globalThis.chrome;
 
 const DEFAULTS = {
@@ -145,24 +147,9 @@ async function check() {
     return;
   }
 
-  const gpu = health.gpu || {};
-  const models = health.models || {};
-  const asr = models.asr || {};
-  const translator = models.translator || {};
-
-  show(
-    true,
-    switched +
-      "Connection works.\n\n" +
-      `Recognition: ${asr.model} (${asr.compute_type}, ~${asr.vram_mib} MiB)\n` +
-      `Translation: ${translator.model} (~${translator.vram_mib} MiB)\n` +
-      `Source language: ${asr.language}\n` +
-      `Second line: ${translator.study_language || "off"}\n` +
-      `Free on the GPU: ${gpu.free_mib} MiB${gpu.busy ? " (busy with a user)" : ""}\n` +
-      `Tracks in cache: ${(health.cache || {}).tracks ?? 0}\n\n` +
-      "Models are set in the daemon config, not here: video memory usage\n" +
-      "is inseparable from the model name, and it cannot be changed from the browser.",
-  );
+  // A bare "alive" is not a failure: a daemon on all interfaces hides the models
+  // from clients outside the machine, and says why in the text below.
+  show(true, diagnostics(health, switched));
 }
 
 function syncPositionRow() {

@@ -2,9 +2,24 @@
 
 import asyncio
 
+import httpx
+
 from conftest import FakeSocket
 from helper import app as helper_app
 from helper.config import load
+
+
+def from_peer(address: str) -> httpx.AsyncClient:
+    """A client whose address the daemon sees as `address`.
+
+    The peer of a real request is set by the kernel and cannot be forged, so this is
+    the one thing a test must choose itself: "on the machine" and "on the network"
+    differ in nothing else.
+    """
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=helper_app.app, client=(address, 51234)),
+        base_url="http://127.0.0.1:8756",
+    )
 
 
 def test_the_daemon_listens_on_the_loop_by_default(tmp_path):
@@ -77,11 +92,53 @@ async def test_on_the_loop_health_still_diagnoses(client):
     assert "token_path" not in body
 
 
-async def test_in_the_network_health_says_only_that_it_is_alive(client, monkeypatch):
-    # Without a key and on all interfaces: model names, job state, cache
-    # size and the config path with the user's name are a map of someone else's machine.
+async def test_the_owner_sees_the_models_even_on_all_interfaces(manager, monkeypatch):
+    # The tablet in the next room is the reason [server] host is 0.0.0.0. The extension
+    # still lives on the machine itself and comes in over loopback — and the bind
+    # address says nothing about who is asking. Health used to answer this with
+    # a bare "alive", and the settings page printed "undefined" for every model.
     monkeypatch.setattr(helper_app, "HOST", "0.0.0.0")
 
-    body = (await client.get("/v1/health")).json()
+    async with from_peer("127.0.0.1") as http:
+        body = (await http.get("/v1/health")).json()
+
+    assert "models" in body
+    assert body["models"]["asr"]["model"]
+
+
+async def test_in_the_network_health_says_only_that_it_is_alive(manager):
+    # Without a key: model names, job state, cache size and the config path with
+    # the user's name are a map of someone else's machine.
+    async with from_peer("192.168.1.50") as http:
+        body = (await http.get("/v1/health")).json()
 
     assert body == {"ok": True}
+
+
+async def test_a_foreign_page_on_the_machine_gets_no_map(manager):
+    # DNS rebinding brings a page from the internet to loopback: the peer address
+    # is the owner's, Origin is not.
+    async with from_peer("127.0.0.1") as http:
+        body = (await http.get("/v1/health", headers={"Origin": "http://evil.example"})).json()
+
+    assert body == {"ok": True}
+
+
+async def test_the_daemons_own_page_reads_the_map(manager):
+    async with from_peer("127.0.0.1") as http:
+        body = (
+            await http.get("/v1/health", headers={"Origin": "http://127.0.0.1:8756"})
+        ).json()
+
+    assert "models" in body
+
+
+async def test_the_extension_reads_the_map(manager):
+    async with from_peer("127.0.0.1") as http:
+        body = (
+            await http.get(
+                "/v1/health", headers={"Origin": "chrome-extension://abcdefghijklmnop"}
+            )
+        ).json()
+
+    assert "models" in body
